@@ -1,4 +1,5 @@
-pub mod matmul;
+pub mod events;
+pub mod hbm_ld_st;
 
 use dam::types::StaticallySized;
 use serde::{Deserialize, Deserializer};
