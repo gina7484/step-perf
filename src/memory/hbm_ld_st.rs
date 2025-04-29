@@ -1,5 +1,6 @@
 use dam::context_tools::*;
 use dam::logging::LogEvent;
+use graphviz_rust::attributes::start;
 use std::path::Path;
 use std::{fs::File, marker::PhantomData};
 
@@ -36,6 +37,11 @@ impl<E: LoggableEvent + LogEvent + std::marker::Sync + std::marker::Send> Contex
     fn run(&mut self) {
         // Read in the data generated from step-perf-py
         let entries = parse_csv(&self.file_path);
+
+        let start_ns = (entries[0].start_ms * 1e6) as u64;
+        if start_ns > 0 {
+            self.time.incr_cycles(start_ns);
+        }
 
         for hbm_entry in entries {
             let time_block_ms = hbm_entry.end_ms - hbm_entry.start_ms;
