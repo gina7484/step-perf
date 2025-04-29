@@ -1,4 +1,70 @@
 use dam::context_tools::*;
+use dam::dam_macros::event_type;
+use serde::{Deserialize, Serialize};
+
+// Logging values
+#[derive(Serialize, Deserialize, Debug)]
+#[event_type]
+pub struct SimpleLogData {
+    pub arrive: u64,
+    pub out_done: u64,
+}
+
+#[context_macro]
+pub struct CustomGeneratorContext<T: Clone, IType, FType>
+where
+    IType: Iterator<Item = T>,
+    FType: FnOnce() -> IType + Send + Sync,
+{
+    iterator: Option<FType>,
+    output: Sender<T>,
+}
+
+impl<T: DAMType, IType, FType> Context for CustomGeneratorContext<T, IType, FType>
+where
+    IType: Iterator<Item = T>,
+    FType: FnOnce() -> IType + Send + Sync,
+{
+    fn init(&mut self) {}
+
+    fn run(&mut self) {
+        if let Some(func) = self.iterator.take() {
+            for val in (func)() {
+                let current_time = self.time.tick();
+
+                self.output
+                    .enqueue(&self.time, ChannelElement::new(current_time + 1, val))
+                    .unwrap();
+                self.time.incr_cycles(1);
+
+                dam::logging::log_event(&SimpleLogData {
+                    arrive: self.time.tick().time() - 1,
+                    out_done: self.time.tick().time(),
+                })
+                .unwrap();
+            }
+        } else {
+            panic!("Iterator has already been consumed");
+        }
+    }
+}
+
+impl<T: DAMType, IType, FType> CustomGeneratorContext<T, IType, FType>
+where
+    IType: Iterator<Item = T>,
+    FType: FnOnce() -> IType + Send + Sync,
+{
+    /// Constructs a GeneratorContext from an iterator and the output channel
+    pub fn new(iterator: FType, output: Sender<T>) -> CustomGeneratorContext<T, IType, FType> {
+        let gc = CustomGeneratorContext {
+            iterator: Some(iterator),
+            output,
+            context_info: Default::default(),
+        };
+        gc.output.attach_sender(&gc);
+        gc
+    }
+}
 
 #[context_macro]
 pub struct ReceiverBackpressureContext {
@@ -50,11 +116,17 @@ impl Context for ReceiverBackpressureContext {
 #[cfg(test)]
 mod test_backpressure {
     use dam::{
-        simulation::ProgramBuilder,
-        utility_contexts::{CheckerContext, GeneratorContext},
+        logging::LogEvent,
+        simulation::{
+            DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
+            RunOptionsBuilder,
+        },
+        utility_contexts::CheckerContext,
     };
 
-    use super::ReceiverBackpressureContext;
+    use crate::test::test_backpressure::SimpleLogData;
+
+    use super::{CustomGeneratorContext, ReceiverBackpressureContext};
 
     #[test]
     fn test_with_dequeue() {
@@ -62,12 +134,44 @@ mod test_backpressure {
         let (in_snd, in_rcv) = ctx.bounded(2);
         let (out_snd, out_rcv) = ctx.bounded(2);
 
-        ctx.add_child(GeneratorContext::new(|| 0..10u32, in_snd));
+        ctx.add_child(CustomGeneratorContext::new(|| 0..10u32, in_snd));
         ctx.add_child(ReceiverBackpressureContext::new(in_rcv, out_snd));
         ctx.add_child(CheckerContext::new(|| 0..10u32, out_rcv));
 
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
+    }
+
+    #[test]
+    fn test_backpressure_log() {
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.bounded(2);
+        let (out_snd, out_rcv) = ctx.bounded(2);
+
+        ctx.add_child(CustomGeneratorContext::new(|| 0..10u32, in_snd));
+        ctx.add_child(ReceiverBackpressureContext::new(in_rcv, out_snd));
+        ctx.add_child(CheckerContext::new(|| 0..10u32, out_rcv));
+
+        let initialized = ctx.initialize(Default::default()).unwrap();
+
+        let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
+            // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
+            dam::logging::LogFilter::AllowAll,
+        ));
+        let run_options = run_options.logging(LoggingOptions::Mongo(
+            MongoOptionsBuilder::default()
+                .db("backpressure_log".to_string())
+                .uri("mongodb://127.0.0.1:27017".to_string())
+                .build()
+                .unwrap(),
+        ));
+        let summary = initialized.run(run_options.build().unwrap());
+
+        #[cfg(feature = "dot")]
+        {
+            println!("{}", summary.to_dot_string());
+        }
+        dbg!(summary.elapsed_cycles());
     }
 }
