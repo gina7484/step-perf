@@ -1,5 +1,5 @@
-mongosh --quiet init_hbm_log_generic --eval 'print("timestamp,start(ns),end(ns)"); db.log.aggregate([
-  { $match: { event_type: "GenQKV" } },
+mongosh --quiet init_hbm_log_two --eval 'print("timestamp,start(ns),end(ns)"); db.log.aggregate([
+  { $match: { event_type: "Output" } },
   { $project: { 
       _id: 0, 
       timestamp: 1, 
@@ -10,4 +10,4 @@ mongosh --quiet init_hbm_log_generic --eval 'print("timestamp,start(ns),end(ns)"
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > init_hbm_log_generic.csv
+})' > init_hbm_log_mult_output.csv

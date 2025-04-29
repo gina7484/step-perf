@@ -94,6 +94,24 @@ mod test_hbm_load {
         pub const NAME: &'static str = "GenQKV";
     }
 
+    // Logging values
+    #[derive(Serialize, Deserialize, Debug)]
+    #[event_type]
+    struct Output {
+        pub start: u64,
+        pub end: u64,
+    }
+
+    // Implement the trait for GenQKV
+    impl LoggableEvent for Output {
+        fn new(start: u64, end: u64) -> Self {
+            Output { start, end }
+        }
+    }
+    impl Output {
+        pub const NAME: &'static str = "Output";
+    }
+
     #[test]
     fn simple_test() {
         let mut ctx = ProgramBuilder::default();
@@ -130,6 +148,42 @@ mod test_hbm_load {
         let run_options = run_options.logging(LoggingOptions::Mongo(
             MongoOptionsBuilder::default()
                 .db("init_hbm_log_generic".to_string())
+                .uri("mongodb://127.0.0.1:27017".to_string())
+                .build()
+                .unwrap(),
+        ));
+        let summary = initialized.run(run_options.build().unwrap());
+        // Check the summary
+        println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
+    }
+
+    #[test]
+    fn test_log_two_events() {
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.bounded(2);
+        let (out_snd, out_rcv) = ctx.bounded(2);
+
+        ctx.add_child(HBMLoadContext::<GenQKV>::new(
+            "gen_qkv.csv".to_string(),
+            in_snd,
+        ));
+        ctx.add_child(ConsumerContext::new(in_rcv));
+
+        ctx.add_child(HBMLoadContext::<Output>::new(
+            "output.csv".to_string(),
+            out_snd,
+        ));
+        ctx.add_child(ConsumerContext::new(out_rcv));
+
+        let initialized = ctx.initialize(Default::default()).unwrap();
+
+        let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
+            // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
+            dam::logging::LogFilter::AllowAll,
+        ));
+        let run_options = run_options.logging(LoggingOptions::Mongo(
+            MongoOptionsBuilder::default()
+                .db("init_hbm_log_two".to_string())
                 .uri("mongodb://127.0.0.1:27017".to_string())
                 .build()
                 .unwrap(),
