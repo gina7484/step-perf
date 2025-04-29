@@ -1,4 +1,4 @@
-mongosh --quiet init_hbm_log --eval 'print("timestamp,start(ns),end(ns)"); db.log.aggregate([
+mongosh --quiet init_hbm_log_generic --eval 'print("timestamp,start(ns),end(ns)"); db.log.aggregate([
   { $match: { event_type: "GenQKV" } },
   { $project: { 
       _id: 0, 
@@ -10,4 +10,4 @@ mongosh --quiet init_hbm_log --eval 'print("timestamp,start(ns),end(ns)"); db.lo
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > init_hbm_log.csv
+})' > init_hbm_log_generic.csv

@@ -5,10 +5,3 @@ use serde::{Deserialize, Serialize};
 pub trait LoggableEvent {
     fn new(start: u64, end: u64) -> Self;
 }
-
-#[derive(Serialize, Deserialize, Debug)]
-#[event_type]
-pub struct GenQKV {
-    pub start: u64,
-    pub end: u64,
-}
