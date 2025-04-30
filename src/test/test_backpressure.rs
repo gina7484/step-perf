@@ -116,15 +116,12 @@ impl Context for ReceiverBackpressureContext {
 #[cfg(test)]
 mod test_backpressure {
     use dam::{
-        logging::LogEvent,
         simulation::{
             DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
             RunOptionsBuilder,
         },
         utility_contexts::CheckerContext,
     };
-
-    use crate::test::test_backpressure::SimpleLogData;
 
     use super::{CustomGeneratorContext, ReceiverBackpressureContext};
 

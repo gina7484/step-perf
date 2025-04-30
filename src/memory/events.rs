@@ -1,7 +1,14 @@
-use dam::dam_macros::event_type;
-use serde::{Deserialize, Serialize};
-
 // Define a trait for event types that can be logged
+
 pub trait LoggableEvent {
-    fn new(start: u64, end: u64) -> Self;
+    fn new(
+        outer: u32,
+        m: u32,
+        n: u32,
+        k: u32,
+        start_ns: u64,
+        end_ns: u64,
+        output_tile_available: bool,
+        num_elems: u32,
+    ) -> Self;
 }

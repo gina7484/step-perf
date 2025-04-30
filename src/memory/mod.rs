@@ -42,16 +42,34 @@ impl StaticallySized for HBMEntry {
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct PMUEntry {
-    outer: u32,
-    m: u32,
-    n: u32,
-    k: u32,
-    output_tile_available: bool,
-    num_elems: u32,
+    pub outer: u32,
+    pub m: u32,
+    pub n: u32,
+    pub k: u32,
+    pub output_tile_available: bool,
+    pub num_elems: u32,
 }
 
 impl StaticallySized for PMUEntry {
     const SIZE: usize = u32::SIZE * 5 + bool::SIZE;
+}
+
+impl PMUEntry {
+    pub fn bw(&self) -> f64 {
+        // (# of elements) / ns
+        /*
+        In the SN40L paper
+            "These are complemented by 1040 distributed Pattern Memory Units (PMUs)
+            that in aggregate provide hundreds of TBps of on-chip memory bandwidth"
+
+        As a single SN40L chip has 1040 PMUs, we can assume that each PMU has a bandwidth of
+        1000 TBps / 1040 PMUs = 1.923 TBps
+
+        As we assume using fp16, this will be 1.923 TBps / 2 = 0.9615 * 1e12 elements / s
+        = 0.9615 elements / ns
+         */
+        0.9615
+    }
 }
 
 pub fn hbm_to_pmu(hbm_entry: &HBMEntry) -> PMUEntry {

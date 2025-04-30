@@ -1,8 +1,6 @@
 use dam::context_tools::*;
 use dam::logging::LogEvent;
-use graphviz_rust::attributes::start;
-use std::path::Path;
-use std::{fs::File, marker::PhantomData};
+use std::marker::PhantomData;
 
 use super::{events::LoggableEvent, hbm_to_pmu, parse_csv, HBMEntry, PMUEntry};
 
@@ -59,8 +57,73 @@ impl<E: LoggableEvent + LogEvent + std::marker::Sync + std::marker::Send> Contex
             self.time.incr_cycles(time_block_ns);
 
             dam::logging::log_event(&E::new(
+                hbm_entry.outer,
+                hbm_entry.m,
+                hbm_entry.n,
+                hbm_entry.k,
                 self.time.tick().time() - time_block_ns,
                 self.time.tick().time(),
+                hbm_entry.output_tile_available,
+                hbm_entry.num_elems,
+            ))
+            .unwrap();
+        }
+    }
+}
+
+#[context_macro]
+/// This is a context that corresponds to the `Matmul` in step-perf-py.
+/// Becasue step-perf-py only models how long loading each tile takes,
+/// we will read in the csv generated from step-perf-py and factor in potential
+/// stalls between the tile loads due to backpressure in this context.
+pub struct HBMStoreContext<E: LoggableEvent> {
+    file_path: String,
+    in_stream: Receiver<PMUEntry>,
+    _phantom: PhantomData<E>, // Needed to use the generic parameter E
+}
+
+impl<E: LoggableEvent + LogEvent + std::marker::Sync + std::marker::Send> HBMStoreContext<E> {
+    pub fn new(file_path: String, in_stream: Receiver<PMUEntry>) -> Self {
+        let ctx = Self {
+            file_path,
+            in_stream,
+            context_info: Default::default(),
+            _phantom: PhantomData,
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+
+        ctx
+    }
+}
+
+impl<E: LoggableEvent + LogEvent + std::marker::Sync + std::marker::Send> Context
+    for HBMStoreContext<E>
+{
+    fn run(&mut self) {
+        // Read in the data generated from step-perf-py
+        let entries = parse_csv(&self.file_path);
+
+        for hbm_entry in entries {
+            let time_block_ms = hbm_entry.end_ms - hbm_entry.start_ms;
+            let time_block_ns = (time_block_ms * 1e6) as u64;
+
+            match self.in_stream.peek_next(&self.time) {
+                Ok(_) => {}
+                Err(_) => return,
+            }
+            self.time.incr_cycles(time_block_ns);
+
+            self.in_stream.dequeue(&self.time).unwrap();
+
+            dam::logging::log_event(&E::new(
+                hbm_entry.outer,
+                hbm_entry.m,
+                hbm_entry.n,
+                hbm_entry.k,
+                self.time.tick().time() - time_block_ns,
+                self.time.tick().time(),
+                hbm_entry.output_tile_available,
+                hbm_entry.num_elems,
             ))
             .unwrap();
         }
@@ -86,14 +149,38 @@ mod test_hbm_load {
     #[derive(Serialize, Deserialize, Debug)]
     #[event_type]
     struct GenQKV {
-        pub start: u64,
-        pub end: u64,
+        outer: u32,
+        m: u32,
+        n: u32,
+        k: u32,
+        start_ns: u64,
+        end_ns: u64,
+        output_tile_available: bool,
+        num_elems: u32,
     }
 
     // Implement the trait for GenQKV
     impl LoggableEvent for GenQKV {
-        fn new(start: u64, end: u64) -> Self {
-            GenQKV { start, end }
+        fn new(
+            outer: u32,
+            m: u32,
+            n: u32,
+            k: u32,
+            start_ns: u64,
+            end_ns: u64,
+            output_tile_available: bool,
+            num_elems: u32,
+        ) -> Self {
+            GenQKV {
+                outer,
+                m,
+                n,
+                k,
+                start_ns: start_ns,
+                end_ns: end_ns,
+                output_tile_available,
+                num_elems,
+            }
         }
     }
     impl GenQKV {
@@ -104,14 +191,38 @@ mod test_hbm_load {
     #[derive(Serialize, Deserialize, Debug)]
     #[event_type]
     struct Output {
-        pub start: u64,
-        pub end: u64,
+        outer: u32,
+        m: u32,
+        n: u32,
+        k: u32,
+        start_ns: u64,
+        end_ns: u64,
+        output_tile_available: bool,
+        num_elems: u32,
     }
 
     // Implement the trait for GenQKV
     impl LoggableEvent for Output {
-        fn new(start: u64, end: u64) -> Self {
-            Output { start, end }
+        fn new(
+            outer: u32,
+            m: u32,
+            n: u32,
+            k: u32,
+            start_ns: u64,
+            end_ns: u64,
+            output_tile_available: bool,
+            num_elems: u32,
+        ) -> Self {
+            Output {
+                outer,
+                m,
+                n,
+                k,
+                start_ns,
+                end_ns,
+                output_tile_available,
+                num_elems,
+            }
         }
     }
     impl Output {
