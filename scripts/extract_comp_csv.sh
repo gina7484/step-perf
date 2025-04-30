@@ -2,7 +2,7 @@
 # ======================= Compute =======================
 ## GenQKV
 
-mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,counter,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "CompGenQKV" } },
   { $project: { 
       _id: 0, 
@@ -15,10 +15,10 @@ mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.ag
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.counter + "," + doc.start + "," + doc.end); 
-})' > comp_gen_qkv.csv 
+})' > data/comp_gen_qkv.csv 
 
-mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate([
-  { $match: { event_type: "LoadQKV" } },
+mongosh --quiet attn_log --eval 'print("timestamp,start_ns,end_ns"); db.log.aggregate([
+  { $match: { event_type: "LoadGenQKV" } },
   { $project: { 
       _id: 0, 
       timestamp: 1, 
@@ -29,10 +29,10 @@ mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate(
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > load_gen_qkv.csv 
+})' > data/load_gen_qkv.csv 
 
 ## Q_KT
-mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "CompQKt" } },
   { $project: { 
       _id: 0, 
@@ -44,9 +44,9 @@ mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate(
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > comp_q_kt.csv 
+})' > data/comp_q_kt.csv 
 
-mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "LoadQKt" } },
   { $project: { 
       _id: 0, 
@@ -58,11 +58,11 @@ mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate(
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > load_q_kt.csv 
+})' > data/load_q_kt.csv 
 
 ## Attn_v
 
-mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "CompAttnV" } },
   { $project: { 
       _id: 0, 
@@ -74,9 +74,9 @@ mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate(
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > comp_attn_v.csv 
+})' > data/comp_attn_v.csv 
 
-mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "LoadAttnV" } },
   { $project: { 
       _id: 0, 
@@ -88,10 +88,10 @@ mongosh --quiet attn_log --eval 'print("timestamp,start,end"); db.log.aggregate(
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.start + "," + doc.end); 
-})' > load_attn_v.csv 
+})' > data/load_attn_v.csv 
 
 ## Proj
-mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,counter,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "CompProj" } },
   { $project: { 
       _id: 0, 
@@ -104,10 +104,10 @@ mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.ag
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.counter + "," + doc.start + "," + doc.end); 
-})' > comp_proj.csv 
+})' > data/comp_proj.csv 
 
 
-mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,counter,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "LoadProj" } },
   { $project: { 
       _id: 0, 
@@ -120,10 +120,10 @@ mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.ag
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.counter + "," + doc.start + "," + doc.end); 
-})' > load_proj.csv 
+})' > data/load_proj.csv 
 
 
-mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.aggregate([
+mongosh --quiet attn_log --eval 'print("timestamp,counter,start_ns,end_ns"); db.log.aggregate([
   { $match: { event_type: "StoreProj" } },
   { $project: { 
       _id: 0, 
@@ -136,4 +136,4 @@ mongosh --quiet attn_log --eval 'print("timestamp,counter,start,end"); db.log.ag
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.counter + "," + doc.start + "," + doc.end); 
-})' > store_proj.csv 
+})' > data/store_proj.csv 

@@ -14,4 +14,4 @@ mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.lo
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.m + "," + doc.n + "," + doc.k + "," + doc.start_ns + "," + doc.end_ns); 
-})' > hbm_store.csv
+})' > data/hbm_store.csv

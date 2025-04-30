@@ -1,0 +1,348 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Gantt Chart Visualization</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            overflow: hidden;
+        }
+        #container {
+            width: 100%;
+            height: calc(100vh - 100px);
+            overflow: auto;
+            position: relative;
+        }
+        #timeline {
+            position: relative;
+            margin-top: 40px;
+        }
+        .file-row {
+            height: 50px;
+            margin-bottom: 5px;
+            position: relative;
+            border-bottom: 1px solid #eee;
+        }
+        .file-label {
+            position: absolute;
+            left: 0;
+            top: 15px;
+            width: 150px;
+            font-weight: bold;
+            text-align: right;
+            padding-right: 10px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .timeline-container {
+            margin-left: 170px;
+            position: relative;
+            height: 100%;
+        }
+        .block {
+            position: absolute;
+            height: 30px;
+            top: 10px;
+            border-radius: 3px;
+            text-align: center;
+            font-size: 10px;
+            overflow: hidden;
+            white-space: nowrap;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .block:hover {
+            opacity: 0.8;
+        }
+        .prefix-comp {
+            background-color: #FF5733; /* Red-orange for compute */
+        }
+        .prefix-hbm {
+            background-color: #33A8FF; /* Blue for HBM */
+        }
+        .prefix-load {
+            background-color: #33FF57; /* Green for load */
+        }
+        .prefix-store {
+            background-color: #A633FF; /* Purple for store */
+        }
+        .prefix-default {
+            background-color: #999999; /* Gray for unknown prefixes */
+        }
+        .timeline-marker {
+            position: absolute;
+            width: 1px;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.1);
+            top: 0;
+        }
+        .timeline-label {
+            position: absolute;
+            font-size: 10px;
+            color: #666;
+            top: -20px;
+            transform: translateX(-50%);
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        .tooltip {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 100;
+            pointer-events: none;
+            display: none;
+        }
+        button {
+            margin-right: 10px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        #scale-slider {
+            width: 200px;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .legend {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-right: 20px;
+            margin-bottom: 5px;
+        }
+        .legend-color {
+            width: 15px;
+            height: 15px;
+            border-radius: 3px;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSV Gantt Chart Visualization</h1>
+    <div class="controls">
+        <button id="zoom-in">Zoom In</button>
+        <button id="zoom-out">Zoom Out</button>
+        <button id="reset">Reset</button>
+        <label for="scale-slider">Scale: </label>
+        <input type="range" id="scale-slider" min="1" max="100" value="10">
+        <span id="scale-value">1x</span>
+    </div>
+    <div class="legend">
+        <div class="legend-item">
+            <div class="legend-color prefix-comp"></div>
+            <span>Compute</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-hbm"></div>
+            <span>HBM</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-load"></div>
+            <span>Load</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-store"></div>
+            <span>Store</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-default"></div>
+            <span>Other</span>
+        </div>
+    </div>
+    <div id="container">
+        <div id="timeline"></div>
+    </div>
+    <div id="tooltip" class="tooltip"></div>
+
+    <script>
+        // Data from Python
+        const data = [{"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 0.0, "end": 596984014.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,1,0,0", "start": 596984014.0, "end": 597008304.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,2,0,0", "start": 806380567.0, "end": 806404857.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,3,0,0", "start": 807440014.0, "end": 807464304.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,4,0,0", "start": 808499461.0, "end": 808523751.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,5,0,0", "start": 810626504.0, "end": 810650794.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,6,0,0", "start": 814000433.0, "end": 814024723.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,7,0,0", "start": 821489532.0, "end": 821513822.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,8,0,0", "start": 846711994.0, "end": 846736284.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,9,0,0", "start": 850024597.0, "end": 850048887.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,10,0,0", "start": 866364654.0, "end": 866388944.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,11,0,0", "start": 922101448.0, "end": 922125738.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,12,0,0", "start": 928344496.0, "end": 928368786.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,13,0,0", "start": 935909913.0, "end": 935934203.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,14,0,0", "start": 959099942.0, "end": 959124232.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,15,0,0", "start": 966938148.0, "end": 966962438.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,16,0,0", "start": 974515387.0, "end": 974539677.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,17,0,0", "start": 1032515190.0, "end": 1032539480.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,18,0,0", "start": 1121083693.0, "end": 1121107983.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,19,0,0", "start": 1124397982.0, "end": 1124422271.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,20,0,0", "start": 1134963931.0, "end": 1134988222.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,21,0,0", "start": 1161385131.0, "end": 1161409420.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,22,0,0", "start": 1166820905.0, "end": 1166845196.0, "output_available": false}, {"file_id": "hbm_load_gen_qkv", "prefix": "hbm", "identifier": "N/A,23,0,0", "start": 1176037367.0, "end": 1176061656.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 596984014.0, "end": 806380566.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 806380566.0, "end": 806389087.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 807440013.0, "end": 807448534.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 809567056.0, "end": 809575577.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 812940985.0, "end": 812949506.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 820430084.0, "end": 820438605.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 845652546.0, "end": 845661067.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 848965149.0, "end": 848973670.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 865305206.0, "end": 865313727.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 921042000.0, "end": 921050521.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 927285048.0, "end": 927293569.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 934850465.0, "end": 934858986.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 958040494.0, "end": 958049015.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 965878700.0, "end": 965887221.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 973455939.0, "end": 973464460.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1031455742.0, "end": 1031464263.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1120024245.0, "end": 1120032766.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1123338534.0, "end": 1123347055.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1133904483.0, "end": 1133913004.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1160325683.0, "end": 1160334204.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1165761457.0, "end": 1165769978.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1174977919.0, "end": 1174986440.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1228604357.0, "end": 1228612878.0, "output_available": false}, {"file_id": "load_gen_qkv", "prefix": "load", "identifier": "", "start": 1230282802.0, "end": 1230291323.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "0", "start": 596984014.0, "end": 598043461.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "1", "start": 806380566.0, "end": 807440013.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "2", "start": 807440013.0, "end": 808499460.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "3", "start": 809567056.0, "end": 810626503.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "4", "start": 812940985.0, "end": 814000432.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "5", "start": 820430084.0, "end": 821489531.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "6", "start": 845652546.0, "end": 846711993.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "7", "start": 848965149.0, "end": 850024596.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "8", "start": 865305206.0, "end": 866364653.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "9", "start": 921042000.0, "end": 922101447.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "10", "start": 927285048.0, "end": 928344495.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "11", "start": 934850465.0, "end": 935909912.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "12", "start": 958040494.0, "end": 959099941.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "13", "start": 965878700.0, "end": 966938147.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "14", "start": 973455939.0, "end": 974515386.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "15", "start": 1031455742.0, "end": 1032515189.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "16", "start": 1120024245.0, "end": 1121083692.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "17", "start": 1123338534.0, "end": 1124397981.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "18", "start": 1133904483.0, "end": 1134963930.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "19", "start": 1160325683.0, "end": 1161385130.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "20", "start": 1165761457.0, "end": 1166820904.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "21", "start": 1174977919.0, "end": 1176037366.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "22", "start": 1228604357.0, "end": 1229663804.0, "output_available": false}, {"file_id": "comp_gen_qkv", "prefix": "comp", "identifier": "23", "start": 1230282802.0, "end": 1231342249.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 0.0, "end": 13614435.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 13614435.0, "end": 28029720.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 809567056.0, "end": 841564620.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 841564620.0, "end": 844877223.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 844877223.0, "end": 848189826.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 848189826.0, "end": 862059077.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 862059077.0, "end": 909855211.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 909855211.0, "end": 923979278.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 923979278.0, "end": 932788618.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 932788618.0, "end": 940396685.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 940396685.0, "end": 954739165.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 958040494.0, "end": 972382974.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 972382974.0, "end": 1020251913.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1020251913.0, "end": 1101101277.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1101101277.0, "end": 1115261746.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1120024245.0, "end": 1135131172.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1135131172.0, "end": 1139499440.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1139499440.0, "end": 1152931864.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1160325683.0, "end": 1167824543.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1167824543.0, "end": 1217076767.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1217076767.0, "end": 1224248007.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1228604357.0, "end": 1235193161.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1235193161.0, "end": 1249317228.0, "output_available": false}, {"file_id": "hbm_load_q_kt", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1249317228.0, "end": 1398020359.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 806380567.0, "end": 809567055.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 809567055.0, "end": 812940984.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 812940984.0, "end": 820430083.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 844877223.0, "end": 845652545.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 848189826.0, "end": 848965148.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 862059077.0, "end": 865305205.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 909855211.0, "end": 921041999.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 923979278.0, "end": 927285047.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 932788618.0, "end": 934850464.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 956259808.0, "end": 958040493.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 962521810.0, "end": 965878699.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 970099049.0, "end": 973455938.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1020251913.0, "end": 1031455741.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1101101277.0, "end": 1120024244.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1120024244.0, "end": 1123338533.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1130368673.0, "end": 1133904482.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1159303279.0, "end": 1160325682.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1162617568.0, "end": 1165761456.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1173222793.0, "end": 1174977918.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1217076767.0, "end": 1228604356.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1228604356.0, "end": 1230282801.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1230836811.0, "end": 1232378935.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1260609892.0, "end": 1263915661.0, "output_available": false}, {"file_id": "load_q_kt", "prefix": "load", "identifier": "", "start": 1398020359.0, "end": 1432824644.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 806380567.0, "end": 806934095.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 809567055.0, "end": 810120583.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 812940984.0, "end": 813494512.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 844877223.0, "end": 845430751.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 848189826.0, "end": 848743354.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 862059077.0, "end": 862612605.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 909855211.0, "end": 910408739.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 923979278.0, "end": 924532806.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 932788618.0, "end": 933342146.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 956259808.0, "end": 956813336.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 962521810.0, "end": 963075338.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 970099049.0, "end": 970652577.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1020251913.0, "end": 1020805441.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1101101277.0, "end": 1101654805.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1120024244.0, "end": 1120577772.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1130368673.0, "end": 1130922201.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1159303279.0, "end": 1159856807.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1162617568.0, "end": 1163171096.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1173222793.0, "end": 1173776321.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1217076767.0, "end": 1217630295.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1228604356.0, "end": 1229157884.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1230836811.0, "end": 1231390339.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1260609892.0, "end": 1261163420.0, "output_available": false}, {"file_id": "comp_q_kt", "prefix": "comp", "identifier": "", "start": 1398020359.0, "end": 1398573887.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 0.0, "end": 13632706.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 13632706.0, "end": 28067336.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 812753545.0, "end": 844794050.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 844794050.0, "end": 848111098.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 848111098.0, "end": 851428146.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 883324880.0, "end": 897212743.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 897212743.0, "end": 945073019.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 945073019.0, "end": 959216040.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 959216040.0, "end": 968037202.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 968037202.0, "end": 975655479.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 975655479.0, "end": 990017207.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 990017207.0, "end": 1004378935.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1011489270.0, "end": 1059422448.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1059422448.0, "end": 1140380311.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1140380311.0, "end": 1154559783.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1159303279.0, "end": 1174430479.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1174430479.0, "end": 1178804609.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1178804609.0, "end": 1192255059.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1192255059.0, "end": 1199763982.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1199763982.0, "end": 1249082302.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1249082302.0, "end": 1256263166.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1260609892.0, "end": 1267207538.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1267207538.0, "end": 1281350559.0, "output_available": false}, {"file_id": "hbm_load_attn_v", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 1283548233.0, "end": 1432450921.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 809567056.0, "end": 812753544.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 812940985.0, "end": 816314914.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 820430084.0, "end": 827919183.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 882549557.0, "end": 883324879.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 883644319.0, "end": 884419641.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 884739081.0, "end": 887985209.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 945073019.0, "end": 956259807.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 959216040.0, "end": 962521809.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 968037202.0, "end": 970099048.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 983234768.0, "end": 985015453.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1008132380.0, "end": 1011489269.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1033029991.0, "end": 1036386880.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1057927603.0, "end": 1069131431.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1140380311.0, "end": 1159303278.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1159303278.0, "end": 1162617567.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1169686983.0, "end": 1173222792.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1178804609.0, "end": 1179827012.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1192255059.0, "end": 1195398947.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1207313273.0, "end": 1209068398.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1249082302.0, "end": 1260609891.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1260609891.0, "end": 1262288336.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1282006108.0, "end": 1283548232.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1306903720.0, "end": 1310209489.0, "output_available": false}, {"file_id": "load_attn_v", "prefix": "load", "identifier": "", "start": 1432824645.0, "end": 1467628930.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 809567056.0, "end": 810141546.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 812940985.0, "end": 813515475.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 820430084.0, "end": 821004574.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 882549557.0, "end": 883124047.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 883644319.0, "end": 884218809.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 884739081.0, "end": 885313571.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 945073019.0, "end": 945647509.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 959216040.0, "end": 959790530.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 968037202.0, "end": 968611692.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 983234768.0, "end": 983809258.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1008132380.0, "end": 1008706870.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1033029991.0, "end": 1033604481.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1057927603.0, "end": 1058502093.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1140380311.0, "end": 1140954801.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1159303278.0, "end": 1159877768.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1169686983.0, "end": 1170261473.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1178804609.0, "end": 1179379099.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1192255059.0, "end": 1192829549.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1207313273.0, "end": 1207887763.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1249082302.0, "end": 1249656792.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1260609891.0, "end": 1261184381.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1282006108.0, "end": 1282580598.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1306903720.0, "end": 1307478210.0, "output_available": false}, {"file_id": "comp_attn_v", "prefix": "comp", "identifier": "", "start": 1432824645.0, "end": 1433399135.0, "output_available": false}, {"file_id": "hbm_load_proj", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 0.0, "end": 595797193.0, "output_available": false}, {"file_id": "load_proj", "prefix": "load", "identifier": "0", "start": 812753545.0, "end": 882549556.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "0", "start": 812753545.0, "end": 813848307.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "1", "start": 882549556.0, "end": 883644318.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "2", "start": 883644318.0, "end": 884739080.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "3", "start": 907447170.0, "end": 908541932.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "4", "start": 932344781.0, "end": 933439543.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "5", "start": 957242394.0, "end": 958337156.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "6", "start": 982140005.0, "end": 983234767.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "7", "start": 1007037617.0, "end": 1008132379.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "8", "start": 1031935228.0, "end": 1033029990.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "9", "start": 1056832840.0, "end": 1057927602.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "10", "start": 1081730451.0, "end": 1082825213.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "11", "start": 1106628064.0, "end": 1107722826.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "12", "start": 1131525675.0, "end": 1132620437.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "13", "start": 1159303279.0, "end": 1160398041.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "14", "start": 1181320898.0, "end": 1182415660.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "15", "start": 1206218510.0, "end": 1207313272.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "16", "start": 1231116122.0, "end": 1232210884.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "17", "start": 1256013734.0, "end": 1257108496.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "18", "start": 1280911345.0, "end": 1282006107.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "19", "start": 1305808957.0, "end": 1306903719.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "20", "start": 1330706569.0, "end": 1331801331.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "21", "start": 1355604181.0, "end": 1356698943.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "22", "start": 1380501792.0, "end": 1381596554.0, "output_available": false}, {"file_id": "comp_proj", "prefix": "comp", "identifier": "23", "start": 1467628931.0, "end": 1468723693.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "0", "start": 812753545.0, "end": 812753545.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "1", "start": 882549556.0, "end": 882549556.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "2", "start": 883644318.0, "end": 883644318.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "3", "start": 907447170.0, "end": 907447170.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "4", "start": 932344781.0, "end": 932344781.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "5", "start": 957242394.0, "end": 957242394.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "6", "start": 982140005.0, "end": 982140005.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "7", "start": 1007037617.0, "end": 1007037617.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "8", "start": 1031935228.0, "end": 1031935228.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "9", "start": 1056832840.0, "end": 1056832840.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "10", "start": 1081730451.0, "end": 1081730451.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "11", "start": 1106628064.0, "end": 1106628064.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "12", "start": 1131525675.0, "end": 1131525675.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "13", "start": 1159303279.0, "end": 1159303279.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "14", "start": 1181320898.0, "end": 1181320898.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "15", "start": 1206218510.0, "end": 1206218510.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "16", "start": 1231116122.0, "end": 1231116122.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "17", "start": 1256013734.0, "end": 1256013734.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "18", "start": 1280911345.0, "end": 1280911345.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "19", "start": 1305808957.0, "end": 1305808957.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "20", "start": 1330706569.0, "end": 1330706569.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "21", "start": 1355604181.0, "end": 1355604181.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "22", "start": 1380501792.0, "end": 1380501792.0, "output_available": false}, {"file_id": "store_proj", "prefix": "store", "identifier": "23", "start": 1467628931.0, "end": 1467628931.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,0,0,0", "start": 882549557.0, "end": 907447169.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,1,0,0", "start": 907447169.0, "end": 932344780.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,2,0,0", "start": 932344780.0, "end": 957242393.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,3,0,0", "start": 957242393.0, "end": 982140004.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,4,0,0", "start": 982140004.0, "end": 1007037616.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,5,0,0", "start": 1007037616.0, "end": 1031935227.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,6,0,0", "start": 1031935227.0, "end": 1056832839.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,7,0,0", "start": 1056832839.0, "end": 1081730450.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,8,0,0", "start": 1081730450.0, "end": 1106628063.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,9,0,0", "start": 1106628063.0, "end": 1131525674.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,10,0,0", "start": 1131525674.0, "end": 1156423286.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,11,0,0", "start": 1156423286.0, "end": 1181320897.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,12,0,0", "start": 1181320897.0, "end": 1206218509.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,13,0,0", "start": 1206218509.0, "end": 1231116121.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,14,0,0", "start": 1231116121.0, "end": 1256013733.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,15,0,0", "start": 1256013733.0, "end": 1280911344.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,16,0,0", "start": 1280911344.0, "end": 1305808956.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,17,0,0", "start": 1305808956.0, "end": 1330706568.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,18,0,0", "start": 1330706568.0, "end": 1355604180.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,19,0,0", "start": 1355604180.0, "end": 1380501791.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,20,0,0", "start": 1380501791.0, "end": 1405399404.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,21,0,0", "start": 1405399404.0, "end": 1430297015.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,22,0,0", "start": 1430297015.0, "end": 1455194628.0, "output_available": false}, {"file_id": "hbm_store", "prefix": "hbm", "identifier": "N/A,23,0,0", "start": 1468723694.0, "end": 1493621305.0, "output_available": false}];
+        const fileIds = ["hbm_load_gen_qkv", "load_gen_qkv", "comp_gen_qkv", "hbm_load_q_kt", "load_q_kt", "comp_q_kt", "hbm_load_attn_v", "load_attn_v", "comp_attn_v", "hbm_load_proj", "load_proj", "comp_proj", "store_proj", "hbm_store"];
+        const minTime = 0.0;
+        const maxTime = 1493621305.0;
+        
+        // Visualization variables
+        let scale = 0.1;
+        let timelineEl = document.getElementById('timeline');
+        let containerEl = document.getElementById('container');
+        let tooltipEl = document.getElementById('tooltip');
+        let scaleSlider = document.getElementById('scale-slider');
+        let scaleValue = document.getElementById('scale-value');
+        
+        // Function to render the timeline
+        function renderTimeline() {
+            timelineEl.innerHTML = '';
+            const timelineWidth = (maxTime - minTime) * scale;
+            
+            // Create a row for each file
+            fileIds.forEach(fileId => {
+                const fileRow = document.createElement('div');
+                fileRow.className = 'file-row';
+                
+                const fileLabel = document.createElement('div');
+                fileLabel.className = 'file-label';
+                fileLabel.textContent = fileId;
+                fileLabel.title = fileId; // Add tooltip for long filenames
+                
+                const timelineContainer = document.createElement('div');
+                timelineContainer.className = 'timeline-container';
+                timelineContainer.style.width = `${timelineWidth}px`;
+                
+                fileRow.appendChild(fileLabel);
+                fileRow.appendChild(timelineContainer);
+                timelineEl.appendChild(fileRow);
+                
+                // Add blocks for this file
+                const fileDataItems = data.filter(item => item.file_id === fileId);
+                fileDataItems.forEach(item => {
+                    const block = document.createElement('div');
+                    
+                    // Set color class based on prefix
+                    const prefix = item.prefix;
+                    if (['comp', 'hbm', 'load', 'store'].includes(prefix)) {
+                        block.className = `block prefix-${prefix}`;
+                    } else {
+                        block.className = 'block prefix-default';
+                    }
+                    
+                    // Position and size based on time values
+                    const left = (item.start - minTime) * scale;
+                    const width = (item.end - item.start) * scale;
+                    
+                    block.style.left = `${left}px`;
+                    block.style.width = `${Math.max(width, 1)}px`;
+                    
+                    // Only show text if there's enough space and we have an identifier
+                    if (width > 40 && item.identifier) {
+                        block.textContent = item.identifier;
+                    }
+                    
+                    // Add tooltip data
+                    block.dataset.prefix = item.prefix;
+                    block.dataset.identifier = item.identifier || 'No identifier';
+                    block.dataset.start = item.start;
+                    block.dataset.end = item.end;
+                    block.dataset.outputAvailable = item.output_available;
+                    
+                    // Add event listeners for tooltip
+                    block.addEventListener('mouseover', showTooltip);
+                    block.addEventListener('mousemove', moveTooltip);
+                    block.addEventListener('mouseout', hideTooltip);
+                    
+                    timelineContainer.appendChild(block);
+                });
+            });
+            
+            // Add time markers
+            const stepSize = calculateStepSize(maxTime - minTime);
+            for (let t = minTime; t <= maxTime; t += stepSize) {
+                const marker = document.createElement('div');
+                marker.className = 'timeline-marker';
+                marker.style.left = `${(t - minTime) * scale + 170}px`;
+                
+                const label = document.createElement('div');
+                label.className = 'timeline-label';
+                label.textContent = t.toFixed(2) + 'ns';
+                
+                marker.appendChild(label);
+                timelineEl.appendChild(marker);
+            }
+        }
+        
+        // Calculate appropriate step size for timeline markers
+        function calculateStepSize(range) {
+            const targetSteps = 10;
+            const roughStep = range / targetSteps;
+            
+            // Round to a nice number
+            const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)));
+            const normalized = roughStep / magnitude;
+            
+            if (normalized < 1.5) return magnitude;
+            if (normalized < 3.5) return 2 * magnitude;
+            if (normalized < 7.5) return 5 * magnitude;
+            return 10 * magnitude;
+        }
+        
+        // Tooltip functions
+        function showTooltip(e) {
+            const block = e.target;
+            tooltipEl.innerHTML = `
+                Type: ${block.dataset.prefix}<br>
+                ${block.dataset.identifier !== 'No identifier' ? `Identifier: ${block.dataset.identifier}<br>` : ''}
+                Start: ${parseFloat(block.dataset.start).toFixed(2)} ns<br>
+                End: ${parseFloat(block.dataset.end).toFixed(2)} ns<br>
+                Duration: ${(parseFloat(block.dataset.end) - parseFloat(block.dataset.start)).toFixed(2)} ns<br>
+                Output Available: ${block.dataset.outputAvailable}
+            `;
+            tooltipEl.style.display = 'block';
+            moveTooltip(e);
+        }
+        
+        function moveTooltip(e) {
+            tooltipEl.style.left = `${e.pageX + 10}px`;
+            tooltipEl.style.top = `${e.pageY + 10}px`;
+        }
+        
+        function hideTooltip() {
+            tooltipEl.style.display = 'none';
+        }
+        
+        // Initialize controls
+        document.getElementById('zoom-in').addEventListener('click', () => {
+            scale *= 1.5;
+            updateScale();
+            renderTimeline();
+        });
+        
+        document.getElementById('zoom-out').addEventListener('click', () => {
+            scale /= 1.5;
+            updateScale();
+            renderTimeline();
+        });
+        
+        document.getElementById('reset').addEventListener('click', () => {
+            scale = 0.1;
+            updateScale();
+            renderTimeline();
+            containerEl.scrollLeft = 0;
+        });
+        
+        scaleSlider.addEventListener('input', () => {
+            scale = scaleSlider.value / 100;
+            updateScale();
+            renderTimeline();
+        });
+        
+        function updateScale() {
+            scaleValue.textContent = `${scale.toFixed(2)}x`;
+            scaleSlider.value = scale * 100;
+        }
+        
+        // Initial render
+        updateScale();
+        renderTimeline();
+    </script>
+</body>
+</html>
+    

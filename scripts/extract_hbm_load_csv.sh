@@ -15,7 +15,7 @@ mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.lo
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.m + "," + doc.n + "," + doc.k + "," + doc.start_ns + "," + doc.end_ns); 
-})' > hbm_load_gen_qkv.csv
+})' > data/hbm_load_gen_qkv.csv
 
 ## Q_KT
 mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.log.aggregate([
@@ -33,7 +33,7 @@ mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.lo
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.m + "," + doc.n + "," + doc.k + "," + doc.start_ns + "," + doc.end_ns); 
-})' > hbm_load_attn_v.csv
+})' > data/hbm_load_q_kt.csv
 
 ## Attn_v
 mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.log.aggregate([
@@ -51,7 +51,7 @@ mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.lo
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.m + "," + doc.n + "," + doc.k + "," + doc.start_ns + "," + doc.end_ns); 
-})' > hbm_load_attn_v.csv
+})' > data/hbm_load_attn_v.csv
 
 ## Proj
 mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.log.aggregate([
@@ -69,5 +69,5 @@ mongosh --quiet attn_log --eval 'print("timestamp,m,n,k,start_ns,end_ns"); db.lo
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
   print(doc.timestamp + "," + doc.m + "," + doc.n + "," + doc.k + "," + doc.start_ns + "," + doc.end_ns); 
-})' > hbm_load_proj.csv
+})' > data/hbm_load_proj.csv
 
