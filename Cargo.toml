@@ -7,12 +7,16 @@ edition = "2021"
 
 [dependencies]
 dam = { git = "https://github.com/stanford-ppl/DAM-RS.git", branch = "master", default-features = false, features = ["coroutines", "log-mongo", "dot"]}
-ramulator_wrapper = { git = "https://github.com/lrubens/ramulator2_wrapper.git", branch = "main"}
+# ramulator_wrapper = { git = "https://github.com/lrubens/ramulator2_wrapper.git", branch = "main"}
+ramulator_wrapper = { path = "external/ramulator2_wrapper" }
 frunk = "0.4.2"
 graphviz-rust = {version = "0.6.6", optional = true}
 csv = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 linkme = "0.3.32"
+
+[build-dependencies]
+cmake = "0.1"
 
 [features]
 default = ["dot"]
