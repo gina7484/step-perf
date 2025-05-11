@@ -141,7 +141,7 @@ mod test_hbm_load {
     };
     use serde::{Deserialize, Serialize};
 
-    use crate::memory::events::LoggableEvent;
+    use crate::memory_simple::events::LoggableEvent;
 
     use super::HBMLoadContext;
 

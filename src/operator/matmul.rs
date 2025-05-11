@@ -1,7 +1,7 @@
 use super::ActEntry;
 
-use crate::memory::events::LoggableEvent;
-use crate::memory::PMUEntry;
+use crate::memory_simple::events::LoggableEvent;
+use crate::memory_simple::PMUEntry;
 
 use dam::context_tools::*;
 use dam::dam_macros::event_type;

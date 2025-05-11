@@ -7,7 +7,7 @@ use dam::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::memory::events::LoggableEvent;
+use crate::memory_simple::events::LoggableEvent;
 
 #[derive(Serialize, Debug)]
 #[event_type]
@@ -225,7 +225,7 @@ mod test_attention {
     };
 
     use super::{HBMAttnV, HBMGenQKV, HBMOutput, HBMProj, HBMQKt};
-    use crate::memory::hbm_ld_st::{HBMLoadContext, HBMStoreContext};
+    use crate::memory_simple::hbm_ld_st::{HBMLoadContext, HBMStoreContext};
     use crate::operator::batchedmatvec::{AttnV, QKt};
     use crate::operator::matmul::{GenQKV, Proj};
 

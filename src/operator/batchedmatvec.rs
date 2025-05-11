@@ -2,7 +2,7 @@ use dam::{context_tools::*, dam_macros::event_type};
 use serde::{Deserialize, Serialize};
 
 use super::ActEntry;
-use crate::memory::PMUEntry;
+use crate::memory_simple::PMUEntry;
 
 // Logging values
 #[derive(Serialize, Deserialize, Debug)]
