@@ -13,7 +13,7 @@ use super::request_manager::RequestManager;
 /// The interface width is 128 bits (16 bytes) per channel
 /// The burst length is 2, meaning each request transfers 2 bursts
 /// Each request therefore transfers 16 bytes × 2 = 32 bytes
-static ADDR_OFFSET: u64 = 32;
+pub static ADDR_OFFSET: u64 = 32;
 
 // Configuration for batch processing
 const BATCH_SIZE: usize = 512; // Maximum batch size
