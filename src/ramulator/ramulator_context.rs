@@ -97,6 +97,9 @@ pub struct RamulatorContext<'a> {
     current_batch: RequestBatch,
     last_batch_cycle: u64,
 
+    // (frequency of the HBM) : (frequency of the Accelerator)
+    // Currently I am using (5u32, 9u32)
+    // 1GHz (HBM) & 1.8GHz (Accelerator)
     cycles_per_tick: (num_bigint::BigUint, num_bigint::BigUint),
     elapsed_cycles: num_bigint::BigUint,
 }
@@ -670,7 +673,7 @@ mod test {
         let mut parent = ProgramBuilder::default();
 
         let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
-        let mut mem_context = RamulatorContext::new(config_file, (1u32, 1u32), None);
+        let mut mem_context = RamulatorContext::new(config_file, (5u32, 9u32), None);
 
         // ========================== Read Bundle 1 =============================
         let (raddr_snd, raddr_rcv) = parent.unbounded();
