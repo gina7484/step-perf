@@ -1,4 +1,6 @@
 pub mod batchedmatvec;
+pub mod functions;
+pub mod map;
 pub mod matmul;
 
 use dam::types::StaticallySized;
