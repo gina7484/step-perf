@@ -4,6 +4,7 @@ pub mod functions;
 pub mod map;
 pub mod matmul;
 pub mod mux_demux;
+// pub mod streamify;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;

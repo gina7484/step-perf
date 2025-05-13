@@ -6,6 +6,7 @@ use dam::{
     structures::TimeManager,
     types::DAMType,
 };
+use ndarray::{Array, Dimension, IxDyn};
 
 use crate::memory::{data::Tile, events::LoggableEventSimple};
 use thiserror::Error;
@@ -33,6 +34,17 @@ impl DAMType for Buffer {
         let buffer_size: usize = self.buffer_shape.iter().product();
         self.tile_shape.size_in_bytes() * buffer_size
     }
+}
+
+/// Calculates the first index where two dims differ.
+fn outermost_diff_index(a: &IxDyn, b: &IxDyn) -> usize {
+    a.as_array_view()
+        .iter()
+        .zip(b.as_array_view().iter())
+        .enumerate()
+        .find(|(_, (a_ind, b_ind))| a_ind != b_ind)
+        .expect("The two inputs were identical!")
+        .0
 }
 
 impl Buffer {
@@ -124,5 +136,40 @@ impl Buffer {
             buffer_shape: shape_info,
             tile_shape: tile_shape.unwrap(),
         })
+    }
+
+    pub fn to_elem_iter<'a>(&'a self) -> impl Iterator<Item = Elem<Tile>> + 'a {
+        let ndim = self.buffer_shape.len();
+
+        let mut previous_dim: Option<IxDyn> = None;
+
+        let array_with_shape = Array::<f32, _>::zeros(IxDyn(&self.buffer_shape)).to_shared();
+
+        array_with_shape
+            .indexed_iter()
+            .flat_map(move |(ind, _val)| match &mut previous_dim {
+                Some(prev) => {
+                    let changed_index = outermost_diff_index(&ind, &prev);
+                    previous_dim = Some(ind);
+
+                    let is_last = changed_index == ndim - 1;
+
+                    if is_last {
+                        vec![Elem::Val(self.tile_shape.clone())]
+                    } else {
+                        (1..=(ndim - changed_index - 1))
+                            .map(|i| Elem::Stop(i as u32)) // Add stop tokens to close the previous dimension
+                            .chain([Elem::Val(self.tile_shape.clone())]) // Add the first token of the current dimension
+                            .collect()
+                    }
+                }
+                None => {
+                    previous_dim = Some(ind);
+                    vec![Elem::Val(self.tile_shape.clone())]
+                }
+            })
+            .chain((1..=ndim).map(|i| Elem::Stop(i as u32)))
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
