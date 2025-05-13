@@ -2759,6 +2759,7 @@ dependencies = [
  "num-bigint",
  "ramulator_wrapper",
  "serde",
+ "thiserror 2.0.12",
 ]
 
 [[package]]

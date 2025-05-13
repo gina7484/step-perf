@@ -2,19 +2,16 @@ use dam::context_tools::*;
 use dam::dam_macros::event_type;
 use serde::{Deserialize, Serialize};
 
-use crate::{memory::data::DataSizeInfo, primitives::elem::Elem};
+use crate::{memory::data::Tile, primitives::elem::Elem};
 
 #[context_macro]
 pub struct TileDemux {
-    in_stream: Receiver<Elem<DataSizeInfo>>,
-    out_streams: Vec<Sender<Elem<DataSizeInfo>>>,
+    in_stream: Receiver<Elem<Tile>>,
+    out_streams: Vec<Sender<Elem<Tile>>>,
 }
 
 impl TileDemux {
-    pub fn new(
-        in_stream: Receiver<Elem<DataSizeInfo>>,
-        out_streams: Vec<Sender<Elem<DataSizeInfo>>>,
-    ) -> Self {
+    pub fn new(in_stream: Receiver<Elem<Tile>>, out_streams: Vec<Sender<Elem<Tile>>>) -> Self {
         let ctx = Self {
             in_stream,
             out_streams,
@@ -47,7 +44,7 @@ impl Context for TileDemux {
                                     &self.time,
                                     ChannelElement {
                                         time: self.time.tick(), // No latency added. Treated like a swtich box op.
-                                        data: Elem::Val(DataSizeInfo {
+                                        data: Elem::Val(Tile {
                                             shape: vec![data.shape[1]],
                                             bytes_per_elem: data.bytes_per_elem,
                                             read_from_mu: data.read_from_mu,

@@ -1,7 +1,7 @@
 // Define a trait for event types that can be logged
 
 pub trait LoggableEventSimple {
-    fn new(start_ns: u64, end_ns: u64) -> Self;
+    fn new(start_ns: u64, end_ns: u64, is_stop: bool) -> Self;
 }
 
 #[macro_export]
@@ -12,12 +12,17 @@ macro_rules! define_simple_event {
         struct $event_name {
             start_ns: u64,
             end_ns: u64,
+            is_stop: bool,
         }
 
         // Implement the trait for $event_name
         impl LoggableEventSimple for $event_name {
-            fn new(start_ns: u64, end_ns: u64) -> Self {
-                $event_name { start_ns, end_ns }
+            fn new(start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
+                $event_name {
+                    start_ns,
+                    end_ns,
+                    is_stop,
+                }
             }
         }
 

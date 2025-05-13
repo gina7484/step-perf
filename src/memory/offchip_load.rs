@@ -8,7 +8,7 @@ use crate::{
     ramulator::{access::MemoryData, ramulator_context::ADDR_OFFSET},
 };
 
-use super::{data::DataSizeInfo, events::LoggableEventSimple};
+use super::{data::Tile, events::LoggableEventSimple};
 
 pub enum HbmAddrEnum {
     ADDR(u64),
@@ -27,7 +27,7 @@ pub struct OffChipLoad2D<E: LoggableEventSimple> {
     pub addr_snd: Sender<u64>,
     pub resp_addr_rcv: Receiver<u64>,
     pub rdata_rcv: Receiver<MemoryData>,
-    pub on_chip_snd: Sender<Elem<DataSizeInfo>>,
+    pub on_chip_snd: Sender<Elem<Tile>>,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -43,7 +43,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         addr_snd: Sender<u64>,
         resp_addr_rcv: Receiver<u64>,
         rdata_rcv: Receiver<MemoryData>,
-        on_chip_snd: Sender<Elem<DataSizeInfo>>,
+        on_chip_snd: Sender<Elem<Tile>>,
     ) -> Self {
         let ctx = Self {
             tensor_shape_tiled,
@@ -172,7 +172,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                             &self.time,
                             ChannelElement {
                                 time: read_finish_time,
-                                data: Elem::Val(DataSizeInfo {
+                                data: Elem::Val(Tile {
                                     shape: vec![self.tile_row, self.tile_col],
                                     bytes_per_elem: self.n_byte,
                                     read_from_mu: true,
@@ -184,6 +184,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                     dam::logging::log_event(&E::new(
                         send_request_time.time(),
                         read_finish_time.time(),
+                        false,
                     ))
                     .unwrap();
                 }

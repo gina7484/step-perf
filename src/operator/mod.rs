@@ -1,4 +1,5 @@
 pub mod batchedmatvec;
+pub mod bufferize;
 pub mod functions;
 pub mod map;
 pub mod matmul;

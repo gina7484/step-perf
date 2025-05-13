@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::memory::{data::DataSizeInfo, events::LoggableEventSimple, PMU_BW};
+use crate::memory::{data::Tile, events::LoggableEventSimple, PMU_BW};
 use crate::primitives::elem::Elem;
 use crate::utils::calculation::div_ceil;
 use dam::dam_macros::event_type;
@@ -18,30 +18,23 @@ use serde::{Deserialize, Serialize};
 ///   However, as this uses a statically divided bandwidth, there are limits in terms of how accurate we can model contention.
 ///   To accurately model on-chip memory accesses, one has to create a similar context as ramulator context for PMUs.
 #[context_macro]
-pub struct BinaryMap<E, EStop: LoggableEventSimple> {
-    in1_stream: Receiver<Elem<DataSizeInfo>>,
-    in2_stream: Receiver<Elem<DataSizeInfo>>,
-    out_stream: Sender<Elem<DataSizeInfo>>,
-    func: Arc<dyn Fn(&DataSizeInfo, &DataSizeInfo, u64, bool) -> (u64, DataSizeInfo) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-    compute_bw: u64,     // FLOPs / cycle
+pub struct BinaryMap<E> {
+    in1_stream: Receiver<Elem<Tile>>,
+    in2_stream: Receiver<Elem<Tile>>,
+    out_stream: Sender<Elem<Tile>>,
+    func: Arc<dyn Fn(&Tile, &Tile, u64, bool) -> (u64, Tile) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+    compute_bw: u64,                                                         // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
     _phantom: PhantomData<E>,
-    _phantom_estop: PhantomData<EStop>,
 }
 
-impl<
-        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        EStop: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-    > BinaryMap<E, EStop>
-{
+impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> BinaryMap<E> {
     pub fn new(
-        in1_stream: Receiver<Elem<DataSizeInfo>>,
-        in2_stream: Receiver<Elem<DataSizeInfo>>,
-        out_stream: Sender<Elem<DataSizeInfo>>,
-        func: Arc<
-            dyn Fn(&DataSizeInfo, &DataSizeInfo, u64, bool) -> (u64, DataSizeInfo) + Send + Sync,
-        >, // bytes, bytes, FLOPs per cycle -> cycles
-        compute_bw: u64, // FLOPs / cycle
+        in1_stream: Receiver<Elem<Tile>>,
+        in2_stream: Receiver<Elem<Tile>>,
+        out_stream: Sender<Elem<Tile>>,
+        func: Arc<dyn Fn(&Tile, &Tile, u64, bool) -> (u64, Tile) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+        compute_bw: u64,                                                         // FLOPs / cycle
         write_back_mu: bool,
     ) -> Self {
         let ctx = Self {
@@ -53,7 +46,6 @@ impl<
             write_back_mu,
             context_info: Default::default(),
             _phantom: PhantomData,
-            _phantom_estop: PhantomData,
         };
         ctx.in1_stream.attach_receiver(&ctx);
         ctx.in1_stream.attach_receiver(&ctx);
@@ -63,10 +55,8 @@ impl<
     }
 }
 
-impl<
-        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        EStop: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-    > Context for BinaryMap<E, EStop>
+impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
+    for BinaryMap<E>
 {
     fn run(&mut self) {
         loop {
@@ -122,8 +112,12 @@ impl<
 
                         let time_block_start_ns = curr_time.time() - roofline_cycles;
 
-                        dam::logging::log_event(&E::new(time_block_start_ns, curr_time.time()))
-                            .unwrap();
+                        dam::logging::log_event(&E::new(
+                            time_block_start_ns,
+                            curr_time.time(),
+                            false,
+                        ))
+                        .unwrap();
                     }
                     (Elem::Stop(lev1), Elem::Stop(lev2)) => {
                         if lev1 != lev2 {
@@ -142,9 +136,10 @@ impl<
                             .unwrap();
 
                         // Also log the cycle spent on stop tokens to quantify its overhead
-                        dam::logging::log_event(&EStop::new(
+                        dam::logging::log_event(&E::new(
                             curr_time.time(),
                             curr_time.time() + 1,
+                            true,
                         ))
                         .unwrap();
                     }
