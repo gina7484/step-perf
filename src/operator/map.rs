@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::{data::DataSizeInfo, events::LoggableEventSimple, PMU_BW};
+use crate::primitives::elem::Elem;
 use crate::utils::calculation::div_ceil;
 use dam::dam_macros::event_type;
 use dam::{context_tools::*, logging::LogEvent};
@@ -17,21 +18,26 @@ use serde::{Deserialize, Serialize};
 ///   However, as this uses a statically divided bandwidth, there are limits in terms of how accurate we can model contention.
 ///   To accurately model on-chip memory accesses, one has to create a similar context as ramulator context for PMUs.
 #[context_macro]
-pub struct BinaryMap<E: LoggableEventSimple> {
-    in1_stream: Receiver<DataSizeInfo>,
-    in2_stream: Receiver<DataSizeInfo>,
-    out_stream: Sender<DataSizeInfo>,
+pub struct BinaryMap<E, EStop: LoggableEventSimple> {
+    in1_stream: Receiver<Elem<DataSizeInfo>>,
+    in2_stream: Receiver<Elem<DataSizeInfo>>,
+    out_stream: Sender<Elem<DataSizeInfo>>,
     func: Arc<dyn Fn(&DataSizeInfo, &DataSizeInfo, u64, bool) -> (u64, DataSizeInfo) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
     _phantom: PhantomData<E>,
+    _phantom_estop: PhantomData<EStop>,
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> BinaryMap<E> {
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        EStop: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+    > BinaryMap<E, EStop>
+{
     pub fn new(
-        in1_stream: Receiver<DataSizeInfo>,
-        in2_stream: Receiver<DataSizeInfo>,
-        out_stream: Sender<DataSizeInfo>,
+        in1_stream: Receiver<Elem<DataSizeInfo>>,
+        in2_stream: Receiver<Elem<DataSizeInfo>>,
+        out_stream: Sender<Elem<DataSizeInfo>>,
         func: Arc<
             dyn Fn(&DataSizeInfo, &DataSizeInfo, u64, bool) -> (u64, DataSizeInfo) + Send + Sync,
         >, // bytes, bytes, FLOPs per cycle -> cycles
@@ -47,6 +53,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             write_back_mu,
             context_info: Default::default(),
             _phantom: PhantomData,
+            _phantom_estop: PhantomData,
         };
         ctx.in1_stream.attach_receiver(&ctx);
         ctx.in1_stream.attach_receiver(&ctx);
@@ -56,8 +63,10 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
     }
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
-    for BinaryMap<E>
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        EStop: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+    > Context for BinaryMap<E, EStop>
 {
     fn run(&mut self) {
         loop {
@@ -68,55 +77,81 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                 (
                     Ok(ChannelElement {
                         time: _,
-                        data: data1,
+                        data: data1_enum,
                     }),
                     Ok(ChannelElement {
                         time: _,
-                        data: data2,
+                        data: data2_enum,
                     }),
-                ) => {
-                    let mut load_cycle: u64 = 0;
-                    if data1.read_from_mu {
-                        load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+                ) => match (data1_enum, data2_enum) {
+                    (Elem::Val(data1), Elem::Val(data2)) => {
+                        let mut load_cycle: u64 = 0;
+                        if data1.read_from_mu {
+                            load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+                        }
+                        if data2.read_from_mu {
+                            load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+                        }
+                        let (comp_cycles, out_tile) =
+                            (self.func)(&data1, &data2, self.compute_bw, self.write_back_mu);
+                        let store_cycles = if self.write_back_mu {
+                            div_ceil(out_tile.size_in_bytes() as u64, PMU_BW)
+                        } else {
+                            0_u64
+                        };
+                        let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
+                            .into_iter()
+                            .max()
+                            .unwrap_or(0);
+
+                        self.time.incr_cycles(roofline_cycles);
+
+                        self.in1_stream.dequeue(&self.time).unwrap();
+                        self.in2_stream.dequeue(&self.time).unwrap();
+
+                        let curr_time = self.time.tick();
+                        self.out_stream
+                            .enqueue(
+                                &self.time,
+                                ChannelElement {
+                                    time: curr_time,
+                                    data: Elem::Val(out_tile),
+                                },
+                            )
+                            .unwrap();
+
+                        let time_block_start_ns = curr_time.time() - roofline_cycles;
+
+                        dam::logging::log_event(&E::new(time_block_start_ns, curr_time.time()))
+                            .unwrap();
                     }
-                    if data2.read_from_mu {
-                        load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+                    (Elem::Stop(lev1), Elem::Stop(lev2)) => {
+                        if lev1 != lev2 {
+                            panic!("The two input streams' shape don't match!");
+                        }
+
+                        let curr_time = self.time.tick();
+                        self.out_stream
+                            .enqueue(
+                                &self.time,
+                                ChannelElement {
+                                    time: curr_time + 1,
+                                    data: Elem::Stop(lev1),
+                                },
+                            )
+                            .unwrap();
+
+                        // Also log the cycle spent on stop tokens to quantify its overhead
+                        dam::logging::log_event(&EStop::new(
+                            curr_time.time(),
+                            curr_time.time() + 1,
+                        ))
+                        .unwrap();
                     }
-                    let (comp_cycles, out_tile) =
-                        (self.func)(&data1, &data2, self.compute_bw, self.write_back_mu);
-                    let store_cycles = if self.write_back_mu {
-                        div_ceil(out_tile.size_in_bytes() as u64, PMU_BW)
-                    } else {
-                        0_u64
-                    };
-                    let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
-                        .into_iter()
-                        .max()
-                        .unwrap_or(0);
-
-                    self.time.incr_cycles(roofline_cycles);
-
-                    self.in1_stream.dequeue(&self.time).unwrap();
-                    self.in2_stream.dequeue(&self.time).unwrap();
-
-                    let curr_time = self.time.tick();
-                    self.out_stream
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: curr_time,
-                                data: out_tile,
-                            },
-                        )
-                        .unwrap();
-
-                    let time_block_start_ns = curr_time.time() - roofline_cycles;
-
-                    dam::logging::log_event(&E::new(time_block_start_ns, curr_time.time()))
-                        .unwrap();
-                }
-                (Ok(_), Err(_)) => panic!("The two input streams' shape don't match!"),
-                (Err(_), Ok(_)) => panic!("The two input streams' shape don't match!"),
+                    (_, _) => panic!("The two input streams' shape don't match!"),
+                },
+                (Ok(_), Err(_)) => panic!("One stream closed earlier"),
+                (Err(_), Ok(_)) => panic!("One stream closed earlier"),
                 (Err(_), Err(_)) => return,
             }
         }
