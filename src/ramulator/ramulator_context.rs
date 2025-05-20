@@ -9,12 +9,6 @@ use super::access::{Access, AccessLike, MemoryData, SimpleRead, SimpleWrite};
 use super::address::ByteAddress;
 use super::request_manager::RequestManager;
 
-/// For HBM2/HBM3:
-/// The interface width is 128 bits (16 bytes) per channel
-/// The burst length is 2, meaning each request transfers 2 bursts
-/// Each request therefore transfers 16 bytes × 2 = 32 bytes
-pub static ADDR_OFFSET: u64 = 32;
-
 // Configuration for batch processing
 const BATCH_SIZE: usize = 512; // Maximum batch size
 const BATCH_INTERVAL: u64 = 1; // Process batches every N cycles
@@ -578,11 +572,19 @@ mod test {
     use half::f16;
     use ramulator_wrapper::RamulatorWrapper;
 
-    use super::{Memory, RamulatorContext, ReadBundle, WriteBundle, ADDR_OFFSET};
+    use super::{Memory, RamulatorContext, ReadBundle, WriteBundle};
     use crate::ramulator::access::MemoryData;
 
     #[test]
     fn ramulator_e2e_small() {
+        /*
+        ADDR_OFFSET = (Channel Width) x (Burst Length) = 64 bytes
+        - Channel Width: 16 bytes/channel
+            - HBM2 standard (JEDEC HBM2 specification) defines each pseudo-channel width explicitly as 16 bytes/channel
+        - Burst Length: 4
+            - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
+         */
+        const ADDR_OFFSET: u64 = 64;
         const MEM_SIZE: usize = 32;
 
         let mut parent = ProgramBuilder::default();
@@ -673,7 +675,8 @@ mod test {
         let mut parent = ProgramBuilder::default();
 
         let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
-        let mut mem_context = RamulatorContext::new(config_file, (5u32, 9u32), None);
+        // let mut mem_context = RamulatorContext::new(config_file, (5u32, 9u32), None);
+        let mut mem_context = RamulatorContext::new(config_file, (5u32, 5u32), None);
 
         // ========================== Read Bundle 1 =============================
         let (raddr_snd, raddr_rcv) = parent.unbounded();
@@ -722,50 +725,50 @@ mod test {
         });
 
         // // ========================== Read Bundle 2 =============================
-        let (raddr_snd2, raddr_rcv2) = parent.unbounded();
-        let (rdata_snd2, rdata_rcv2) = parent.unbounded::<MemoryData>();
-        let (resp_addr_snd2, resp_addr_rcv2) = parent.unbounded::<u64>();
-        /*
-        let addrs2 = {
-            let rand_stride = vec![12u64, 0, 4, 2, 6, 9, 11, 12, 19, 24, 36, 72, 3, 5, 9, 11];
-            let addr_iter =
-                (0..(MEM_SIZE as u64)).map(move |x| rand_stride[(x % 16) as usize] * ADDR_OFFSET);
-            move || addr_iter.clone()
-        };
-         */
-        let addrs2 = || (0..(MEM_SIZE as u64)).map(|x| 32); //x * ADDR_OFFSET);
-        parent.add_child(GeneratorContext::new(addrs2, raddr_snd2));
+        // let (raddr_snd2, raddr_rcv2) = parent.unbounded();
+        // let (rdata_snd2, rdata_rcv2) = parent.unbounded::<MemoryData>();
+        // let (resp_addr_snd2, resp_addr_rcv2) = parent.unbounded::<u64>();
+        // /*
+        // let addrs2 = {
+        //     let rand_stride = vec![12u64, 0, 4, 2, 6, 9, 11, 12, 19, 24, 36, 72, 3, 5, 9, 11];
+        //     let addr_iter =
+        //         (0..(MEM_SIZE as u64)).map(move |x| rand_stride[(x % 16) as usize] * ADDR_OFFSET);
+        //     move || addr_iter.clone()
+        // };
+        //  */
+        // let addrs2 = || (0..(MEM_SIZE as u64)).map(|x| 32); //x * ADDR_OFFSET);
+        // parent.add_child(GeneratorContext::new(addrs2, raddr_snd2));
 
-        let mut read_ctx2 = FunctionContext::new();
-        rdata_rcv2.attach_receiver(&read_ctx2);
-        resp_addr_rcv2.attach_receiver(&read_ctx2);
-        read_ctx2.set_run(move |time| {
-            let mut received_addr_time: Vec<(u64, u64, u64)> = vec![];
-            for _ in 0..MEM_SIZE {
-                let (addr, addr_time) = match resp_addr_rcv2.dequeue(time) {
-                    Ok(addr) => (addr.data, time.tick().time()),
-                    Err(_) => {
-                        panic!("Failed to dequeue response address");
-                    }
-                };
-                let data_time = match rdata_rcv2.dequeue(time) {
-                    Ok(addr) => time.tick().time(),
-                    Err(_) => {
-                        panic!("Failed to dequeue response data");
-                    }
-                };
-                received_addr_time.push((addr, addr_time, data_time));
-                // time.incr_cycles(1);
-            }
-            println!("Received: {:?}", received_addr_time);
-        });
-        parent.add_child(read_ctx2);
+        // let mut read_ctx2 = FunctionContext::new();
+        // rdata_rcv2.attach_receiver(&read_ctx2);
+        // resp_addr_rcv2.attach_receiver(&read_ctx2);
+        // read_ctx2.set_run(move |time| {
+        //     let mut received_addr_time: Vec<(u64, u64, u64)> = vec![];
+        //     for _ in 0..MEM_SIZE {
+        //         let (addr, addr_time) = match resp_addr_rcv2.dequeue(time) {
+        //             Ok(addr) => (addr.data, time.tick().time()),
+        //             Err(_) => {
+        //                 panic!("Failed to dequeue response address");
+        //             }
+        //         };
+        //         let data_time = match rdata_rcv2.dequeue(time) {
+        //             Ok(addr) => time.tick().time(),
+        //             Err(_) => {
+        //                 panic!("Failed to dequeue response data");
+        //             }
+        //         };
+        //         received_addr_time.push((addr, addr_time, data_time));
+        //         // time.incr_cycles(1);
+        //     }
+        //     println!("Received: {:?}", received_addr_time);
+        // });
+        // parent.add_child(read_ctx2);
 
-        mem_context.add_reader(ReadBundle {
-            addr: Box::new(raddr_rcv2),
-            resp: Box::new(rdata_snd2),
-            resp_addr: Box::new(resp_addr_snd2),
-        });
+        // mem_context.add_reader(ReadBundle {
+        //     addr: Box::new(raddr_rcv2),
+        //     resp: Box::new(rdata_snd2),
+        //     resp_addr: Box::new(resp_addr_snd2),
+        // });
 
         parent.add_child(mem_context);
 

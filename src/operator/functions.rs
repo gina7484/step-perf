@@ -1,7 +1,7 @@
 use crate::memory::data::Tile;
 use crate::utils::calculation::div_ceil;
 
-pub fn matmul(in1: Tile, in2: Tile, flop_per_cycle: u64, read_from_mu: bool) -> (u64, Tile) {
+pub fn matmul(in1: &Tile, in2: &Tile, flop_per_cycle: u64, read_from_mu: bool) -> (u64, Tile) {
     assert_eq!(in1.shape.len(), 2);
     assert_eq!(in2.shape.len(), 2);
     assert_eq!(in1.shape[1], in2.shape[0]);

@@ -27,6 +27,12 @@ pub struct BinaryMap<E> {
     write_back_mu: bool, // Whether the output is written to a memory unit
     _phantom: PhantomData<E>,
 }
+/* BinaryMap<E, A, B>
+        in1_stream: Receiver<Elem<Tile<A>>>,
+        in2_stream: Receiver<Elem<Tile<A>>>,
+        out_stream: Sender<Elem<Tile<B>>>,
+        func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>,
+*/
 
 impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> BinaryMap<E> {
     pub fn new(
@@ -48,7 +54,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             _phantom: PhantomData,
         };
         ctx.in1_stream.attach_receiver(&ctx);
-        ctx.in1_stream.attach_receiver(&ctx);
+        ctx.in2_stream.attach_receiver(&ctx);
         ctx.out_stream.attach_sender(&ctx);
 
         ctx

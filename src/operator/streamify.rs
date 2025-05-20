@@ -9,7 +9,7 @@ use crate::{
         buffer::Buffer,
         elem::{Elem, StopType},
     },
-    ramulator::{access::MemoryData, ramulator_context::ADDR_OFFSET},
+    ramulator::access::MemoryData,
 };
 
 pub enum HbmAddrEnum {
