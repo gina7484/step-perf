@@ -35,7 +35,7 @@ impl<T: DAMType> Context for RepeatStatic<T> {
             match self.in_stream.peek_next(&self.time) {
                 Ok(ChannelElement { time: _, data }) => match data {
                     Elem::Val(x) => {
-                        for i in 0..self.repeat_factor {
+                        for i in 0..(self.repeat_factor - 1) {
                             self.out_stream
                                 .enqueue(
                                     &self.time,
@@ -51,27 +51,40 @@ impl<T: DAMType> Context for RepeatStatic<T> {
                             .enqueue(
                                 &self.time,
                                 ChannelElement {
-                                    time: self.time.tick() + self.repeat_factor as u64 + 1,
-                                    data: Elem::Stop(1),
+                                    time: self.time.tick() + (self.repeat_factor - 1) as u64,
+                                    data: Elem::ValStop(x.clone(), 1),
                                 },
                             )
                             .unwrap();
 
-                        self.time.incr_cycles(self.repeat_factor as u64 + 1);
+                        self.time.incr_cycles(self.repeat_factor as u64);
 
                         self.in_stream.dequeue(&self.time).unwrap();
                     }
-                    Elem::Stop(s) => {
+                    Elem::ValStop(x, s) => {
+                        for i in 0..(self.repeat_factor - 1) {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick() + i as u64,
+                                        data: Elem::Val(x.clone()),
+                                    },
+                                )
+                                .unwrap();
+                        }
+
                         self.out_stream
                             .enqueue(
                                 &self.time,
                                 ChannelElement {
-                                    time: self.time.tick() + 1,
-                                    data: Elem::Stop(s + 1),
+                                    time: self.time.tick() + (self.repeat_factor - 1) as u64,
+                                    data: Elem::ValStop(x.clone(), s + 1),
                                 },
                             )
                             .unwrap();
-                        self.time.incr_cycles(1);
+
+                        self.time.incr_cycles(self.repeat_factor as u64);
 
                         self.in_stream.dequeue(&self.time).unwrap();
                     }

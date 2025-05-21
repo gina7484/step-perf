@@ -74,7 +74,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                     }),
                 ) => match (data1_enum, data2_enum) {
                     (Elem::Val(data1), Elem::Val(data2)) => {
-                        // compute the cycles based on a roofline model
+                        // Load
                         let mut load_cycle: u64 = 0;
                         if data1.read_from_mu {
                             load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
@@ -82,6 +82,8 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                         if data2.read_from_mu {
                             load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
                         }
+
+                        // Compute
                         let (comp_cycles, out_tile) = (self.func)(
                             &data1,
                             &data2,
@@ -89,6 +91,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                             self.compute_bw,
                             self.write_back_mu,
                         );
+                        accumulator = out_tile; // update accumulator
 
                         let roofline_cycles =
                             [load_cycle, comp_cycles].into_iter().max().unwrap_or(0);
@@ -99,93 +102,169 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                         self.in1_stream.dequeue(&self.time).unwrap();
                         self.in2_stream.dequeue(&self.time).unwrap();
 
-                        let curr_time = self.time.tick();
-
-                        // update accumulator
-                        accumulator = out_tile;
-
-                        // log the time for accumulation
-                        let time_block_start_ns = curr_time.time() - roofline_cycles;
-
+                        // Logging
                         dam::logging::log_event(&E::new(
-                            time_block_start_ns,
-                            curr_time.time(),
+                            self.time.tick().time() - roofline_cycles,
+                            self.time.tick().time(),
                             false,
                         ))
                         .unwrap();
                     }
-                    (Elem::Stop(lev1), Elem::Stop(lev2)) => {
+                    (Elem::ValStop(data1, lev1), Elem::ValStop(data2, lev2)) => {
                         if lev1 != lev2 {
                             panic!("The two input streams' shape don't match!");
                         }
 
-                        if lev1 == self.rank {
-                            // If you see the accumulation rank:
-                            // - enqueue the accumulator
+                        if lev1 < self.rank {
+                            // Load
+                            let mut load_cycle: u64 = 0;
+                            if data1.read_from_mu {
+                                load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+                            }
+                            if data2.read_from_mu {
+                                load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+                            }
 
+                            // Compute
+                            let (comp_cycles, out_tile) = (self.func)(
+                                &data1,
+                                &data2,
+                                &accumulator,
+                                self.compute_bw,
+                                self.write_back_mu,
+                            );
+                            accumulator = out_tile; // update accumulator
+
+                            let roofline_cycles =
+                                [load_cycle, comp_cycles].into_iter().max().unwrap_or(0);
+
+                            // increment cycles and dequeue inputs
+                            self.time.incr_cycles(roofline_cycles);
+
+                            self.in1_stream.dequeue(&self.time).unwrap();
+                            self.in2_stream.dequeue(&self.time).unwrap();
+
+                            // Logging
+                            dam::logging::log_event(&E::new(
+                                self.time.tick().time() - roofline_cycles,
+                                self.time.tick().time(),
+                                false,
+                            ))
+                            .unwrap();
+                        } else if lev1 == self.rank {
+                            // Load
+                            let mut load_cycle: u64 = 0;
+                            if data1.read_from_mu {
+                                load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+                            }
+                            if data2.read_from_mu {
+                                load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+                            }
+
+                            // Compute
+                            let (comp_cycles, out_tile) = (self.func)(
+                                &data1,
+                                &data2,
+                                &accumulator,
+                                self.compute_bw,
+                                self.write_back_mu,
+                            );
+                            accumulator = (self.init_accum)(); // Initialize accumulator
+
+                            // Store
                             let store_cycles = if self.write_back_mu {
                                 div_ceil(accumulator.size_in_bytes() as u64, PMU_BW)
                             } else {
                                 0_u64
                             };
 
-                            if store_cycles > 0 {
-                                self.time.incr_cycles(store_cycles);
+                            let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
+                                .into_iter()
+                                .max()
+                                .unwrap_or(0);
 
-                                let curr_time = self.time.tick();
-                                // update accumulator
-                                self.out_stream
-                                    .enqueue(
-                                        &self.time,
-                                        ChannelElement {
-                                            time: curr_time,
-                                            data: Elem::Val(accumulator),
-                                        },
-                                    )
-                                    .unwrap();
+                            // increment cycles and dequeue inputs
+                            self.time.incr_cycles(roofline_cycles);
 
-                                dam::logging::log_event(&E::new(
-                                    curr_time.time() - store_cycles,
-                                    curr_time.time(),
-                                    false,
-                                ))
-                                .unwrap();
-                            } else {
-                                self.out_stream
-                                    .enqueue(
-                                        &self.time,
-                                        ChannelElement {
-                                            time: self.time.tick(),
-                                            data: Elem::Val(accumulator),
-                                        },
-                                    )
-                                    .unwrap();
-                            }
+                            self.in1_stream.dequeue(&self.time).unwrap();
+                            self.in2_stream.dequeue(&self.time).unwrap();
 
-                            // initialize the accumulator
-                            accumulator = (self.init_accum)();
-                        } else if lev1 > self.rank {
+                            // Logging
+                            dam::logging::log_event(&E::new(
+                                self.time.tick().time() - roofline_cycles,
+                                self.time.tick().time(),
+                                false,
+                            ))
+                            .unwrap();
+
+                            // Enqueue
                             self.out_stream
                                 .enqueue(
                                     &self.time,
                                     ChannelElement {
-                                        time: self.time.tick() + 1,
-                                        data: Elem::Stop(lev1 - self.rank),
+                                        time: self.time.tick(),
+                                        data: Elem::Val(out_tile),
+                                    },
+                                )
+                                .unwrap();
+                        } else {
+                            // lev1 > self.rank
+                            // Load
+                            let mut load_cycle: u64 = 0;
+                            if data1.read_from_mu {
+                                load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+                            }
+                            if data2.read_from_mu {
+                                load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+                            }
+
+                            // Compute
+                            let (comp_cycles, out_tile) = (self.func)(
+                                &data1,
+                                &data2,
+                                &accumulator,
+                                self.compute_bw,
+                                self.write_back_mu,
+                            );
+                            accumulator = (self.init_accum)(); // Initialize accumulator
+
+                            // Store
+                            let store_cycles = if self.write_back_mu {
+                                div_ceil(accumulator.size_in_bytes() as u64, PMU_BW)
+                            } else {
+                                0_u64
+                            };
+
+                            let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
+                                .into_iter()
+                                .max()
+                                .unwrap_or(0);
+
+                            // increment cycles and dequeue inputs
+                            self.time.incr_cycles(roofline_cycles);
+
+                            self.in1_stream.dequeue(&self.time).unwrap();
+                            self.in2_stream.dequeue(&self.time).unwrap();
+
+                            // Logging
+                            dam::logging::log_event(&E::new(
+                                self.time.tick().time() - roofline_cycles,
+                                self.time.tick().time(),
+                                false,
+                            ))
+                            .unwrap();
+
+                            // Enqueue
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::ValStop(out_tile, lev1 - self.rank),
                                     },
                                 )
                                 .unwrap();
                         }
-                        // Record the cycle used to read the stop token
-                        self.time.incr_cycles(1);
-                        dam::logging::log_event(&E::new(
-                            self.time.tick().time() - 1,
-                            self.time.tick().time(),
-                            true,
-                        ))
-                        .unwrap();
-
-                        self.in1_stream.dequeue(&self.time).unwrap();
-                        self.in2_stream.dequeue(&self.time).unwrap();
                     }
                     (_, _) => panic!("The two input streams' shape don't match!"),
                 },

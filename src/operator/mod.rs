@@ -1,11 +1,10 @@
 pub mod accum;
 pub mod batchedmatvec;
-pub mod bufferize;
-pub mod functions;
-pub mod map;
+// pub mod bufferize;
+// pub mod map;
 pub mod map_accum;
 pub mod matmul;
-pub mod mux_demux;
+// pub mod mux_demux;
 pub mod repeat;
 
 // pub mod streamify;

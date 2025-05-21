@@ -12,8 +12,8 @@ use super::{data::Tile, events::LoggableEventSimple};
 
 #[derive(Debug)]
 pub enum HbmAddrEnum {
-    ADDR(u64),
-    STOP(StopType),
+    ADDR(Vec<u64>),
+    ADDRSTOP(Vec<u64>, StopType),
 }
 
 #[context_macro]
@@ -76,8 +76,9 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         // Calculate total elements in the output tensor
         let total_tiles: usize = self.out_shape_tiled.iter().product();
 
-        // Create an iterator that generates indices
+        // Create a vector to hold all the addresses
         let mut addrs: Vec<HbmAddrEnum> = vec![];
+
         for flat_idx in 0..total_tiles {
             // Convert flat index to multi-dimensional indices
             let mut remaining = flat_idx;
@@ -102,25 +103,24 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             } else {
                 tile_idx = 0; // Handle empty tensor case
             }
-            println!("tile_idx: {}", tile_idx);
+            // println!("tile_idx: {}", tile_idx);
 
-            // append addresses to fetch the given tile
+            // Generate addresses to fetch the given tile
             let tile_offset = self.tile_row * self.tile_col * self.n_byte;
             let base_addr_i = self.base_addr_byte + (tile_idx * tile_offset) as u64;
             let row_offset = self.tensor_shape_tiled[1] * self.tile_col * self.n_byte;
-            let mut addr_for_curr_tile = vec![];
+
+            // Generate all addresses for this tile
+            let mut tile_addrs = vec![];
             for r in 0..self.tile_row {
                 for c in (0..(self.tile_col * self.n_byte)).step_by(self.addr_offset as usize) {
                     let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
-                    addr_for_curr_tile.push(HbmAddrEnum::ADDR(addr));
+                    tile_addrs.push(addr);
                 }
             }
-            addrs.append(&mut addr_for_curr_tile);
 
-            // Check which dimensions need stop tokens
-            let mut stop_tokens = vec![];
-
-            // We'll track if all inner dimensions are at their final positions
+            // Determine the highest-dimensional stop token needed
+            let mut highest_stop_token: Option<u32> = None;
             let mut all_inner_dims_at_end = true;
 
             // Check from innermost to outermost
@@ -130,10 +130,9 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                     let is_dim_size_one = self.out_shape_tiled[dim] == 1;
                     let is_last_elem = multi_index[dim] == self.out_shape_tiled[dim] - 1;
 
-                    // Add stop token if at end or dim size is 1
+                    // If at end or dim size is 1, update the highest stop token
                     if is_last_elem || is_dim_size_one {
-                        stop_tokens
-                            .push(HbmAddrEnum::STOP((self.out_shape_tiled.len() - dim) as u32));
+                        highest_stop_token = Some((self.out_shape_tiled.len() - dim) as u32);
                     }
 
                     // Update tracking for outer dimensions
@@ -142,8 +141,16 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                 }
             }
 
-            // Add the stop tokens
-            addrs.append(&mut stop_tokens);
+            // Add the addresses to the result list
+            if !tile_addrs.is_empty() {
+                if let Some(stop_type) = highest_stop_token {
+                    // If there's a stop token, add all addresses except the last one
+                    addrs.push(HbmAddrEnum::ADDRSTOP(tile_addrs, stop_type));
+                } else {
+                    // No stop token, add all addresses normally
+                    addrs.push(HbmAddrEnum::ADDR(tile_addrs));
+                }
+            }
         }
 
         addrs.into_iter()
@@ -162,64 +169,72 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         );
         assert!(((self.tile_col * self.n_byte) as u64) % self.addr_offset == 0);
 
-        println!("Started run of OFFHCIP LOAD");
+        // println!("Started run of OFFHCIP LOAD");
 
         for addr_enum in self.generate_addr() {
-            println!("Started to iterate {:?}", addr_enum);
-            match addr_enum {
-                HbmAddrEnum::ADDR(addr) => {
-                    // Send read request to HBM
-                    let send_request_time = self.time.tick();
-                    self.addr_snd
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: send_request_time,
-                                data: addr,
-                            },
-                        )
-                        .unwrap();
+            let (tile_addrs, tile) = match addr_enum {
+                HbmAddrEnum::ADDR(addrs) => (
+                    addrs,
+                    Elem::Val(Tile {
+                        shape: vec![self.tile_row, self.tile_col],
+                        bytes_per_elem: self.n_byte,
+                        read_from_mu: true,
+                    }),
+                ),
+                HbmAddrEnum::ADDRSTOP(addrs, level) => (
+                    addrs,
+                    Elem::ValStop(
+                        Tile {
+                            shape: vec![self.tile_row, self.tile_col],
+                            bytes_per_elem: self.n_byte,
+                            read_from_mu: true,
+                        },
+                        level,
+                    ),
+                ),
+            };
 
-                    // Wait until you get back the response
-                    self.resp_addr_rcv.dequeue(&self.time).unwrap();
-                    let read_finish_time = self.time.tick();
-
-                    dam::logging::log_event(&E::new(
-                        send_request_time.time(),
-                        read_finish_time.time(),
-                        false,
-                    ))
+            // Send read request to HBM
+            let send_request_time = self.time.tick();
+            for (idx, addr) in tile_addrs.iter().enumerate() {
+                self.addr_snd
+                    .enqueue(
+                        &self.time,
+                        ChannelElement {
+                            time: send_request_time + idx as u64,
+                            data: *addr,
+                        },
+                    )
                     .unwrap();
-
-                    // Send the data to on-chip
-                    // To properly the backpressure under the double buffering setting,
-                    // this channel should have a depth of 1
-                    self.on_chip_snd
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: self.time.tick(),
-                                data: Elem::Val(Tile {
-                                    shape: vec![self.tile_row, self.tile_col],
-                                    bytes_per_elem: self.n_byte,
-                                    read_from_mu: true,
-                                }),
-                            },
-                        )
-                        .unwrap();
-                }
-                HbmAddrEnum::STOP(level) => {
-                    self.on_chip_snd
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: self.time.tick() + (level as u64),
-                                data: Elem::Stop(level),
-                            },
-                        )
-                        .unwrap();
-                }
             }
+
+            for _i in tile_addrs {
+                // Wait until you get back the response
+                self.resp_addr_rcv.dequeue(&self.time).unwrap();
+            }
+
+            let read_finish_time = self.time.tick();
+
+            dam::logging::log_event(&E::new(
+                send_request_time.time(),
+                read_finish_time.time(),
+                false,
+            ))
+            .unwrap();
+
+            // Send the data to on-chip
+            // To properly the backpressure under the double buffering setting,
+            // this channel should have a depth of 1
+
+            self.on_chip_snd
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: tile,
+                    },
+                )
+                .unwrap();
         }
     }
 }
@@ -271,10 +286,24 @@ mod test {
         // let stride = vec![0, 1, 1];
         // let out_shape_tiled = vec![2, 2, 1];
 
+        // 2D repeat view (size-1 dim)
+        const B: usize = 32;
+        const H: usize = 64;
+
+        let n_byte = 2;
+
+        let par_b = 16;
+        let tile_m_gen_q = par_b;
+        let tile_k_gen_q = H; // Same as the dimension's size as we don't tile this dim.
+        let tile_n_gen_q = 32;
+
+        let tensor_shape_tiled = [H / tile_n_gen_q, H / tile_k_gen_q]; // As we don't tile K, the second element is 1
+        let stride = vec![0, H / tile_k_gen_q, 1];
+        let out_shape_tiled = vec![B / tile_m_gen_q, H / tile_n_gen_q, H / tile_k_gen_q];
         // 2D repeat view
-        // let tensor_shape_tiled = [2, 3];
-        // let stride = vec![0, 3, 1];
-        // let out_shape_tiled = vec![2, 2, 3];
+        // let tensor_shape_tiled = [3, 2];
+        // let stride = vec![0, 2, 1];
+        // let out_shape_tiled = vec![2, 3, 2];
 
         // 1D repeat view (size-1 dim)
         // let tensor_shape_tiled = [2, 1];
@@ -282,9 +311,9 @@ mod test {
         // let out_shape_tiled = vec![2, 2, 1];
 
         // 1D repeat view
-        let tensor_shape_tiled = [2, 3];
-        let stride = vec![3, 0, 1];
-        let out_shape_tiled = vec![2, 2, 3];
+        // let tensor_shape_tiled = [2, 3];
+        // let stride = vec![3, 0, 1];
+        // let out_shape_tiled = vec![2, 2, 3];
 
         let tile_row = 16;
         let tile_col = 32;
@@ -293,8 +322,9 @@ mod test {
 
         let total_tiles: usize = out_shape_tiled.iter().product();
 
-        // Create an iterator that generates indices
+        // Create a vector to hold all the addresses
         let mut addrs: Vec<HbmAddrEnum> = vec![];
+
         for flat_idx in 0..total_tiles {
             // Convert flat index to multi-dimensional indices
             let mut remaining = flat_idx;
@@ -321,23 +351,22 @@ mod test {
             }
             println!("tile_idx: {}", tile_idx);
 
-            // append addresses to fetch the given tile
+            // Generate addresses to fetch the given tile
             let tile_offset = tile_row * tile_col * n_byte;
             let base_addr_i = base_addr_byte + (tile_idx * tile_offset) as u64;
             let row_offset = tensor_shape_tiled[1] * tile_col * n_byte;
-            let mut addr_for_curr_tile = vec![];
+
+            // Generate all addresses for this tile
+            let mut tile_addrs = vec![];
             for r in 0..tile_row {
                 for c in (0..(tile_col * n_byte)).step_by(ADDR_OFFSET as usize) {
                     let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
-                    addr_for_curr_tile.push(HbmAddrEnum::ADDR(addr));
+                    tile_addrs.push(addr);
                 }
             }
-            addrs.append(&mut addr_for_curr_tile);
 
-            // Check which dimensions need stop tokens
-            let mut stop_tokens = vec![];
-
-            // We'll track if all inner dimensions are at their final positions
+            // Determine the highest-dimensional stop token needed
+            let mut highest_stop_token: Option<u32> = None;
             let mut all_inner_dims_at_end = true;
 
             // Check from innermost to outermost
@@ -347,9 +376,9 @@ mod test {
                     let is_dim_size_one = out_shape_tiled[dim] == 1;
                     let is_last_elem = multi_index[dim] == out_shape_tiled[dim] - 1;
 
-                    // Add stop token if at end or dim size is 1
+                    // If at end or dim size is 1, update the highest stop token
                     if is_last_elem || is_dim_size_one {
-                        stop_tokens.push(HbmAddrEnum::STOP((out_shape_tiled.len() - dim) as u32));
+                        highest_stop_token = Some((out_shape_tiled.len() - dim) as u32);
                     }
 
                     // Update tracking for outer dimensions
@@ -358,14 +387,20 @@ mod test {
                 }
             }
 
-            // Add the stop tokens
-            println!("{:?}", stop_tokens);
-            addrs.append(&mut stop_tokens);
+            // Add the addresses to the result list
+            if !tile_addrs.is_empty() {
+                if let Some(stop_type) = highest_stop_token {
+                    addrs.push(HbmAddrEnum::ADDRSTOP(tile_addrs, stop_type));
+                } else {
+                    // No stop token, add all addresses normally
+                    addrs.push(HbmAddrEnum::ADDR(tile_addrs));
+                }
+            }
         }
 
-        // for i in addrs.iter() {
-        //     println!("Addr: {:?}", i);
-        // }
+        for i in addrs.iter() {
+            println!("Addr: {:?}", i);
+        }
     }
     define_simple_event!(InputLoad);
     // define_simple_event!(WeightQLoad);

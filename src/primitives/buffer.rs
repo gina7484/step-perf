@@ -86,9 +86,11 @@ impl Buffer {
                         buffer.push(value);
                         if shape_info.len() == 1 {
                             shape_info[0] += 1;
+                        } else {
+                            unimplemented!();
                         }
                     }
-                    Elem::Stop(st) => {
+                    Elem::ValStop(value, st) => {
                         let st_as_usize: usize = st.try_into().unwrap_or_else(|_| {
                             panic!("Error converting a stop token into a usize!")
                         });

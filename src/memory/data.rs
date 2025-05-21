@@ -1,5 +1,6 @@
 use dam::types::StaticallySized;
 
+use crate::primitives::elem::StopType;
 use crate::ramulator::access::MemoryData;
 
 #[derive(Clone, Debug, Default, PartialEq)]
