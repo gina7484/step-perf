@@ -57,6 +57,15 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
 
         ctx
     }
+
+    pub fn on_chip_req_elems(&self) -> usize {
+        self.tile_row * self.tile_col
+    }
+
+    pub fn stored_elems(&self) -> usize {
+        let total_tiles: usize = self.tensor_shape_tiled.iter().product();
+        total_tiles * self.tile_row * self.tile_col
+    }
 }
 
 impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context

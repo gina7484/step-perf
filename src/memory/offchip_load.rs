@@ -155,6 +155,15 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
 
         addrs.into_iter()
     }
+
+    pub fn on_chip_req_elems(&self) -> usize {
+        self.tile_row * self.tile_col
+    }
+
+    pub fn loaded_elems(&self) -> usize {
+        let total_tiles: usize = self.out_shape_tiled.iter().product();
+        total_tiles * self.tile_row * self.tile_col
+    }
 }
 
 impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
@@ -172,7 +181,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         // println!("Started run of OFFHCIP LOAD");
 
         for addr_enum in self.generate_addr() {
-            let (tile_addrs, tile) = match addr_enum {
+            let (tile_addrs, tile, is_stop) = match addr_enum {
                 HbmAddrEnum::ADDR(addrs) => (
                     addrs,
                     Elem::Val(Tile {
@@ -180,6 +189,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                         bytes_per_elem: self.n_byte,
                         read_from_mu: true,
                     }),
+                    false,
                 ),
                 HbmAddrEnum::ADDRSTOP(addrs, level) => (
                     addrs,
@@ -191,6 +201,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                         },
                         level,
                     ),
+                    true,
                 ),
             };
 
@@ -218,7 +229,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             dam::logging::log_event(&E::new(
                 send_request_time.time(),
                 read_finish_time.time(),
-                false,
+                is_stop,
             ))
             .unwrap();
 

@@ -6,8 +6,9 @@ mod test {
     use crate::memory::data::Tile;
     use crate::memory::offchip_load::OffChipLoad;
 
-    use crate::functions::map_accum_fn::matmul;
+    use crate::functions::{map_accum_fn, map_fn};
     use crate::memory::offchip_store::OffChipStore;
+    use crate::operator::map::BinaryMap;
     use crate::operator::map_accum::BinaryMapAccum;
     use crate::operator::repeat::RepeatStatic;
     use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle, WriteBundle};
@@ -301,8 +302,6 @@ mod test {
         let (on_chip_snd1, on_chip_rcv1) = ctx.bounded(1);
 
         let repeat_mat1 = RepeatStatic::new(repeat_rcv1, H / tile_n_gen_q, on_chip_snd1);
-        ctx.add_child(mat1);
-        ctx.add_child(repeat_mat1);
 
         // Operand 2 (W_Q): [H,H]
         // Stream shape: [H, H/tileN]
@@ -329,32 +328,38 @@ mod test {
             on_chip_snd2,
         );
 
-        ctx.add_child(mat2);
-
         // ====================== Matmul Context ======================
         // Size of per-tile computation: [16, H] * [H, tileN] = [16 ,tileN]
         /* As the computation has a long reduction dimension, use a output stationary systolic array of shape [16, tileN] = [16, 16]
            This roughly maps to 3 PCUs (16*6 * 3), which has an approximate of 638 * 1e12 (FLOPs/s) / 1040 * 3 * 1/(1.8*1e9) (s/cycle) = 1022 (FLOPs/cycle)
         */
         let (mm_snd, mm_rcv) = ctx.bounded(1);
-        let gen_q = BinaryMapAccum::<GenQ>::new(
+        // let gen_q = BinaryMapAccum::<GenQ>::new(
+        //     on_chip_rcv1,
+        //     on_chip_rcv2,
+        //     mm_snd,
+        //     Arc::new(|tile1, tile2, accumulator, comp_bw, write_back_mu| {
+        //         map_accum_fn::matmul(tile1, tile2, accumulator, comp_bw, write_back_mu, false)
+        //     }),
+        //     Arc::new(move || Tile {
+        //         shape: vec![16, tile_n_gen_q],
+        //         bytes_per_elem: n_byte,
+        //         read_from_mu: true,
+        //     }),
+        //     1,
+        //     1022,
+        //     true,
+        // );
+        let gen_q = BinaryMap::<GenQ>::new(
             on_chip_rcv1,
             on_chip_rcv2,
             mm_snd,
-            Arc::new(|tile1, tile2, accumulator, comp_bw, write_back_mu| {
-                matmul(tile1, tile2, accumulator, comp_bw, write_back_mu, false)
+            Arc::new(|tile1, tile2, comp_bw, write_back_mu| {
+                map_fn::matmul(tile1, tile2, comp_bw, write_back_mu, false)
             }),
-            Arc::new(move || Tile {
-                shape: vec![16, tile_n_gen_q],
-                bytes_per_elem: n_byte,
-                read_from_mu: true,
-            }),
-            1,
             1022,
             true,
         );
-
-        ctx.add_child(gen_q);
 
         // ====================== Store Context ======================
         let (waddr_snd, waddr_rcv) = ctx.unbounded();
@@ -371,7 +376,6 @@ mod test {
             wdata_snd,
             ack_rcv,
         );
-        ctx.add_child(store_ctx);
 
         // ====================== Ramulator Context ======================
 
@@ -394,9 +398,24 @@ mod test {
             ack: Box::new(ack_snd),
         });
 
+        // ====================== Simple Metrics ======================
+        let on_chip_req_bytes =
+            (mat1.on_chip_req_elems() + mat2.on_chip_req_elems() + store_ctx.on_chip_req_elems())
+                * n_byte;
+        let data_movement_bytes =
+            (mat1.loaded_elems() + mat2.loaded_elems() + store_ctx.stored_elems()) * n_byte;
+        println!("on_chip_req_bytes: {}", on_chip_req_bytes);
+        println!("data_movement_bytes: {}", data_movement_bytes);
+
+        // ====================== Add contexts ======================
+        ctx.add_child(mat1);
+        ctx.add_child(repeat_mat1);
+        ctx.add_child(mat2);
+        ctx.add_child(gen_q);
+        ctx.add_child(store_ctx);
         ctx.add_child(mem_context);
 
-        // ====================== Consumer ======================
+        // ====================== Run Simulation ======================
 
         let initialized = ctx.initialize(Default::default()).unwrap();
         let run_with_mongo = false;

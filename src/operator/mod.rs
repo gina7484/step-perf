@@ -1,7 +1,7 @@
 pub mod accum;
 pub mod batchedmatvec;
 // pub mod bufferize;
-// pub mod map;
+pub mod map;
 pub mod map_accum;
 pub mod matmul;
 // pub mod mux_demux;

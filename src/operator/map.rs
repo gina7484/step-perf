@@ -69,7 +69,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             let in1 = self.in1_stream.peek_next(&self.time);
             let in2 = self.in2_stream.peek_next(&self.time);
 
-            match (in1, in2) {
+            let (tile1, tile2, stop_lev) = match (in1, in2) {
                 (
                     Ok(ChannelElement {
                         time: _,
@@ -80,81 +80,66 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                         data: data2_enum,
                     }),
                 ) => match (data1_enum, data2_enum) {
-                    (Elem::Val(data1), Elem::Val(data2)) => {
-                        let mut load_cycle: u64 = 0;
-                        if data1.read_from_mu {
-                            load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
-                        }
-                        if data2.read_from_mu {
-                            load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
-                        }
-                        let (comp_cycles, out_tile) =
-                            (self.func)(&data1, &data2, self.compute_bw, self.write_back_mu);
-                        let store_cycles = if self.write_back_mu {
-                            div_ceil(out_tile.size_in_bytes() as u64, PMU_BW)
-                        } else {
-                            0_u64
-                        };
-                        let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
-                            .into_iter()
-                            .max()
-                            .unwrap_or(0);
-
-                        self.time.incr_cycles(roofline_cycles);
-
-                        self.in1_stream.dequeue(&self.time).unwrap();
-                        self.in2_stream.dequeue(&self.time).unwrap();
-
-                        let curr_time = self.time.tick();
-                        self.out_stream
-                            .enqueue(
-                                &self.time,
-                                ChannelElement {
-                                    time: curr_time,
-                                    data: Elem::Val(out_tile),
-                                },
-                            )
-                            .unwrap();
-
-                        let time_block_start_ns = curr_time.time() - roofline_cycles;
-
-                        dam::logging::log_event(&E::new(
-                            time_block_start_ns,
-                            curr_time.time(),
-                            false,
-                        ))
-                        .unwrap();
-                    }
-                    (Elem::Stop(lev1), Elem::Stop(lev2)) => {
+                    (Elem::Val(data1), Elem::Val(data2)) => (data1, data2, None),
+                    (Elem::ValStop(data1, lev1), Elem::ValStop(data2, lev2)) => {
                         if lev1 != lev2 {
                             panic!("The two input streams' shape don't match!");
                         }
-
-                        let curr_time = self.time.tick();
-                        self.out_stream
-                            .enqueue(
-                                &self.time,
-                                ChannelElement {
-                                    time: curr_time + 1,
-                                    data: Elem::Stop(lev1),
-                                },
-                            )
-                            .unwrap();
-
-                        // Also log the cycle spent on stop tokens to quantify its overhead
-                        dam::logging::log_event(&E::new(
-                            curr_time.time(),
-                            curr_time.time() + 1,
-                            true,
-                        ))
-                        .unwrap();
+                        (data1, data2, Some(lev1))
                     }
                     (_, _) => panic!("The two input streams' shape don't match!"),
                 },
                 (Ok(_), Err(_)) => panic!("One stream closed earlier"),
                 (Err(_), Ok(_)) => panic!("One stream closed earlier"),
                 (Err(_), Err(_)) => return,
+            };
+
+            let start_time = self.time.tick().time();
+
+            let mut load_cycle: u64 = 0;
+            if tile1.read_from_mu {
+                load_cycle += div_ceil(tile1.size_in_bytes() as u64, PMU_BW);
             }
+            if tile2.read_from_mu {
+                load_cycle += div_ceil(tile2.size_in_bytes() as u64, PMU_BW);
+            }
+            let (comp_cycles, out_tile) =
+                (self.func)(&tile1, &tile2, self.compute_bw, self.write_back_mu);
+            let store_cycles = if self.write_back_mu {
+                div_ceil(out_tile.size_in_bytes() as u64, PMU_BW)
+            } else {
+                0_u64
+            };
+            let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+
+            self.time.incr_cycles(roofline_cycles);
+
+            let data = match stop_lev {
+                Some(level) => Elem::ValStop(out_tile, level),
+                None => Elem::Val(out_tile),
+            };
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: data,
+                    },
+                )
+                .unwrap();
+
+            dam::logging::log_event(&E::new(
+                start_time,
+                self.time.tick().time(),
+                stop_lev != None,
+            ))
+            .unwrap();
+
+            self.in1_stream.dequeue(&self.time).unwrap();
+            self.in2_stream.dequeue(&self.time).unwrap();
         }
     }
 }

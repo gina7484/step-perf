@@ -250,7 +250,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                             dam::logging::log_event(&E::new(
                                 self.time.tick().time() - roofline_cycles,
                                 self.time.tick().time(),
-                                false,
+                                true,
                             ))
                             .unwrap();
 
