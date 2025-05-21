@@ -8,42 +8,67 @@ from collections import defaultdict
 def parse_csv(csv_file):
     """Parse a CSV file and extract the necessary data."""
     data = []
-    file_id = os.path.basename(csv_file).split(".")[0]  # Use filename without extension as ID
+    file_id = os.path.basename(csv_file).split(".")[
+        0
+    ]  # Use filename without extension as ID
     min_time = float("inf")
     max_time = 0
-    
-    # Extract event_name from file_id (e.g., InputLoad.csv -> InputLoad)
-    event_name = file_id
+
+    # Extract prefix from file_id
+    prefix = file_id.split("_")[0] if "_" in file_id else file_id
 
     with open(csv_file, "r") as f:
         reader = csv.DictReader(f)
+        # Get the first row to check column names
         rows = list(reader)
         if not rows:
             return [], file_id, 0, 0  # Empty file
 
-        # Add sequential numbering for each row to use as identifier
-        for idx, row in enumerate(rows, 1):
-            # Check if required columns exist
-            if "start_ns" not in row or "end_ns" not in row:
-                print(f"Warning: File {file_id} missing required timing columns.")
-                continue
-                
-            # Parse values
-            start_time = float(row["start_ns"])
-            end_time = float(row["end_ns"])
-            is_stop = row.get("is_stop", "").lower() == "true"
-            
-            # Use sequential number as identifier
-            identifier = f"{event_name}_{idx}"
-            
+        for row in rows:
+            # Create identifier based on prefix
+            if prefix == "hbm":
+                # For hbm files, use the current identifier logic with error handling
+                try:
+                    if "num_elems" in row:
+                        identifier = f"{row.get('outer', 'N/A')},{row.get('m', 'N/A')},{row.get('n', 'N/A')},{row.get('k', 'N/A')} ({row['num_elems']})"
+                    else:
+                        identifier = f"{row.get('outer', 'N/A')},{row.get('m', 'N/A')},{row.get('n', 'N/A')},{row.get('k', 'N/A')}"
+                except KeyError:
+                    # If any required keys are missing, use a simpler identifier
+                    identifier = f"hbm_{file_id}"
+            else:
+                # For other prefixes, use the counter column if available, otherwise blank
+                identifier = row.get("counter", "")
+
+            # Check if start_ns and end_ns columns exist
+            if "start_ns" in row and "end_ns" in row:
+                start_time = float(row["start_ns"])
+                end_time = float(row["end_ns"])
+            # Fallback to old column names if necessary
+            elif "start(ms)" in row and "end(ms)" in row:
+                start_time = float(row["start(ms)"])
+                end_time = float(row["end(ms)"])
+            elif "start" in row and "end" in row:
+                start_time = float(row["start"])
+                end_time = float(row["end"])
+            else:
+                print(
+                    f"Warning: File {file_id} missing timing columns. Available columns: {list(row.keys())}"
+                )
+                continue  # Skip this row
+
             # Store data
             item = {
                 "file_id": file_id,
-                "prefix": "event",  # Use a generic prefix
+                "prefix": prefix,
                 "identifier": identifier,
                 "start": start_time,
                 "end": end_time,
-                "is_stop": is_stop,  # Store is_stop flag for coloring
+                "output_available": (
+                    row.get("output_tile_available") == "True"
+                    if "output_tile_available" in row
+                    else False
+                ),
             }
             data.append(item)
 
@@ -109,11 +134,12 @@ def generate_html(data, file_ids, min_time, max_time):
                     "identifier": item["identifier"],
                     "start": item["start"],
                     "end": item["end"],
-                    "is_stop": item["is_stop"],
+                    "output_available": item["output_available"],
                 }
             )
 
-    html_content = """
+    html_content = (
+        """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -179,11 +205,20 @@ def generate_html(data, file_ids, min_time, max_time):
         .block:hover {
             opacity: 0.8;
         }
-        .event-normal {
-            background-color: #33A8FF; /* Blue for normal events */
+        .prefix-comp {
+            background-color: #FF5733; /* Red-orange for compute */
         }
-        .event-stop {
-            background-color: #FF5733; /* Red-orange for stop events */
+        .prefix-hbm {
+            background-color: #33A8FF; /* Blue for HBM */
+        }
+        .prefix-load {
+            background-color: #33FF57; /* Green for load */
+        }
+        .prefix-store {
+            background-color: #A633FF; /* Purple for store */
+        }
+        .prefix-default {
+            background-color: #999999; /* Gray for unknown prefixes */
         }
         .timeline-marker {
             position: absolute;
@@ -255,12 +290,24 @@ def generate_html(data, file_ids, min_time, max_time):
     </div>
     <div class="legend">
         <div class="legend-item">
-            <div class="legend-color event-normal"></div>
-            <span>Normal Event</span>
+            <div class="legend-color prefix-comp"></div>
+            <span>Compute</span>
         </div>
         <div class="legend-item">
-            <div class="legend-color event-stop"></div>
-            <span>Stop Event</span>
+            <div class="legend-color prefix-hbm"></div>
+            <span>HBM</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-load"></div>
+            <span>Load</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-store"></div>
+            <span>Store</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color prefix-default"></div>
+            <span>Other</span>
         </div>
     </div>
     <div id="container">
@@ -270,10 +317,18 @@ def generate_html(data, file_ids, min_time, max_time):
 
     <script>
         // Data from Python
-        const data = """ + json.dumps(visualization_data) + """;
-        const fileIds = """ + json.dumps(file_ids) + """;
-        const minTime = """ + str(min_time) + """;
-        const maxTime = """ + str(max_time) + """;
+        const data = """
+        + json.dumps(visualization_data)
+        + """;
+        const fileIds = """
+        + json.dumps(file_ids)
+        + """;
+        const minTime = """
+        + str(min_time)
+        + """;
+        const maxTime = """
+        + str(max_time)
+        + """;
         
         // Visualization variables
         let scale = 0.1;
@@ -311,8 +366,13 @@ def generate_html(data, file_ids, min_time, max_time):
                 fileDataItems.forEach(item => {
                     const block = document.createElement('div');
                     
-                    // Set color class based on is_stop flag
-                    block.className = item.is_stop ? 'block event-stop' : 'block event-normal';
+                    // Set color class based on prefix
+                    const prefix = item.prefix;
+                    if (['comp', 'hbm', 'load', 'store'].includes(prefix)) {
+                        block.className = `block prefix-${prefix}`;
+                    } else {
+                        block.className = 'block prefix-default';
+                    }
                     
                     // Position and size based on time values
                     const left = (item.start - minTime) * scale;
@@ -321,16 +381,17 @@ def generate_html(data, file_ids, min_time, max_time):
                     block.style.left = `${left}px`;
                     block.style.width = `${Math.max(width, 1)}px`;
                     
-                    // Only show text if there's enough space
-                    if (width > 40) {
+                    // Only show text if there's enough space and we have an identifier
+                    if (width > 40 && item.identifier) {
                         block.textContent = item.identifier;
                     }
                     
                     // Add tooltip data
-                    block.dataset.identifier = item.identifier;
+                    block.dataset.prefix = item.prefix;
+                    block.dataset.identifier = item.identifier || 'No identifier';
                     block.dataset.start = item.start;
                     block.dataset.end = item.end;
-                    block.dataset.isStop = item.is_stop;
+                    block.dataset.outputAvailable = item.output_available;
                     
                     // Add event listeners for tooltip
                     block.addEventListener('mouseover', showTooltip);
@@ -376,11 +437,12 @@ def generate_html(data, file_ids, min_time, max_time):
         function showTooltip(e) {
             const block = e.target;
             tooltipEl.innerHTML = `
-                Identifier: ${block.dataset.identifier}<br>
+                Type: ${block.dataset.prefix}<br>
+                ${block.dataset.identifier !== 'No identifier' ? `Identifier: ${block.dataset.identifier}<br>` : ''}
                 Start: ${parseFloat(block.dataset.start).toFixed(2)} ns<br>
                 End: ${parseFloat(block.dataset.end).toFixed(2)} ns<br>
                 Duration: ${(parseFloat(block.dataset.end) - parseFloat(block.dataset.start)).toFixed(2)} ns<br>
-                Type: ${block.dataset.isStop === 'true' ? 'Stop Event' : 'Normal Event'}
+                Output Available: ${block.dataset.outputAvailable}
             `;
             tooltipEl.style.display = 'block';
             moveTooltip(e);
@@ -433,6 +495,7 @@ def generate_html(data, file_ids, min_time, max_time):
 </body>
 </html>
     """
+    )
 
     return html_content
 
