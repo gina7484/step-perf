@@ -6,20 +6,20 @@ use half::f16;
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
 pub enum MemoryData {
-    // U32([u32; 8]),  // 8 elements × 4 bytes = 32 bytes
-    // F32([f32; 8]),  // 8 elements × 4 bytes = 32 bytes
-    F16([f16; 16]), // 16 elements × 2 bytes = 32 bytes
+    // U32([u32; 16]),  // 16 elements × 4 bytes = 64 bytes
+    // F32([f32; 16]),  // 16 elements × 4 bytes = 64 bytes
+    F16([f16; 32]), // 32 elements × 2 bytes = 64 bytes
 }
 
 impl DAMType for MemoryData {
     fn dam_size(&self) -> usize {
-        32
+        64
     }
 }
 
 impl Default for MemoryData {
     fn default() -> Self {
-        MemoryData::F16([f16::from_f32(0.0); 16])
+        MemoryData::F16([f16::from_f32(0.0); 32])
     }
 }
 

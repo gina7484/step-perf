@@ -598,7 +598,7 @@ mod test {
         let addrs = || (0..(MEM_SIZE as u64)).map(|x| x * ADDR_OFFSET);
         parent.add_child(GeneratorContext::new(addrs, addr_snd));
         parent.add_child(GeneratorContext::new(
-            || (0..(MEM_SIZE as u32)).map(|x| MemoryData::F16([f16::from_f32(x as f32); 16])),
+            || (0..(MEM_SIZE as u32)).map(|x| MemoryData::F16([f16::from_f32(x as f32); 32])),
             data_snd,
         ));
 

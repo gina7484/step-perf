@@ -4,12 +4,13 @@ mod test {
     use std::sync::Arc;
 
     use crate::memory::data::Tile;
-    use crate::memory::offchip_load::OffChipLoad2D;
+    use crate::memory::offchip_load::OffChipLoad;
 
     use crate::functions::map_accum_fn::matmul;
+    use crate::memory::offchip_store::OffChipStore;
     use crate::operator::map_accum::BinaryMapAccum;
     use crate::operator::repeat::RepeatStatic;
-    use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
+    use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle, WriteBundle};
 
     use crate::define_simple_event;
     use crate::memory::events::LoggableEventSimple;
@@ -31,6 +32,7 @@ mod test {
     define_simple_event!(InputLoad);
     define_simple_event!(WeightQLoad);
     define_simple_event!(GenQ);
+    define_simple_event!(StoreOutput);
 
     /*
     Dataflow: ijk
@@ -110,7 +112,7 @@ mod test {
             let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
             let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-            let mat1 = OffChipLoad2D::<InputLoad>::new(
+            let mat1 = OffChipLoad::<InputLoad>::new(
                 [B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
                 vec![H / tile_k_gen_q, 1],
                 vec![B / tile_m_gen_q, H / tile_k_gen_q],
@@ -140,7 +142,7 @@ mod test {
             let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
             let (on_chip_snd2, on_chip_rcv2) = ctx.bounded(1);
 
-            let mat2 = OffChipLoad2D::<WeightQLoad>::new(
+            let mat2 = OffChipLoad::<WeightQLoad>::new(
                 [H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
                 vec![0, H / tile_n_gen_q, 1],
                 vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
@@ -281,8 +283,8 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-        let mat1 = OffChipLoad2D::<InputLoad>::new(
-            [B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
+        let mat1 = OffChipLoad::<InputLoad>::new(
+            vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
             tile_m_gen_q,
@@ -312,8 +314,8 @@ mod test {
         let (on_chip_snd2, on_chip_rcv2) = ctx.bounded(1);
 
         // For the weights, we will assume it's saved in a transposed order
-        let mat2 = OffChipLoad2D::<WeightQLoad>::new(
-            [H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
+        let mat2 = OffChipLoad::<WeightQLoad>::new(
+            vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             vec![0, 1, H / tile_n_gen_q],
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
             tile_k_gen_q,
@@ -355,6 +357,21 @@ mod test {
         ctx.add_child(gen_q);
 
         // ====================== Store Context ======================
+        let (waddr_snd, waddr_rcv) = ctx.unbounded();
+        let (wdata_snd, wdata_rcv) = ctx.unbounded();
+        let (ack_snd, ack_rcv) = ctx.unbounded();
+        let store_ctx = OffChipStore::<StoreOutput>::new(
+            vec![B / tile_m_gen_q, H / tile_n_gen_q],
+            tile_m_gen_q,
+            tile_n_gen_q,
+            tensor_addrs.get("Output").unwrap().clone() as u64,
+            ADDR_OFFSET,
+            mm_rcv,
+            waddr_snd,
+            wdata_snd,
+            ack_rcv,
+        );
+        ctx.add_child(store_ctx);
 
         // ====================== Ramulator Context ======================
 
@@ -371,11 +388,15 @@ mod test {
             resp: Box::new(rdata_snd2),
             resp_addr: Box::new(resp_addr_snd2),
         });
+        mem_context.add_writer(WriteBundle {
+            data: Box::new(wdata_rcv),
+            addr: Box::new(waddr_rcv),
+            ack: Box::new(ack_snd),
+        });
 
         ctx.add_child(mem_context);
 
         // ====================== Consumer ======================
-        ctx.add_child(ConsumerContext::new(mm_rcv));
 
         let initialized = ctx.initialize(Default::default()).unwrap();
         let run_with_mongo = false;

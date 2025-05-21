@@ -17,8 +17,8 @@ pub enum HbmAddrEnum {
 }
 
 #[context_macro]
-pub struct OffChipLoad2D<E: LoggableEventSimple> {
-    pub tensor_shape_tiled: [usize; 2], // In terms of tiles.
+pub struct OffChipLoad<E: LoggableEventSimple> {
+    pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
     pub stride: Vec<usize>,             // Express the view information with strides
     pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
     pub tile_row: usize,
@@ -33,9 +33,9 @@ pub struct OffChipLoad2D<E: LoggableEventSimple> {
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> OffChipLoad2D<E> {
+impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> OffChipLoad<E> {
     pub fn new(
-        tensor_shape_tiled: [usize; 2],
+        tensor_shape_tiled: Vec<usize>,
         stride: Vec<usize>,
         out_shape_tiled: Vec<usize>,
         tile_row: usize,
@@ -108,7 +108,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             // Generate addresses to fetch the given tile
             let tile_offset = self.tile_row * self.tile_col * self.n_byte;
             let base_addr_i = self.base_addr_byte + (tile_idx * tile_offset) as u64;
-            let row_offset = self.tensor_shape_tiled[1] * self.tile_col * self.n_byte;
+            let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * self.n_byte;
 
             // Generate all addresses for this tile
             let mut tile_addrs = vec![];
@@ -158,7 +158,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
 }
 
 impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
-    for OffChipLoad2D<E>
+    for OffChipLoad<E>
 {
     fn run(&mut self) {
         // Ensure stride and out_shape have the same length
@@ -244,7 +244,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
 mod test {
     use std::default;
 
-    use super::{HbmAddrEnum, OffChipLoad2D};
+    use super::{HbmAddrEnum, OffChipLoad};
     use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
 
     use crate::define_simple_event;
@@ -434,8 +434,8 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-        let mat1 = OffChipLoad2D::<InputLoad>::new(
-            [2, 1], // As we don't tile K, the second element is 1
+        let mat1 = OffChipLoad::<InputLoad>::new(
+            vec![2, 1], // As we don't tile K, the second element is 1
             vec![1, 0, 1],
             vec![2, 4, 1],
             16,
@@ -504,8 +504,8 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-        let mat1 = OffChipLoad2D::<InputLoad>::new(
-            [2, 1], // As we don't tile K, the second element is 1
+        let mat1 = OffChipLoad::<InputLoad>::new(
+            vec![2, 1], // As we don't tile K, the second element is 1
             vec![1, 0, 1],
             vec![2, 4, 1],
             16,
@@ -526,7 +526,7 @@ mod test {
         // let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
         // let (on_chip_snd2, on_chip_rcv2) = ctx.unbounded();
 
-        // let mat2 = OffChipLoad2D::<WeightQLoad>::new(
+        // let mat2 = OffChipLoad::<WeightQLoad>::new(
         //     [1, 4], // As we don't tile K, the second element is 1
         //     vec![0, 4, 1],
         //     vec![2, 1, 4],
