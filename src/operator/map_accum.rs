@@ -1,7 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::memory::{data::Tile, events::LoggableEventSimple, PMU_BW};
+use crate::memory::{events::LoggableEventSimple, PMU_BW};
 use crate::primitives::elem::{Elem, StopType};
+use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 use dam::dam_macros::event_type;
 use dam::{context_tools::*, logging::LogEvent};
@@ -9,25 +10,35 @@ use serde::{Deserialize, Serialize};
 
 /// This is necesssary for operation patterns like matmul where the
 #[context_macro]
-pub struct BinaryMapAccum<E> {
-    in1_stream: Receiver<Elem<Tile>>,
-    in2_stream: Receiver<Elem<Tile>>,
-    out_stream: Sender<Elem<Tile>>,
-    func: Arc<dyn Fn(&Tile, &Tile, &Tile, u64, bool) -> (u64, Tile) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-    init_accum: Arc<dyn Fn() -> Tile + Sync + Send>,
+pub struct BinaryMapAccum<E, T: DAMType, OT: DAMType> {
+    in1_stream: Receiver<Elem<Tile<T>>>,
+    in2_stream: Receiver<Elem<Tile<T>>>,
+    out_stream: Sender<Elem<Tile<OT>>>,
+    func: Arc<dyn Fn(&Tile<T>, &Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+    init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
     rank: StopType,
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
     _phantom: PhantomData<E>,
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> BinaryMapAccum<E> {
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: DAMType,
+        OT: DAMType,
+    > BinaryMapAccum<E, T, OT>
+where
+    Elem<Tile<T>>: DAMType,
+    Elem<Tile<OT>>: DAMType,
+{
     pub fn new(
-        in1_stream: Receiver<Elem<Tile>>,
-        in2_stream: Receiver<Elem<Tile>>,
-        out_stream: Sender<Elem<Tile>>,
-        func: Arc<dyn Fn(&Tile, &Tile, &Tile, u64, bool) -> (u64, Tile) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-        init_accum: Arc<dyn Fn() -> Tile + Sync + Send>,
+        in1_stream: Receiver<Elem<Tile<T>>>,
+        in2_stream: Receiver<Elem<Tile<T>>>,
+        out_stream: Sender<Elem<Tile<OT>>>,
+        func: Arc<
+            dyn Fn(&Tile<T>, &Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync,
+        >, // bytes, bytes, FLOPs per cycle -> cycles
+        init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
         rank: StopType,
         compute_bw: u64, // FLOPs / cycle
         write_back_mu: bool,
@@ -52,12 +63,18 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
     }
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
-    for BinaryMapAccum<E>
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: DAMType,
+        OT: DAMType,
+    > Context for BinaryMapAccum<E, T, OT>
+where
+    Elem<Tile<T>>: DAMType,
+    Elem<Tile<OT>>: DAMType,
 {
     fn run(&mut self) {
         loop {
-            let mut accumulator: Tile = (self.init_accum)();
+            let mut accumulator = (self.init_accum)();
 
             let in1 = self.in1_stream.peek_next(&self.time);
             let in2 = self.in2_stream.peek_next(&self.time);

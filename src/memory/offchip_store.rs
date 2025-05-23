@@ -1,38 +1,49 @@
-use std::marker::PhantomData;
+use std::{fs::File, marker::PhantomData};
 
 use dam::context_tools::*;
 use dam::logging::LogEvent;
 use half::f16;
+use ndarray::{concatenate, Array2, Axis};
 
 use crate::{
     primitives::elem::{Elem, StopType},
     ramulator::access::MemoryData,
 };
 
-use super::{data::Tile, events::LoggableEventSimple};
+use super::events::LoggableEventSimple;
+
+use crate::primitives::tile::Tile;
 
 #[context_macro]
-pub struct OffChipStore<E: LoggableEventSimple> {
+pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub tensor_shape_tiled: Vec<usize>,
     pub tile_row: usize,
     pub tile_col: usize,
+    pub store_path: Option<String>,
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
-    pub on_chip_rcv: Receiver<Elem<Tile>>,
+    pub on_chip_rcv: Receiver<Elem<Tile<T>>>,
     pub addr_snd: Sender<u64>,
     pub wdata_snd: Sender<MemoryData>,
     pub ack_rcv: Receiver<bool>,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> OffChipStore<E> {
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: DAMType + npyz::AutoSerialize,
+    > OffChipStore<E, T>
+where
+    Elem<Tile<T>>: DAMType,
+{
     pub fn new(
         tensor_shape_tiled: Vec<usize>,
         tile_row: usize,
         tile_col: usize,
+        store_path: Option<String>,
         base_addr_byte: u64,
         addr_offset: u64,
-        on_chip_rcv: Receiver<Elem<Tile>>,
+        on_chip_rcv: Receiver<Elem<Tile<T>>>,
         addr_snd: Sender<u64>,
         wdata_snd: Sender<MemoryData>,
         ack_rcv: Receiver<bool>,
@@ -41,6 +52,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
             tensor_shape_tiled,
             tile_row,
             tile_col,
+            store_path,
             base_addr_byte,
             addr_offset,
             on_chip_rcv,
@@ -68,27 +80,119 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
     }
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
-    for OffChipStore<E>
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: DAMType + npyz::AutoSerialize,
+    > Context for OffChipStore<E, T>
+where
+    Elem<Tile<T>>: DAMType,
 {
     fn run(&mut self) {
+        let mut accum: Array2<T> = Array2::from_shape_vec(
+            (0, self.tensor_shape_tiled.last().unwrap() * self.tile_col),
+            vec![],
+        )
+        .unwrap();
+        let mut horizontal_accum: Array2<T> =
+            Array2::from_shape_vec((self.tile_row, 0), vec![]).unwrap();
+
         let mut tile_idx = 0;
         let mut n_bytes = None;
         loop {
+            // Get the tile data and concatenate if you're simulating with actual values
             let tile_data = match self.on_chip_rcv.peek_next(&self.time) {
                 Ok(ChannelElement {
                     time: _,
                     data: tile,
                 }) => match tile {
-                    Elem::Val(tile_data) => tile_data,
-                    Elem::ValStop(tile_data, _) => tile_data,
+                    Elem::Val(tile_data) => {
+                        if self.store_path.is_some() {
+                            assert!(tile_data.underlying.is_some());
+
+                            let concatenated = concatenate(
+                                Axis(1),
+                                &[
+                                    horizontal_accum.view(),
+                                    tile_data.underlying.clone().unwrap().view(),
+                                ],
+                            )
+                            .unwrap_or_else(|_| panic!("Error concatenating tiles horizontally"));
+                            horizontal_accum = concatenated;
+                        }
+                        tile_data
+                    }
+                    Elem::ValStop(tile_data, _) => {
+                        if self.store_path.is_some() {
+                            assert!(tile_data.underlying.is_some());
+
+                            let concatenated_horizontal = concatenate(
+                                Axis(1),
+                                &[
+                                    horizontal_accum.view(),
+                                    tile_data.underlying.clone().unwrap().view(),
+                                ],
+                            )
+                            .unwrap_or_else(|_| panic!("Error concatenating tiles horizontally"));
+                            horizontal_accum = concatenated_horizontal;
+
+                            let concatenated =
+                                concatenate(Axis(0), &[accum.view(), horizontal_accum.view()])
+                                    .unwrap_or_else(|_| {
+                                        panic!("Error concatenating tiles horizontally")
+                                    });
+                            accum = concatenated;
+
+                            horizontal_accum =
+                                Array2::from_shape_vec((self.tile_row, 0), vec![]).unwrap();
+                        }
+                        tile_data
+                    }
                 },
-                Err(_) => return,
+                Err(_) => {
+                    if self.store_path.is_some() {
+                        // Save the collected so far and return
+
+                        // Check whether the collected data is same as expected
+                        assert_eq!(
+                            accum.len(),
+                            self.tensor_shape_tiled.iter().product::<usize>()
+                                * self.tile_row
+                                * self.tile_col
+                        );
+                        let data: Vec<T> = accum.into_raw_vec_and_offset().0;
+
+                        // Save data in .npy
+                        let data_file_path = format!("Output.npy");
+                        match npyz::to_file_1d(self.store_path.clone().unwrap(), data) {
+                            Ok(_) => {}
+                            Err(_) => panic!("Error while writing data to {}", data_file_path),
+                        }
+
+                        // save metadata as json file
+                        let total_cols = self.tile_col * self.tensor_shape_tiled.last().unwrap();
+                        let total_rows = self.tile_row
+                            * self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
+                        let shape = self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2]
+                            .to_vec()
+                            .append(&mut vec![total_rows, total_cols]);
+
+                        let meta_file_path: String = format!("Output.json");
+                        let meta_file = File::create(meta_file_path.clone()).unwrap();
+                        match serde_json::to_writer(meta_file, &shape) {
+                            Ok(_) => {}
+                            Err(_) => panic!("Error while writing metadata to {}", meta_file_path),
+                        }
+
+                        println!("Successfully wrote the output");
+                    }
+                    return;
+                }
             };
 
-            // Calculate the write addresses for the given tile
             assert_eq!(tile_data.shape[0], self.tile_row);
             assert_eq!(tile_data.shape[1], self.tile_col);
+
+            // Calculate the write addresses for the given tile
             if n_bytes == None {
                 n_bytes = Some(tile_data.bytes_per_elem);
             } else {

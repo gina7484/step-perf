@@ -1,26 +1,30 @@
 use std::marker::PhantomData;
 
-use dam::context_tools::*;
 use dam::logging::LogEvent;
+use dam::{context_tools::*, types::StaticallySized};
+use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
 
 use crate::{
     primitives::elem::{Elem, StopType},
     ramulator::access::MemoryData,
 };
 
-use super::{data::Tile, events::LoggableEventSimple};
+use super::events::LoggableEventSimple;
+
+use crate::primitives::tile::Tile;
 
 #[derive(Debug)]
-pub enum HbmAddrEnum {
-    ADDR(Vec<u64>),
-    ADDRSTOP(Vec<u64>, StopType),
+pub enum HbmAddrEnum<T: DAMType> {
+    ADDR(Vec<u64>, Tile<T>),
+    ADDRSTOP(Vec<u64>, Tile<T>, StopType),
 }
 
 #[context_macro]
-pub struct OffChipLoad<E: LoggableEventSimple> {
+pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
     pub stride: Vec<usize>,             // Express the view information with strides
     pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
+    pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     pub tile_row: usize,
     pub tile_col: usize,
     pub n_byte: usize,       // size of the datatype
@@ -29,15 +33,22 @@ pub struct OffChipLoad<E: LoggableEventSimple> {
     pub addr_snd: Sender<u64>,
     pub resp_addr_rcv: Receiver<u64>,
     pub rdata_rcv: Receiver<MemoryData>,
-    pub on_chip_snd: Sender<Elem<Tile>>,
+    pub on_chip_snd: Sender<Elem<Tile<T>>>,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> OffChipLoad<E> {
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: npyz::Deserialize + DAMType,
+    > OffChipLoad<E, T>
+where
+    Elem<Tile<T>>: DAMType,
+{
     pub fn new(
         tensor_shape_tiled: Vec<usize>,
         stride: Vec<usize>,
         out_shape_tiled: Vec<usize>,
+        npy_path: Option<String>,
         tile_row: usize,
         tile_col: usize,
         n_byte: usize,
@@ -46,12 +57,36 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         addr_snd: Sender<u64>,
         resp_addr_rcv: Receiver<u64>,
         rdata_rcv: Receiver<MemoryData>,
-        on_chip_snd: Sender<Elem<Tile>>,
+        on_chip_snd: Sender<Elem<Tile<T>>>,
     ) -> Self {
+        let underlying = match npy_path {
+            Some(file_path) => {
+                // Open the file
+                let mut file = std::fs::File::open(file_path).unwrap();
+
+                // Read the data and shape of the `.npy` file
+                let file_data = npyz::NpyFile::new(&mut file).unwrap();
+                let shape_vec = file_data
+                    .shape()
+                    .iter()
+                    .map(|x| *x as usize)
+                    .collect::<Vec<usize>>();
+
+                assert_eq!(out_shape_tiled, shape_vec);
+
+                let shape: ndarray::Dim<IxDynImpl> = shape_vec.into_dimension();
+
+                let vec_data: Vec<T> = file_data.into_vec().unwrap();
+                Some(ndarray::ArcArray::from_shape_vec(shape, vec_data).unwrap())
+            }
+            None => None,
+        };
+
         let ctx = Self {
             tensor_shape_tiled,
             stride,
             out_shape_tiled,
+            underlying,
             tile_row,
             tile_col,
             n_byte,
@@ -72,12 +107,33 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         ctx
     }
 
-    fn generate_addr(&self) -> impl Iterator<Item = HbmAddrEnum> {
+    fn generate_addr(&self) -> impl Iterator<Item = HbmAddrEnum<T>> {
+        let mut tile_data = vec![];
+        // Tile the actual data
+        match &self.underlying {
+            Some(arr) => {
+                for tile_i in arr.windows_with_stride(
+                    IxDyn(&[self.tile_row, self.tile_col]),
+                    IxDyn(&[self.tile_row, self.tile_col]),
+                ) {
+                    tile_data.push(Tile::new(
+                        tile_i
+                            .to_shared()
+                            .into_shape_with_order((self.tile_row, self.tile_col))
+                            .unwrap(),
+                        self.n_byte,
+                        true,
+                    ))
+                }
+            }
+            None => {}
+        };
+
         // Calculate total elements in the output tensor
         let total_tiles: usize = self.out_shape_tiled.iter().product();
 
         // Create a vector to hold all the addresses
-        let mut addrs: Vec<HbmAddrEnum> = vec![];
+        let mut addrs: Vec<HbmAddrEnum<T>> = vec![];
 
         for flat_idx in 0..total_tiles {
             // Convert flat index to multi-dimensional indices
@@ -141,14 +197,48 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                 }
             }
 
-            // Add the addresses to the result list
-            if !tile_addrs.is_empty() {
-                if let Some(stop_type) = highest_stop_token {
-                    // If there's a stop token, add all addresses except the last one
-                    addrs.push(HbmAddrEnum::ADDRSTOP(tile_addrs, stop_type));
-                } else {
-                    // No stop token, add all addresses normally
-                    addrs.push(HbmAddrEnum::ADDR(tile_addrs));
+            match self.underlying {
+                Some(_) => {
+                    // Add the addresses to the result list
+                    if !tile_addrs.is_empty() {
+                        if let Some(stop_type) = highest_stop_token {
+                            // If there's a stop token, add all addresses except the last one
+                            addrs.push(HbmAddrEnum::ADDRSTOP(
+                                tile_addrs,
+                                tile_data[tile_idx].clone(),
+                                stop_type,
+                            ));
+                        } else {
+                            // No stop token, add all addresses normally
+                            addrs.push(HbmAddrEnum::ADDR(tile_addrs, tile_data[tile_idx].clone()));
+                        }
+                    }
+                }
+                None => {
+                    if !tile_addrs.is_empty() {
+                        if let Some(stop_type) = highest_stop_token {
+                            // If there's a stop token, add all addresses except the last one
+                            addrs.push(HbmAddrEnum::ADDRSTOP(
+                                tile_addrs,
+                                Tile::new_blank(
+                                    vec![self.tile_row, self.tile_col],
+                                    self.n_byte,
+                                    true,
+                                ),
+                                stop_type,
+                            ));
+                        } else {
+                            // No stop token, add all addresses normally
+                            addrs.push(HbmAddrEnum::ADDR(
+                                tile_addrs,
+                                Tile::new_blank(
+                                    vec![self.tile_row, self.tile_col],
+                                    self.n_byte,
+                                    true,
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -166,8 +256,12 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
     }
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
-    for OffChipLoad<E>
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: npyz::Deserialize + DAMType,
+    > Context for OffChipLoad<E, T>
+where
+    Elem<Tile<T>>: DAMType,
 {
     fn run(&mut self) {
         // Ensure stride and out_shape have the same length
@@ -181,28 +275,11 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
         // println!("Started run of OFFHCIP LOAD");
 
         for addr_enum in self.generate_addr() {
-            let (tile_addrs, tile, is_stop) = match addr_enum {
-                HbmAddrEnum::ADDR(addrs) => (
-                    addrs,
-                    Elem::Val(Tile {
-                        shape: vec![self.tile_row, self.tile_col],
-                        bytes_per_elem: self.n_byte,
-                        read_from_mu: true,
-                    }),
-                    false,
-                ),
-                HbmAddrEnum::ADDRSTOP(addrs, level) => (
-                    addrs,
-                    Elem::ValStop(
-                        Tile {
-                            shape: vec![self.tile_row, self.tile_col],
-                            bytes_per_elem: self.n_byte,
-                            read_from_mu: true,
-                        },
-                        level,
-                    ),
-                    true,
-                ),
+            let (tile_addrs, elem_tile, is_stop) = match addr_enum {
+                HbmAddrEnum::ADDR(addrs, tile) => (addrs, Elem::Val(tile), false),
+                HbmAddrEnum::ADDRSTOP(addrs, tile, level) => {
+                    (addrs, Elem::ValStop(tile, level), true)
+                }
             };
 
             // Send read request to HBM
@@ -242,7 +319,7 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
                     &self.time,
                     ChannelElement {
                         time: self.time.tick(),
-                        data: tile,
+                        data: elem_tile,
                     },
                 )
                 .unwrap();
@@ -256,6 +333,7 @@ mod test {
     use std::default;
 
     use super::{HbmAddrEnum, OffChipLoad};
+    use crate::primitives::tile::Tile;
     use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
 
     use crate::define_simple_event;
@@ -334,7 +412,7 @@ mod test {
         let total_tiles: usize = out_shape_tiled.iter().product();
 
         // Create a vector to hold all the addresses
-        let mut addrs: Vec<HbmAddrEnum> = vec![];
+        let mut addrs: Vec<HbmAddrEnum<f32>> = vec![];
 
         for flat_idx in 0..total_tiles {
             // Convert flat index to multi-dimensional indices
@@ -401,10 +479,17 @@ mod test {
             // Add the addresses to the result list
             if !tile_addrs.is_empty() {
                 if let Some(stop_type) = highest_stop_token {
-                    addrs.push(HbmAddrEnum::ADDRSTOP(tile_addrs, stop_type));
+                    addrs.push(HbmAddrEnum::ADDRSTOP(
+                        tile_addrs,
+                        Tile::new_blank(vec![tile_row, tile_col], n_byte, true),
+                        stop_type,
+                    ));
                 } else {
                     // No stop token, add all addresses normally
-                    addrs.push(HbmAddrEnum::ADDR(tile_addrs));
+                    addrs.push(HbmAddrEnum::ADDR(
+                        tile_addrs,
+                        Tile::new_blank(vec![tile_row, tile_col], n_byte, true),
+                    ));
                 }
             }
         }
@@ -413,6 +498,7 @@ mod test {
             println!("Addr: {:?}", i);
         }
     }
+
     define_simple_event!(InputLoad);
     // define_simple_event!(WeightQLoad);
     #[test]
@@ -445,10 +531,11 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-        let mat1 = OffChipLoad::<InputLoad>::new(
+        let mat1 = OffChipLoad::<InputLoad, f32>::new(
             vec![2, 1], // As we don't tile K, the second element is 1
             vec![1, 0, 1],
             vec![2, 4, 1],
+            None,
             16,
             128,
             n_byte,
@@ -515,10 +602,11 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-        let mat1 = OffChipLoad::<InputLoad>::new(
+        let mat1 = OffChipLoad::<InputLoad, f32>::new(
             vec![2, 1], // As we don't tile K, the second element is 1
             vec![1, 0, 1],
             vec![2, 4, 1],
+            None,
             16,
             128,
             2,

@@ -3,8 +3,8 @@ mod test {
     use std::default;
     use std::sync::Arc;
 
-    use crate::memory::data::Tile;
     use crate::memory::offchip_load::OffChipLoad;
+    use crate::primitives::tile::Tile;
 
     use crate::functions::{map_accum_fn, map_fn};
     use crate::memory::offchip_store::OffChipStore;
@@ -284,10 +284,11 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-        let mat1 = OffChipLoad::<InputLoad>::new(
+        let mat1 = OffChipLoad::<InputLoad, f32>::new(
             vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
+            None,
             tile_m_gen_q,
             tile_k_gen_q,
             n_byte as usize,
@@ -313,10 +314,11 @@ mod test {
         let (on_chip_snd2, on_chip_rcv2) = ctx.bounded(1);
 
         // For the weights, we will assume it's saved in a transposed order
-        let mat2 = OffChipLoad::<WeightQLoad>::new(
+        let mat2 = OffChipLoad::<WeightQLoad, f32>::new(
             vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             vec![0, 1, H / tile_n_gen_q],
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
+            None,
             tile_k_gen_q,
             tile_n_gen_q,
             n_byte as usize,
@@ -350,7 +352,7 @@ mod test {
         //     1022,
         //     true,
         // );
-        let gen_q = BinaryMap::<GenQ>::new(
+        let gen_q = BinaryMap::<GenQ, f32, f32>::new(
             on_chip_rcv1,
             on_chip_rcv2,
             mm_snd,
@@ -365,10 +367,11 @@ mod test {
         let (waddr_snd, waddr_rcv) = ctx.unbounded();
         let (wdata_snd, wdata_rcv) = ctx.unbounded();
         let (ack_snd, ack_rcv) = ctx.unbounded();
-        let store_ctx = OffChipStore::<StoreOutput>::new(
+        let store_ctx = OffChipStore::<StoreOutput, f32>::new(
             vec![B / tile_m_gen_q, H / tile_n_gen_q],
             tile_m_gen_q,
             tile_n_gen_q,
+            None,
             tensor_addrs.get("Output").unwrap().clone() as u64,
             ADDR_OFFSET,
             mm_rcv,

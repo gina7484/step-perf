@@ -1,7 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use crate::memory::{data::Tile, events::LoggableEventSimple, PMU_BW};
+use crate::memory::{events::LoggableEventSimple, PMU_BW};
 use crate::primitives::elem::Elem;
+use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 use dam::dam_macros::event_type;
 use dam::{context_tools::*, logging::LogEvent};
@@ -18,29 +19,31 @@ use serde::{Deserialize, Serialize};
 ///   However, as this uses a statically divided bandwidth, there are limits in terms of how accurate we can model contention.
 ///   To accurately model on-chip memory accesses, one has to create a similar context as ramulator context for PMUs.
 #[context_macro]
-pub struct BinaryMap<E> {
-    in1_stream: Receiver<Elem<Tile>>,
-    in2_stream: Receiver<Elem<Tile>>,
-    out_stream: Sender<Elem<Tile>>,
-    func: Arc<dyn Fn(&Tile, &Tile, u64, bool) -> (u64, Tile) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-    compute_bw: u64,                                                         // FLOPs / cycle
+pub struct BinaryMap<E, A: DAMType, B: DAMType> {
+    in1_stream: Receiver<Elem<Tile<A>>>,
+    in2_stream: Receiver<Elem<Tile<A>>>,
+    out_stream: Sender<Elem<Tile<B>>>,
+    func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+    compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
     _phantom: PhantomData<E>,
 }
-/* BinaryMap<E, A, B>
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        A: DAMType,
+        B: DAMType,
+    > BinaryMap<E, A, B>
+where
+    Elem<Tile<A>>: DAMType,
+    Elem<Tile<B>>: DAMType,
+{
+    pub fn new(
         in1_stream: Receiver<Elem<Tile<A>>>,
         in2_stream: Receiver<Elem<Tile<A>>>,
         out_stream: Sender<Elem<Tile<B>>>,
-        func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>,
-*/
-
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> BinaryMap<E> {
-    pub fn new(
-        in1_stream: Receiver<Elem<Tile>>,
-        in2_stream: Receiver<Elem<Tile>>,
-        out_stream: Sender<Elem<Tile>>,
-        func: Arc<dyn Fn(&Tile, &Tile, u64, bool) -> (u64, Tile) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-        compute_bw: u64,                                                         // FLOPs / cycle
+        func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+        compute_bw: u64, // FLOPs / cycle
         write_back_mu: bool,
     ) -> Self {
         let ctx = Self {
@@ -61,8 +64,14 @@ impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> 
     }
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Context
-    for BinaryMap<E>
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        A: DAMType,
+        B: DAMType,
+    > Context for BinaryMap<E, A, B>
+where
+    Elem<Tile<A>>: DAMType,
+    Elem<Tile<B>>: DAMType,
 {
     fn run(&mut self) {
         loop {

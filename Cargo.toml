@@ -19,13 +19,15 @@ csv = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 linkme = "0.3.32"
 derive_more = { version = "2.0.1", features = ["full"] }
-half = "2.6.0"
+half = { version = "2.6.0", features = ["num-traits"] }
 num = "0.4.3"
 fxhash = "0.2.1"
 enum_dispatch = "0.3.13"
 num-bigint = "0.4.6"
 ndarray = "0.16.1"
 thiserror = "2.0.12"
+npyz = "0.8.4"
+serde_json = "1.0.140"
 
 [build-dependencies]
 cmake = "0.1"

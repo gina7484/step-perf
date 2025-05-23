@@ -1,6 +1,8 @@
+use dam::types::DAMType;
 use graphviz_rust::attributes::weight;
+use num::Num;
 
-use crate::memory::data::Tile;
+use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 
 /// matmul
@@ -10,14 +12,14 @@ use crate::utils::calculation::div_ceil;
 ///     stored in a memory unit and add load latency accordingly
 /// - `weight_transposed`: Set this field to true if weight is stored in a transposed
 ///     way to optimize memory access
-pub fn matmul(
-    in1: &Tile,
-    in2: &Tile,
-    accumulator: &Tile,
+pub fn matmul<T: ndarray::LinalgScalar>(
+    in1: &Tile<T>,
+    in2: &Tile<T>,
+    accumulator: &Tile<T>,
     flop_per_cycle: u64,
     write_back_mu: bool,
     weight_transposed: bool,
-) -> (u64, Tile) {
+) -> (u64, Tile<T>) {
     assert_eq!(in1.shape.len(), 2);
     assert_eq!(in2.shape.len(), 2);
     if !weight_transposed {
@@ -39,12 +41,21 @@ pub fn matmul(
         in2.shape[0] // in2: [N,K]
     };
 
-    (
-        div_ceil((2 * m * k * n) as u64, flop_per_cycle),
-        Tile {
-            shape: vec![m, n],
-            bytes_per_elem: in1.bytes_per_elem,
-            read_from_mu: write_back_mu,
-        },
-    )
+    match (&in1.underlying, &in2.underlying) {
+        (Some(arr1), Some(arr2)) => {
+            let out_arr = match weight_transposed {
+                true => arr1.dot(&arr2.t()),
+                false => arr1.dot(arr2),
+            };
+
+            (
+                div_ceil((2 * m * k * n) as u64, flop_per_cycle),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+            )
+        }
+        (_, _) => (
+            div_ceil((2 * m * k * n) as u64, flop_per_cycle),
+            Tile::new_blank(vec![m, n], in1.bytes_per_elem, write_back_mu),
+        ),
+    }
 }
