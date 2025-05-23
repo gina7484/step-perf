@@ -162,7 +162,7 @@ where
                         let data: Vec<T> = accum.into_raw_vec_and_offset().0;
 
                         // Save data in .npy
-                        let data_file_path = format!("Output.npy");
+                        let data_file_path = format!("output.npy");
                         match npyz::to_file_1d(self.store_path.clone().unwrap(), data) {
                             Ok(_) => {}
                             Err(_) => panic!("Error while writing data to {}", data_file_path),
@@ -172,11 +172,11 @@ where
                         let total_cols = self.tile_col * self.tensor_shape_tiled.last().unwrap();
                         let total_rows = self.tile_row
                             * self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
-                        let shape = self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2]
-                            .to_vec()
-                            .append(&mut vec![total_rows, total_cols]);
+                        let mut shape =
+                            self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
+                        shape.append(&mut vec![total_rows, total_cols]);
 
-                        let meta_file_path: String = format!("Output.json");
+                        let meta_file_path: String = format!("output.json");
                         let meta_file = File::create(meta_file_path.clone()).unwrap();
                         match serde_json::to_writer(meta_file, &shape) {
                             Ok(_) => {}

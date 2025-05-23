@@ -8,7 +8,9 @@ use crate::utils::calculation::div_ceil;
 ///     stored in a memory unit and add load latency accordingly
 /// - `weight_transposed`: Set this field to true if weight is stored in a transposed
 ///     way to optimize memory access
-pub fn matmul<T: ndarray::LinalgScalar>(
+use std::fmt::Debug;
+
+pub fn matmul<T: Debug + ndarray::LinalgScalar>(
     in1: &Tile<T>,
     in2: &Tile<T>,
     flop_per_cycle: u64,
@@ -34,10 +36,13 @@ pub fn matmul<T: ndarray::LinalgScalar>(
 
     match (&in1.underlying, &in2.underlying) {
         (Some(arr1), Some(arr2)) => {
+            // println!("in1: {:?}", arr1);
+            // println!("in2: {:?}", arr2);
             let out_arr = match weight_transposed {
                 true => arr1.dot(&arr2.t()),
                 false => arr1.dot(arr2),
             };
+            // println!("out_arr: {:?}", out_arr);
 
             (
                 div_ceil((2 * m * k * n) as u64, flop_per_cycle),

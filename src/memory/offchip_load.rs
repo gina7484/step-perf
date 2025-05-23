@@ -72,7 +72,12 @@ where
                     .map(|x| *x as usize)
                     .collect::<Vec<usize>>();
 
-                assert_eq!(out_shape_tiled, shape_vec);
+                let total_cols = tile_col * tensor_shape_tiled.last().unwrap();
+                let total_rows = tile_row * tensor_shape_tiled[tensor_shape_tiled.len() - 2];
+                let mut untiled_shape = tensor_shape_tiled[..tensor_shape_tiled.len() - 2].to_vec();
+                untiled_shape.append(&mut vec![total_rows, total_cols]);
+
+                assert_eq!(untiled_shape, shape_vec);
 
                 let shape: ndarray::Dim<IxDynImpl> = shape_vec.into_dimension();
 
