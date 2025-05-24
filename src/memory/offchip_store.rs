@@ -10,7 +10,7 @@ use crate::{
     ramulator::access::MemoryData,
 };
 
-use super::events::LoggableEventSimple;
+use crate::utils::events::LoggableEventSimple;
 
 use crate::primitives::tile::Tile;
 
