@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::{events::LoggableEventSimple, PMU_BW};
-use crate::primitives::elem::Elem;
+use crate::primitives::elem::{Bufferizable, Elem};
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 use dam::dam_macros::event_type;
