@@ -1,5 +1,5 @@
 pub mod accum;
-// pub mod bufferize;
+pub mod bufferize;
 pub mod map;
 pub mod map_accum;
 // pub mod mux_demux;
