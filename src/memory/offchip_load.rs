@@ -9,7 +9,7 @@ use crate::{
     ramulator::access::MemoryData,
 };
 
-use super::events::LoggableEventSimple;
+use crate::utils::events::LoggableEventSimple;
 
 use crate::primitives::tile::Tile;
 
@@ -342,7 +342,7 @@ mod test {
     // use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
 
     use crate::define_simple_event;
-    use crate::memory::events::LoggableEventSimple;
+    use crate::utils::events::LoggableEventSimple;
     use dam::dam_macros::event_type;
     use dam::simulation::RunOptions;
     use dam::utility_contexts::FunctionContext;
