@@ -23,3 +23,8 @@ impl<VT: DAMType> DAMType for Elem<VT> {
         }
     }
 }
+
+pub trait Bufferizable {
+    fn size_in_bytes(&self) -> usize;
+    fn read_from_mu(&self) -> bool;
+}
