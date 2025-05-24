@@ -44,9 +44,7 @@ where
         }
     }
 
-    pub fn from_stream<
-        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-    >(
+    pub fn from_stream(
         stream: &Receiver<Elem<T>>,
         manager: &TimeManager,
         rank: usize,
@@ -79,17 +77,21 @@ where
                         // As the compute node encodes the overhead to store data, we will not increment cycle here
                     }
                     Elem::ValStop(value, st) => {
+                        buffer.push(value);
+
                         let st_as_usize: usize = st.try_into().unwrap_or_else(|_| {
                             panic!("Error converting a stop token into a usize!")
                         });
 
                         if st_as_usize == rank {
+                            shape_info[st_as_usize - 1] += 1;
                             break;
                         } else if st_as_usize > rank {
                             return Err(BufferizeError::StopToken(st_as_usize));
                         }
 
                         if shape_info.len() == st_as_usize {
+                            shape_info[st_as_usize - 1] += 1;
                             shape_info.push(1);
                             tracked_shape_info.push(true);
                         } else if shape_info.len() > st_as_usize
@@ -109,8 +111,6 @@ where
         // Our shape info is also backwards because we keep pushing.
         shape_info.reverse();
 
-        // println!("{:?}", shape_info);
-        // println!("{:?}", buffer);
         let arc = ArcArray::from_shape_vec(shape_info, buffer)
             .expect("Unexpected mismatched shape when reading a stream into a buffer");
 
@@ -291,5 +291,95 @@ mod tests {
         let tensor = Buffer::new(arr.into_dyn(), 0);
         let vec = tensor.to_elem_iter().collect::<Vec<_>>();
         assert_eq!(vec, golden);
+    }
+
+    #[test]
+    fn round_trip_test() {
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+        let golden = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+        ];
+
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream(&rcv, time, 2).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_3d() {
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        // 2 x 2 x 3
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 2, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 1);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream(&rcv, time, 3).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
     }
 }
