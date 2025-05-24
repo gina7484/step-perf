@@ -6,7 +6,7 @@ use half::f16;
 use ndarray::{concatenate, Array2, Axis};
 
 use crate::{
-    primitives::elem::{Elem, StopType, Bufferizable},
+    primitives::elem::{Bufferizable, Elem, StopType},
     ramulator::access::MemoryData,
 };
 

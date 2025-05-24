@@ -3,22 +3,23 @@ use std::marker::PhantomData;
 use dam::{context_tools::*, logging::LogEvent};
 
 use crate::{
-    memory::{data::Tile, events::LoggableEventSimple},
+    memory::events::LoggableEventSimple,
     primitives::{
         buffer::{Buffer, BufferizeError},
         elem::Elem,
+        tile::Tile,
     },
 };
 
 #[context_macro]
-pub struct Bufferize<E> {
-    in_stream: Receiver<Elem<Tile>>,
+pub struct Bufferize<E, T> {
+    in_stream: Receiver<Elem<Tile<T>>>,
     out_stream: Sender<Elem<Buffer>>,
     rank: usize,
     _phantom: PhantomData<E>,
 }
 
-impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Bufferize<E> {
+impl<E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send> Bufferize<E, T> {
     pub fn new(
         in_stream: Receiver<Elem<Tile>>,
         out_stream: Sender<Elem<Buffer>>,

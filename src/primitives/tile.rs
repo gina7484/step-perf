@@ -1,5 +1,7 @@
 use dam::types::StaticallySized;
+
 use super::elem::Bufferizable;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tile<T> {
     pub shape: Vec<usize>,
