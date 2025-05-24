@@ -1,8 +1,6 @@
 use dam::types::StaticallySized;
-use ndarray::Ix2;
 
-use crate::primitives::elem::StopType;
-use crate::ramulator::access::MemoryData;
+use super::elem::Bufferizable;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Tile<T> {
@@ -16,6 +14,17 @@ pub struct Tile<T> {
 
 impl<T: StaticallySized> StaticallySized for Tile<T> {
     const SIZE: usize = T::SIZE;
+}
+
+impl<T> Bufferizable for Tile<T> {
+    fn size_in_bytes(&self) -> usize {
+        let total_elems: usize = self.shape.iter().product();
+        self.bytes_per_elem * total_elems
+    }
+
+    fn read_from_mu(&self) -> bool {
+        self.read_from_mu
+    }
 }
 
 impl<T> Tile<T> {
@@ -35,10 +44,5 @@ impl<T> Tile<T> {
             read_from_mu: read_from_mu,
             underlying: Some(arr),
         }
-    }
-
-    pub fn size_in_bytes(&self) -> usize {
-        let total_elems: usize = self.shape.iter().product();
-        self.bytes_per_elem * total_elems
     }
 }

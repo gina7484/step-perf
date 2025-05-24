@@ -4,14 +4,18 @@ use dam::{
     channel::{ChannelElement, Receiver},
     logging::LogEvent,
     structures::TimeManager,
-    types::DAMType,
+    types::{DAMType, StaticallySized},
 };
-use ndarray::{Array, Dimension, IxDyn};
+use ndarray::{ArcArray, Array, Dimension, IxDyn};
 
-use crate::memory::{data::Tile, events::LoggableEventSimple};
+use crate::primitives::tile::Tile;
+use crate::{memory::events::LoggableEventSimple, primitives::elem::StopType};
 use thiserror::Error;
 
-use super::elem::Elem;
+use super::{
+    elem::{Bufferizable, Elem},
+    tile,
+};
 
 #[derive(Error, Debug)]
 pub enum BufferizeError {
@@ -24,34 +28,24 @@ pub enum BufferizeError {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Buffer {
-    buffer_shape: Vec<usize>,
-    tile_shape: Tile,
+pub struct Buffer<T> {
+    underlying: Option<ndarray::ArcArray<T, IxDyn>>,
+    creation_time: u64,
 }
 
-impl DAMType for Buffer {
-    fn dam_size(&self) -> usize {
-        let buffer_size: usize = self.buffer_shape.iter().product();
-        self.tile_shape.size_in_bytes() * buffer_size
+impl<T: Clone + Bufferizable> Buffer<T>
+where
+    Elem<T>: DAMType,
+{
+    pub fn new(arr: ndarray::ArcArray<T, IxDyn>, creation_time: u64) -> Self {
+        Self {
+            underlying: Some(arr),
+            creation_time: creation_time,
+        }
     }
-}
 
-/// Calculates the first index where two dims differ.
-fn outermost_diff_index(a: &IxDyn, b: &IxDyn) -> usize {
-    a.as_array_view()
-        .iter()
-        .zip(b.as_array_view().iter())
-        .enumerate()
-        .find(|(_, (a_ind, b_ind))| a_ind != b_ind)
-        .expect("The two inputs were identical!")
-        .0
-}
-
-impl Buffer {
-    pub fn from_stream<
-        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-    >(
-        stream: &Receiver<Elem<Tile>>,
+    pub fn from_stream(
+        stream: &Receiver<Elem<T>>,
         manager: &TimeManager,
         rank: usize,
     ) -> Result<Self, BufferizeError> {
@@ -60,9 +54,7 @@ impl Buffer {
             "Buffer::from_stream only operates on buffer of rank >= 1"
         );
 
-        let mut tile_shape: Option<Tile> = None;
-        let mut start_time: u64 = 0;
-        let mut end_time: u64 = 0;
+        let mut creation_time = None;
 
         let mut buffer = vec![];
         let mut tracked_shape_info: Vec<bool> = vec![];
@@ -73,45 +65,33 @@ impl Buffer {
             match stream.dequeue(manager) {
                 Ok(ChannelElement { time: _time, data }) => match data {
                     Elem::Val(value) => {
-                        if start_time == 0 {
-                            start_time = manager.tick().time();
-                            tile_shape = Some(value.clone());
-                        } else {
-                            if tile_shape.clone().unwrap() != value {
-                                panic!("The tiles in a stream should all have the same spec");
-                            }
-                        }
-                        end_time = manager.tick().time();
-
                         buffer.push(value);
                         if shape_info.len() == 1 {
                             shape_info[0] += 1;
-                        } else {
-                            unimplemented!();
                         }
+
+                        if creation_time.is_none() {
+                            // If it's the first element, set the creation time
+                            creation_time = Some(manager.tick().time());
+                        }
+                        // As the compute node encodes the overhead to store data, we will not increment cycle here
                     }
                     Elem::ValStop(value, st) => {
+                        buffer.push(value);
+
                         let st_as_usize: usize = st.try_into().unwrap_or_else(|_| {
                             panic!("Error converting a stop token into a usize!")
                         });
 
                         if st_as_usize == rank {
-                            // log start_time ~ end_time
-                            dam::logging::log_event(&E::new(start_time, end_time, false)).unwrap();
+                            shape_info[st_as_usize - 1] += 1;
                             break;
                         } else if st_as_usize > rank {
                             return Err(BufferizeError::StopToken(st_as_usize));
                         }
 
-                        // log stop token
-                        dam::logging::log_event(&E::new(
-                            manager.tick().time(),
-                            manager.tick().time() + 1,
-                            true,
-                        ))
-                        .unwrap();
-
                         if shape_info.len() == st_as_usize {
+                            shape_info[st_as_usize - 1] += 1;
                             shape_info.push(1);
                             tracked_shape_info.push(true);
                         } else if shape_info.len() > st_as_usize
@@ -131,47 +111,275 @@ impl Buffer {
         // Our shape info is also backwards because we keep pushing.
         shape_info.reverse();
 
-        // println!("{:?}", shape_info);
-        // println!("{:?}", buffer);
+        let arc = ArcArray::from_shape_vec(shape_info, buffer)
+            .expect("Unexpected mismatched shape when reading a stream into a buffer");
 
-        Ok(Buffer {
-            buffer_shape: shape_info,
-            tile_shape: tile_shape.unwrap(),
-        })
+        Ok(Buffer::new(arc, creation_time.unwrap()))
     }
 
-    pub fn to_elem_iter<'a>(&'a self) -> impl Iterator<Item = Elem<Tile>> + 'a {
-        let ndim = self.buffer_shape.len();
-
+    pub fn to_elem_iter<'a>(&'a self) -> impl Iterator<Item = Elem<T>> + 'a {
+        let ndim = self.ndim();
         let mut previous_dim: Option<IxDyn> = None;
-
-        let array_with_shape = Array::<f32, _>::zeros(IxDyn(&self.buffer_shape)).to_shared();
-
-        array_with_shape
-            .indexed_iter()
-            .flat_map(move |(ind, _val)| match &mut previous_dim {
+        let mut previous_data: Option<T> = None;
+        self.indexed_iter()
+            .enumerate()
+            .flat_map(move |(i, (ind, val))| match &mut previous_dim {
                 Some(prev) => {
                     let changed_index = outermost_diff_index(&ind, &prev);
-                    previous_dim = Some(ind);
 
-                    let is_last = changed_index == ndim - 1;
+                    let mut result = vec![];
 
-                    if is_last {
-                        vec![Elem::Val(self.tile_shape.clone())]
+                    // Enqueue the previous data with the proper stop token if necessary
+                    if ndim - changed_index - 1 == 0 {
+                        result.push(Elem::Val(previous_data.as_ref().unwrap().clone()));
                     } else {
-                        (1..=(ndim - changed_index - 1))
-                            .map(|i| Elem::Stop(i as u32)) // Add stop tokens to close the previous dimension
-                            .chain([Elem::Val(self.tile_shape.clone())]) // Add the first token of the current dimension
-                            .collect()
+                        result.push(Elem::ValStop(
+                            previous_data.as_ref().unwrap().clone(),
+                            (ndim - changed_index - 1) as StopType,
+                        ));
                     }
+
+                    let is_last = i == self.len() - 1;
+                    if is_last {
+                        // If it's the last element, enque because we don't have the next iteration to take care of this
+                        result.push(Elem::ValStop(val.clone(), ndim as StopType));
+                    } else {
+                        previous_dim = Some(ind);
+                        previous_data = Some(val.clone());
+                    }
+                    result
                 }
                 None => {
                     previous_dim = Some(ind);
-                    vec![Elem::Val(self.tile_shape.clone())]
+                    previous_data = Some(val.clone());
+                    vec![]
                 }
             })
-            .chain((1..=ndim).map(|i| Elem::Stop(i as u32)))
-            .collect::<Vec<_>>()
-            .into_iter()
+    }
+}
+
+impl<T> std::ops::Deref for Buffer<T> {
+    type Target = ndarray::ArcArray<T, IxDyn>;
+
+    fn deref(&self) -> &Self::Target {
+        self.underlying
+            .as_ref()
+            .expect("Can't deref a null buffer!")
+    }
+}
+
+impl<T> std::ops::DerefMut for Buffer<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.underlying
+            .as_mut()
+            .expect("Can't deref_mut a null buffer!")
+    }
+}
+
+impl<T: StaticallySized> StaticallySized for Buffer<T> {
+    const SIZE: usize = unimplemented!();
+    // As the actual shape or size of a Buffer is not known in compile time,
+    // we keep SIZE as unimplemented.
+}
+
+/// Calculates the first index where two dims differ.
+fn outermost_diff_index(a: &IxDyn, b: &IxDyn) -> usize {
+    a.as_array_view()
+        .iter()
+        .zip(b.as_array_view().iter())
+        .enumerate()
+        .find(|(_, (a_ind, b_ind))| a_ind != b_ind)
+        .expect("The two inputs were identical!")
+        .0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use dam::{
+        simulation::ProgramBuilder,
+        utility_contexts::{CheckerContext, FunctionContext, GeneratorContext},
+    };
+    use ndarray::{ArcArray, IxDyn};
+
+    use super::Buffer;
+    use crate::primitives::{elem::Elem, tile::Tile};
+
+    #[test]
+    fn buffer_to_iter() {
+        type VT = u32;
+        let golden = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+        ];
+
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let vec = tensor.to_elem_iter().collect::<Vec<_>>();
+        assert_eq!(vec, golden);
+    }
+
+    #[test]
+    fn buffer_to_iter_unit_dim() {
+        type VT = u32;
+        // 1 x 1 x 3
+        let golden = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 3),
+        ];
+
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((1, 1, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let vec = tensor.to_elem_iter().collect::<Vec<_>>();
+        assert_eq!(vec, golden);
+    }
+
+    #[test]
+    fn buffer_to_iter_3d() {
+        type VT = u32;
+        // 2 x 2 x 2
+        let golden = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 3),
+        ];
+
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 2, 2))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let vec = tensor.to_elem_iter().collect::<Vec<_>>();
+        assert_eq!(vec, golden);
+    }
+
+    #[test]
+    fn round_trip_test() {
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+        let golden = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+        ];
+
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream(&rcv, time, 2).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_3d() {
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        // 2 x 2 x 3
+        let tile_vec = vec![
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+            Tile::<VT>::new_blank(vec![2, 2], 2, false),
+        ];
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 2, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 1);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream(&rcv, time, 3).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
     }
 }

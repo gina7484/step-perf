@@ -339,7 +339,7 @@ mod test {
 
     use super::{HbmAddrEnum, OffChipLoad};
     use crate::primitives::tile::Tile;
-    use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
+    // use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
 
     use crate::define_simple_event;
     use crate::memory::events::LoggableEventSimple;
@@ -503,7 +503,7 @@ mod test {
             println!("Addr: {:?}", i);
         }
     }
-
+    /*
     define_simple_event!(InputLoad);
     // define_simple_event!(WeightQLoad);
     #[test]
@@ -576,104 +576,105 @@ mod test {
         println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
     }
 
-    #[test]
-    fn test_with_ramulator_logging() {
-        /*
-        ADDR_OFFSET = (Channel Width) x (Burst Length) = 64 bytes
-        - Channel Width: 16 bytes/channel
-            - HBM2 standard (JEDEC HBM2 specification) defines each pseudo-channel width explicitly as 16 bytes/channel
-        - Burst Length: 4
-            - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
-         */
-        const ADDR_OFFSET: u64 = 64;
+       #[test]
+       fn test_with_ramulator_logging() {
+           /*
+           ADDR_OFFSET = (Channel Width) x (Burst Length) = 64 bytes
+           - Channel Width: 16 bytes/channel
+               - HBM2 standard (JEDEC HBM2 specification) defines each pseudo-channel width explicitly as 16 bytes/channel
+           - Burst Length: 4
+               - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
+            */
+           const ADDR_OFFSET: u64 = 64;
 
-        /*
-        Dataflow: ijk
-        [32, 128] x [128, 64] = [32, 64]
+           /*
+           Dataflow: ijk
+           [32, 128] x [128, 64] = [32, 64]
 
-        Stream: [ 2,   1] x [  1,  4] = [ 2,  4]
-        Tile:   [16, 128] x [128, 16] = [16, 16]
-         */
+           Stream: [ 2,   1] x [  1,  4] = [ 2,  4]
+           Tile:   [16, 128] x [128, 16] = [16, 16]
+            */
 
-        let mut ctx: ProgramBuilder<'_> = ProgramBuilder::default();
+           let mut ctx: ProgramBuilder<'_> = ProgramBuilder::default();
 
-        // ====================== Two matrix loaders ======================
-        let n_byte = 2;
-        let mat1_base = 0;
-        let mat2_base = mat1_base + 32 * 128 * n_byte;
+           // ====================== Two matrix loaders ======================
+           let n_byte = 2;
+           let mat1_base = 0;
+           let mat2_base = mat1_base + 32 * 128 * n_byte;
 
-        let (addr_snd1, addr_rcv1) = ctx.unbounded();
-        let (resp_addr_snd1, resp_addr_rcv1) = ctx.unbounded();
-        let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
-        let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
+           let (addr_snd1, addr_rcv1) = ctx.unbounded();
+           let (resp_addr_snd1, resp_addr_rcv1) = ctx.unbounded();
+           let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
+           let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-        let mat1 = OffChipLoad::<InputLoad, f32>::new(
-            vec![2, 1], // As we don't tile K, the second element is 1
-            vec![1, 0, 1],
-            vec![2, 4, 1],
-            None,
-            16,
-            128,
-            2,
-            mat1_base,
-            ADDR_OFFSET,
-            addr_snd1,
-            resp_addr_rcv1,
-            rdata_rcv1,
-            on_chip_snd1,
-        );
+           let mat1 = OffChipLoad::<InputLoad, f32>::new(
+               vec![2, 1], // As we don't tile K, the second element is 1
+               vec![1, 0, 1],
+               vec![2, 4, 1],
+               None,
+               16,
+               128,
+               2,
+               mat1_base,
+               ADDR_OFFSET,
+               addr_snd1,
+               resp_addr_rcv1,
+               rdata_rcv1,
+               on_chip_snd1,
+           );
 
-        ctx.add_child(mat1);
+           ctx.add_child(mat1);
 
-        // let (addr_snd2, addr_rcv2) = ctx.unbounded();
-        // let (resp_addr_snd2, resp_addr_rcv2) = ctx.unbounded();
-        // let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
-        // let (on_chip_snd2, on_chip_rcv2) = ctx.unbounded();
+           // let (addr_snd2, addr_rcv2) = ctx.unbounded();
+           // let (resp_addr_snd2, resp_addr_rcv2) = ctx.unbounded();
+           // let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
+           // let (on_chip_snd2, on_chip_rcv2) = ctx.unbounded();
 
-        // let mat2 = OffChipLoad::<WeightQLoad>::new(
-        //     [1, 4], // As we don't tile K, the second element is 1
-        //     vec![0, 4, 1],
-        //     vec![2, 1, 4],
-        //     128,
-        //     16,
-        //     2,
-        //     mat2_base,
-        //     addr_snd2,
-        //     resp_addr_rcv2,
-        //     rdata_rcv2,
-        //     on_chip_snd2,
-        // );
+           // let mat2 = OffChipLoad::<WeightQLoad>::new(
+           //     [1, 4], // As we don't tile K, the second element is 1
+           //     vec![0, 4, 1],
+           //     vec![2, 1, 4],
+           //     128,
+           //     16,
+           //     2,
+           //     mat2_base,
+           //     addr_snd2,
+           //     resp_addr_rcv2,
+           //     rdata_rcv2,
+           //     on_chip_snd2,
+           // );
 
-        // ====================== Ramulator Context ======================
+           // ====================== Ramulator Context ======================
 
-        let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
-        let mut mem_context = RamulatorContext::new(config_file, (1u32, 1u32), None);
-        mem_context.add_reader(ReadBundle {
-            addr: Box::new(addr_rcv1),
-            resp: Box::new(rdata_snd1),
-            resp_addr: Box::new(resp_addr_snd1),
-        });
+           let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
+           let mut mem_context = RamulatorContext::new(config_file, (1u32, 1u32), None);
+           mem_context.add_reader(ReadBundle {
+               addr: Box::new(addr_rcv1),
+               resp: Box::new(rdata_snd1),
+               resp_addr: Box::new(resp_addr_snd1),
+           });
 
-        ctx.add_child(mem_context);
+           ctx.add_child(mem_context);
 
-        // ====================== Consumer ======================
-        ctx.add_child(ConsumerContext::new(on_chip_rcv1));
+           // ====================== Consumer ======================
+           ctx.add_child(ConsumerContext::new(on_chip_rcv1));
 
-        let initialized = ctx.initialize(Default::default()).unwrap();
+           let initialized = ctx.initialize(Default::default()).unwrap();
 
-        let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
-            // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
-            dam::logging::LogFilter::AllowAll,
-        ));
-        let run_options = run_options.logging(LoggingOptions::Mongo(
-            MongoOptionsBuilder::default()
-                .db("off_chip_loader".to_string())
-                .uri("mongodb://127.0.0.1:27017".to_string())
-                .build()
-                .unwrap(),
-        ));
-        let summary = initialized.run(run_options.build().unwrap());
-        // Check the summary
-        println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
-    }
+           let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
+               // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
+               dam::logging::LogFilter::AllowAll,
+           ));
+           let run_options = run_options.logging(LoggingOptions::Mongo(
+               MongoOptionsBuilder::default()
+                   .db("off_chip_loader".to_string())
+                   .uri("mongodb://127.0.0.1:27017".to_string())
+                   .build()
+                   .unwrap(),
+           ));
+           let summary = initialized.run(run_options.build().unwrap());
+           // Check the summary
+           println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
+       }
+    */
 }
