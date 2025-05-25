@@ -8,7 +8,6 @@ use crate::primitives::{tile::Tile, select::SelectAdapter};
 use crate::utils::calculation::div_ceil;
 
 pub struct FlatPartitionConfig {
-    pub compute_bw: u64,
     pub switch_cycles: Vec<u64>, // cycles between receiving
     pub write_back_mu: bool, // Whether the output is written to a memory unit
 }
@@ -180,5 +179,98 @@ where
                 Err(_) => return,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::primitives::select::MultiHotN;
+    use dam::simulation::ProgramBuilder;
+    use ndarray::Array2;
+    use dam::types::DAMType;
+    use dam::context_tools::{Context, Receiver, Sender, ChannelElement};
+    use crate::primitives::elem::Elem;
+    use crate::primitives::tile::Tile;
+    use crate::operator::partition::FlatPartition;
+
+    #[test]
+    fn flat_partition_1d_multi_hot() {
+        // 1. Create 9 different ndarray::ArcArray2<T> with shape 2x2
+        // 2. Create a 3x3 rank-2 data stream from these arrays
+        // 3. Create a 3 rank-1 select stream with 2of4 multi-hot selections
+        // 4. Create 4 output streams
+        // 5. Create the ground truth for 4 output streams
+        // 6. Create the FlatPartitionConfig with 4 switch cycles and write_back_mu set to true
+        // 7. Create the FlatPartition context
+        // 8. Run the context
+
+        fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+            let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); 4];
+            
+            // Define the mapping of which arrays go to which output streams
+            let stream_mappings = [
+                vec![0, 1, 2],  // Stream 0: arrays 0, 1, 2
+                vec![0, 1, 2, 3, 4, 5],  // Stream 1: arrays 0, 1, 2, 3, 4, 5
+                vec![3, 4, 5, 6, 7, 8],  // Stream 2: arrays 3, 4, 5, 6, 7, 8
+                vec![6, 7, 8],  // Stream 3: arrays 6, 7, 8
+            ];
+            
+            for (stream_idx, array_indices) in stream_mappings.iter().enumerate() {
+                for (pos, &array_idx) in array_indices.iter().enumerate() {
+                    let tile = Tile::new(arrays[array_idx].clone().into(), 4, read_from_mu);
+                    
+                    // Add ValStop at the end of each group of 3 elements
+                    if (pos + 1) % 3 == 0 {
+                        ground_truth[stream_idx].push(Elem::ValStop(tile, 1));
+                    } else {
+                        ground_truth[stream_idx].push(Elem::Val(tile));
+                    }
+                }
+            }
+            
+            ground_truth
+        }
+
+        
+        // Step 1: Create 9 different ndarray::ArcArray2<T> with shape 2x2
+        let arrays: Vec<Array2<i32>> = (0..9)
+            .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
+            .collect();
+        // Step 2: Create a 3x3 rank-2 data stream from these arrays
+        let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
+        let in_read_from_mu = false;
+        for (i, arr) in arrays.iter().enumerate() {
+            let tile = Tile::new(arr.clone().into(), 4, in_read_from_mu);
+            
+            // Add ValStop at indices 2, 5, 8 (end of each row in 3x3 grid)
+            if i % 3 == 2 {
+                if i == 8 {
+                    in_stream_data.push(Elem::ValStop(tile, 2));
+                } else {
+                    in_stream_data.push(Elem::ValStop(tile, 1));
+                }
+            } else {
+                in_stream_data.push(Elem::Val(tile));
+            }
+        }
+        // Step 3: Create a 3 rank-1 select stream with 2of4 multi-hot selections
+        let select_read_from_mu = false;
+        let select_stream_data = vec![
+            Elem::Val(MultiHotN::new([true, true, false, false], select_read_from_mu)),
+            Elem::Val(MultiHotN::new([false, true, true, false], select_read_from_mu)),
+            Elem::ValStop(MultiHotN::new([false, false, true, true], select_read_from_mu), 1),
+        ];
+
+        // Step 4: Create the ground truth for 4 output streams
+        let out_stream_data = create_ground_truth(&arrays, in_read_from_mu);
+
+        // Step 5: Create 4 output streams
+        // let mut ctx = ProgramBuilder::default();
+        // let (exp1_snd, exp1_rcv) = ctx.unbounded();
+        // let (exp2_snd, exp2_rcv) = ctx.unbounded();
+        // let (exp3_snd, exp3_rcv) = ctx.unbounded();
+        // let (exp4_snd, exp4_rcv) = ctx.unbounded();
+
+
     }
 }
