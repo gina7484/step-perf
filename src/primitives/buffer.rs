@@ -8,8 +8,9 @@ use dam::{
 };
 use ndarray::{ArcArray, Array, Dimension, IxDyn};
 
+use crate::primitives::elem::StopType;
 use crate::primitives::tile::Tile;
-use crate::{memory::events::LoggableEventSimple, primitives::elem::StopType};
+use crate::utils::events::LoggableEventSimple;
 use thiserror::Error;
 
 use super::{
@@ -18,19 +19,32 @@ use super::{
 };
 
 #[derive(Error, Debug)]
-pub enum BufferizeError {
+pub enum BufferizeError<T> {
     #[error("Stream was empty at start of bufferization")]
     Finished,
     #[error("Stream terminated, but buffer was incomplete")]
     Incomplete,
     #[error("we see stop token larger than rank")]
-    StopToken(usize),
+    StopToken(Buffer<T>, StopType),
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Buffer<T> {
     underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     creation_time: u64,
+}
+
+impl<T: PartialEq> PartialEq for Buffer<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.underlying == other.underlying
+        // creation_time is intentionally excluded
+    }
+}
+
+impl<T: PartialEq> Buffer<T> {
+    pub fn eq_with_time(&self, other: &Self) -> bool {
+        self.underlying == other.underlying && self.creation_time == other.creation_time
+    }
 }
 
 impl<T: Clone + Bufferizable> Buffer<T>
@@ -44,11 +58,17 @@ where
         }
     }
 
-    pub fn from_stream(
+    pub fn creation_time(&self) -> u64 {
+        self.creation_time
+    }
+
+    pub fn from_stream<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+    >(
         stream: &Receiver<Elem<T>>,
         manager: &TimeManager,
         rank: usize,
-    ) -> Result<Self, BufferizeError> {
+    ) -> Result<Self, BufferizeError<T>> {
         assert!(
             rank > 0,
             "Buffer::from_stream only operates on buffer of rank >= 1"
@@ -61,6 +81,8 @@ where
 
         // a vector consisting of how many elements have been seen since the last stop token of rank K
         let mut shape_info = vec![0];
+
+        let mut stop_level = None;
         loop {
             match stream.dequeue(manager) {
                 Ok(ChannelElement { time: _time, data }) => match data {
@@ -84,10 +106,12 @@ where
                         });
 
                         if st_as_usize == rank {
-                            shape_info[st_as_usize - 1] += 1;
+                            shape_info[rank - 1] += 1;
                             break;
                         } else if st_as_usize > rank {
-                            return Err(BufferizeError::StopToken(st_as_usize));
+                            shape_info[rank - 1] += 1;
+                            stop_level = Some(st_as_usize - rank);
+                            break;
                         }
 
                         if shape_info.len() == st_as_usize {
@@ -114,7 +138,13 @@ where
         let arc = ArcArray::from_shape_vec(shape_info, buffer)
             .expect("Unexpected mismatched shape when reading a stream into a buffer");
 
-        Ok(Buffer::new(arc, creation_time.unwrap()))
+        match stop_level {
+            Some(new_level) => Err(BufferizeError::StopToken(
+                Buffer::new(arc, creation_time.unwrap()),
+                new_level as StopType,
+            )),
+            None => Ok(Buffer::new(arc, creation_time.unwrap())),
+        }
     }
 
     pub fn to_elem_iter<'a>(&'a self) -> impl Iterator<Item = Elem<T>> + 'a {
@@ -204,7 +234,10 @@ mod tests {
     use ndarray::{ArcArray, IxDyn};
 
     use super::Buffer;
-    use crate::primitives::{elem::Elem, tile::Tile};
+    use crate::{
+        primitives::{buffer, elem::Elem, tile::Tile},
+        utils::events::DummyEvent,
+    };
 
     #[test]
     fn buffer_to_iter() {
@@ -328,8 +361,8 @@ mod tests {
         let mut output_check = FunctionContext::new();
         rcv.attach_receiver(&output_check);
         output_check.set_run(move |time| {
-            let buffer = Buffer::from_stream(&rcv, time, 2).unwrap();
-            assert_eq!(buffer.shape(), tensor.shape());
+            let buffer = Buffer::from_stream::<DummyEvent>(&rcv, time, 2).unwrap();
+            assert_eq!(buffer, tensor);
         });
         ctx.add_child(output_check);
 
@@ -372,9 +405,9 @@ mod tests {
         let mut output_check = FunctionContext::new();
         rcv.attach_receiver(&output_check);
         output_check.set_run(move |time| {
-            let buffer = Buffer::from_stream(&rcv, time, 3).unwrap();
-            assert_eq!(buffer.shape(), tensor.shape());
+            let buffer = Buffer::from_stream::<DummyEvent>(&rcv, time, 3).unwrap();
             assert_eq!(buffer, tensor);
+            assert!(buffer.eq_with_time(&tensor));
         });
         ctx.add_child(output_check);
 
