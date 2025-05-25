@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 use std::panic;
-use crate::memory::{events::LoggableEventSimple, PMU_BW};
+use crate::utils::events::LoggableEventSimple;
+use crate::memory::PMU_BW;
 use dam::{context_tools::*, logging::LogEvent};
 use crate::primitives::elem::{Elem, StopType, Bufferizable};
 use crate::primitives::{tile::Tile, select::SelectAdapter};
