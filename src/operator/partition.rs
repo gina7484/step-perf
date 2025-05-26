@@ -182,6 +182,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+
     use crate::primitives::select::MultiHotN;
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{CheckerContext, GeneratorContext};
@@ -193,7 +195,7 @@ mod tests {
     };
 
     #[test]
-    fn flat_partition_1d_multi_hot() {
+    fn flat_partition_2d_multi_hot_rank_1() {
 
         fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); 4];
@@ -229,7 +231,7 @@ mod tests {
             .collect();
         // Step 2: Create a 3x3 rank-2 data stream from these arrays
         let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
-        let in_read_from_mu = false;
+        let in_read_from_mu = true;
         for (i, arr) in arrays.iter().enumerate() {
             let tile = Tile::new(arr.clone().into(), 4, in_read_from_mu);
             
@@ -245,7 +247,7 @@ mod tests {
             }
         }
         // Step 3: Create a 3 rank-1 select stream with 2of4 multi-hot selections
-        let select_read_from_mu = false;
+        let select_read_from_mu = true;
         let select_stream_data = vec![
             Elem::Val(MultiHotN::new([true, true, false, false], select_read_from_mu)),
             Elem::Val(MultiHotN::new([false, true, true, false], select_read_from_mu)),
@@ -311,7 +313,109 @@ mod tests {
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
-
-
     }
+
+    #[test]
+    fn flat_partition_1d_multi_hot_rank_0() {
+
+        fn create_ground_truth<const N: usize>(arrays: &[Array2<i32>], multi_hot: &Vec<MultiHotN<N>>, read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+            let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); N];
+
+            for (i, array_idx) in multi_hot.iter().enumerate() {
+                for (j, &is_selected) in array_idx.iter().enumerate() {
+                    if is_selected {
+                        let tile = Tile::new(arrays[i].clone().into(), 4, read_from_mu);
+                        ground_truth[j].push(Elem::Val(tile));
+                    }
+                }
+            }
+            ground_truth
+        }
+
+        fn create_multi_hot_arrays<const N: usize>(sel: usize, length: usize, read_from_mu: bool) -> Vec<MultiHotN<N>> {
+            let mut multi_hot_arrays = Vec::new();
+            for i in 0..length {
+                let mut selection = vec![false; N];
+                for j in 0..sel {
+                    selection[(i + j) % N] = true;
+                }
+                // Convert Vec<bool> to [bool; N]
+                let array: [bool; N] = selection.try_into().unwrap();
+                multi_hot_arrays.push(MultiHotN::new(array, read_from_mu));
+            }
+            multi_hot_arrays
+        }
+
+        let arrays: Vec<Array2<i32>> = (0..9)
+            .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
+            .collect();
+        let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
+        let in_read_from_mu = true;
+        for (i, arr) in arrays.iter().enumerate() {
+            let tile = Tile::new(arr.clone().into(), 4, in_read_from_mu);
+            if i == 8 {
+                in_stream_data.push(Elem::ValStop(tile, 1));
+            } else {
+                in_stream_data.push(Elem::Val(tile));
+            }
+        }
+
+        let select_read_from_mu = true;
+        let select_multi_hots = create_multi_hot_arrays::<4>(2, 9, select_read_from_mu);
+        let mut select_stream_data: Vec<Elem<MultiHotN<4>>> = Vec::new();
+        for (i, multi_hot) in select_multi_hots.iter().enumerate() {
+            if i == 8 {
+                select_stream_data.push(Elem::ValStop(multi_hot.clone(), 1));
+            } else {
+                select_stream_data.push(Elem::Val(multi_hot.clone()));
+            }
+        }
+        let out_stream_data = create_ground_truth(&arrays, &select_multi_hots, in_read_from_mu);
+        let mut ctx = ProgramBuilder::default();
+        let (in_data_snd, in_data_rcv) = ctx.unbounded();
+        let (in_sel_snd, in_sel_rcv) = ctx.unbounded();
+        let (exp1_snd, exp1_rcv) = ctx.unbounded();
+        let (exp2_snd, exp2_rcv) = ctx.unbounded();
+        let (exp3_snd, exp3_rcv) = ctx.unbounded();
+        let (exp4_snd, exp4_rcv) = ctx.unbounded();
+        let config = FlatPartitionConfig {
+            switch_cycles: vec![1, 2, 3, 4],
+            write_back_mu: true,
+        };
+        ctx.add_child(GeneratorContext::new(
+            || in_stream_data.into_iter(),
+            in_data_snd,
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || select_stream_data.into_iter(),
+            in_sel_snd,
+        ));
+        ctx.add_child(FlatPartition::<DummyEvent, _, _>::new(
+            in_data_rcv,
+            in_sel_rcv,
+            vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
+            0, // partition_rank
+            config,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[0].clone().into_iter(),
+            exp1_rcv,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[1].clone().into_iter(),
+            exp2_rcv,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[2].clone().into_iter(),
+            exp3_rcv,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[3].clone().into_iter(),
+            exp4_rcv,
+        ));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
 }
