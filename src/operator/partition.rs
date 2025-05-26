@@ -113,10 +113,10 @@ where
                         // Validate stop level based on context
                         if let Some(expected) = expected_stop_level {
                             if expected != stop_lev {
-                                panic!("The stop token ranks do not match between input stream and the select stream!");
+                                panic!("The expected stop level does not match the stop level in the select stream!");
                             }
                         } else if stop_lev > self.partition_rank {
-                            panic!("The stop token ranks do not match between input stream and the select stream!");
+                            panic!("The stop level in the select stream is greater than the partition rank!");
                         }
 
                         // Break if we've reached the partition rank
@@ -186,12 +186,13 @@ where
 mod tests {
     use crate::primitives::select::MultiHotN;
     use dam::simulation::ProgramBuilder;
+    use dam::utility_contexts::{CheckerContext, GeneratorContext};
     use ndarray::Array2;
-    use dam::types::DAMType;
-    use dam::context_tools::{Context, Receiver, Sender, ChannelElement};
-    use crate::primitives::elem::Elem;
-    use crate::primitives::tile::Tile;
-    use crate::operator::partition::FlatPartition;
+    use crate::{
+        primitives::{elem::Elem, tile::Tile},
+        operator::partition::{FlatPartition, FlatPartitionConfig},
+        utils::events::DummyEvent
+    };
 
     #[test]
     fn flat_partition_1d_multi_hot() {
@@ -209,10 +210,10 @@ mod tests {
             
             // Define the mapping of which arrays go to which output streams
             let stream_mappings = [
-                vec![0, 1, 2],  // Stream 0: arrays 0, 1, 2
-                vec![0, 1, 2, 3, 4, 5],  // Stream 1: arrays 0, 1, 2, 3, 4, 5
-                vec![3, 4, 5, 6, 7, 8],  // Stream 2: arrays 3, 4, 5, 6, 7, 8
-                vec![6, 7, 8],  // Stream 3: arrays 6, 7, 8
+                vec![0, 1, 2],  // Stream 0: arrays 0, 1, 2S1
+                vec![0, 1, 2, 3, 4, 5],  // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1
+                vec![3, 4, 5, 6, 7, 8],  // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1
+                vec![6, 7, 8],  // Stream 3: arrays 6, 7, 8S1
             ];
             
             for (stream_idx, array_indices) in stream_mappings.iter().enumerate() {
@@ -265,11 +266,61 @@ mod tests {
         let out_stream_data = create_ground_truth(&arrays, in_read_from_mu);
 
         // Step 5: Create 4 output streams
-        // let mut ctx = ProgramBuilder::default();
-        // let (exp1_snd, exp1_rcv) = ctx.unbounded();
-        // let (exp2_snd, exp2_rcv) = ctx.unbounded();
-        // let (exp3_snd, exp3_rcv) = ctx.unbounded();
-        // let (exp4_snd, exp4_rcv) = ctx.unbounded();
+        let mut ctx = ProgramBuilder::default();
+        let (in_data_snd, in_data_rcv) = ctx.unbounded();
+        let (in_sel_snd, in_sel_rcv) = ctx.unbounded();
+        let (exp1_snd, exp1_rcv) = ctx.unbounded();
+        let (exp2_snd, exp2_rcv) = ctx.unbounded();
+        let (exp3_snd, exp3_rcv) = ctx.unbounded();
+        let (exp4_snd, exp4_rcv) = ctx.unbounded();
+
+        // Step 6: Create the FlatPartitionConfig with 4 switch cycles and write_back_mu set to true
+        let config = FlatPartitionConfig {
+            switch_cycles: vec![1, 2, 3, 4],
+            write_back_mu: true,
+        };
+        
+        // Step 7: Create two GeneratorContexts for input and select streams
+        ctx.add_child(GeneratorContext::new(
+            || in_stream_data.into_iter(),
+            in_data_snd,
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || select_stream_data.into_iter(),
+            in_sel_snd,
+        ));
+
+        // Step 8: Create the FlatPartition context
+        ctx.add_child(FlatPartition::<DummyEvent, _, _>::new(
+            in_data_rcv,
+            in_sel_rcv,
+            vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
+            1, // partition_rank
+            config,
+        ));
+
+        // Step 9: Create CheckerContexts for each output stream to verify the results
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[0].clone().into_iter(),
+            exp1_rcv,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[1].clone().into_iter(),
+            exp2_rcv,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[2].clone().into_iter(),
+            exp3_rcv,
+        ));
+        ctx.add_child(CheckerContext::new(
+            || out_stream_data[3].clone().into_iter(),
+            exp4_rcv,
+        ));
+
+        // Step 10: Initialize and run the context
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
 
 
     }
