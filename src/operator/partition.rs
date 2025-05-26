@@ -118,12 +118,6 @@ where
                         } else if stop_lev > self.partition_rank {
                             panic!("The stop level in the select stream is greater than the partition rank!");
                         }
-
-                        // Break if we've reached the partition rank
-                        if stop_lev == self.partition_rank {
-                            break;
-                        }
-
                         self.handle_load_cycles(&x);
                         self.in_stream.dequeue(&self.time).unwrap();
                         self.handle_write_cycles(select_vec, &x);
@@ -134,6 +128,10 @@ where
                             .unwrap_or(stop_lev);
                         
                         self.enqueue_to_experts(select_vec, Elem::ValStop(x.clone(), output_stop_level));
+                        // Break if we've reached the partition rank
+                        if stop_lev == self.partition_rank || expected_stop_level == Some(stop_lev) {
+                            break;
+                        }
                     }
                 },
                 Err(_) => {
@@ -196,14 +194,6 @@ mod tests {
 
     #[test]
     fn flat_partition_1d_multi_hot() {
-        // 1. Create 9 different ndarray::ArcArray2<T> with shape 2x2
-        // 2. Create a 3x3 rank-2 data stream from these arrays
-        // 3. Create a 3 rank-1 select stream with 2of4 multi-hot selections
-        // 4. Create 4 output streams
-        // 5. Create the ground truth for 4 output streams
-        // 6. Create the FlatPartitionConfig with 4 switch cycles and write_back_mu set to true
-        // 7. Create the FlatPartition context
-        // 8. Run the context
 
         fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); 4];
