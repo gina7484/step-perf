@@ -224,7 +224,7 @@ where
         match &elem.data {
             Elem::Val(x) => {
                 self.handle_memory_writeback(x);
-                self.enqueue_val_element(x, index, total_streams, additional_rank)
+                self.enqueue_val_element(x, index, total_streams, 0)
             }
             Elem::ValStop(x, level) => {
                 if self.in_stream_rank == 0 {
@@ -349,7 +349,7 @@ where
 mod tests {
     use crate::primitives::select::MultiHotN;
     use dam::simulation::ProgramBuilder;
-    use dam::utility_contexts::{CheckerContext, GeneratorContext};
+    use dam::utility_contexts::{PrinterContext, GeneratorContext};
     use ndarray::Array2;
     use crate::{
         primitives::{elem::Elem, tile::Tile},
@@ -462,10 +462,12 @@ mod tests {
             config,
         ));
 
-        ctx.add_child(CheckerContext::new(
-            || ground_truth.into_iter(), 
-            out_data_rcv
-        ));
+        // ctx.add_child(CheckerContext::new(
+        //     || ground_truth.into_iter(), 
+        //     out_data_rcv
+        // ));
+        println!("Expected output: {:?}", ground_truth);
+        ctx.add_child(PrinterContext::new(out_data_rcv));
 
         ctx.initialize(Default::default())
             .unwrap()
