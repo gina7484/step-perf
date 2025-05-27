@@ -419,9 +419,6 @@ mod tests {
         let input_streams_data = create_input_streams(&arrays, true);
         let select_stream_data = create_select_streams(true);
         let ground_truth = create_ground_truth(&arrays, true);
-        println!("Input Streams: {:?}", input_streams_data);
-        println!("Select Stream: {:?}", select_stream_data);
-        println!("Ground Truth: {:?}", ground_truth);
 
         let mut ctx = ProgramBuilder::default();
         let (out_data_snd, out_data_rcv) = ctx.unbounded();
