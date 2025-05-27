@@ -4,7 +4,6 @@ use crate::utils::events::LoggableEventSimple;
 use crate::memory::PMU_BW;
 use dam::channel::PeekResult;
 use dam::{context_tools::*, logging::LogEvent};
-use half::vec;
 use crate::primitives::elem::{Elem, StopType, Bufferizable};
 use crate::primitives::{tile::Tile, select::SelectAdapter};
 use crate::utils::calculation::div_ceil;
@@ -77,7 +76,7 @@ where
             let data_ready_times = self.calculate_data_ready_times(&peek_results, select_vec);
             
             self.dequeue_streams_in_order(&data_ready_times, select_vec);
-            self.advance_time_to_max_arrival(&peek_results);
+            self.advance_time_to_max_ready(&peek_results);
             
             if self.process_and_enqueue_outputs(&peek_results, select_vec, index_level) {
                 break 'expert;
@@ -186,15 +185,15 @@ where
         }
     }
 
-    fn advance_time_to_max_arrival(&mut self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) {
-        let max_arrive_time = peek_results
+    fn advance_time_to_max_ready(&mut self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) {
+        let max_ready_time = peek_results
             .iter()
             .filter_map(|opt| opt.as_ref())
             .map(|elem| elem.time.time())
             .max()
             .unwrap_or(0);
         
-        self.time.advance(max_arrive_time.into());
+        self.time.advance(max_ready_time.into());
     }
 
     fn process_and_enqueue_outputs(
@@ -393,10 +392,14 @@ mod tests {
             for (i, array) in arrays.iter().enumerate() {
                 let tile = Tile::new(array.clone().into(), 4, read_from_mu);
                 ground_truth.push(Elem::Val(tile.clone()));
-                if i == array.len() - 1 {
-                    ground_truth.push(Elem::ValStop(tile, 1));
+                if i == arrays.len() - 1 {
+                    ground_truth.push(Elem::ValStop(tile, 3));
                 } else {
-                    ground_truth.push(Elem::ValStop(tile, 1));
+                    if (i + 1) % 3 == 0 {
+                        ground_truth.push(Elem::ValStop(tile, 2));
+                    } else {
+                        ground_truth.push(Elem::ValStop(tile, 1));
+                    }
                 }
             }
             ground_truth
@@ -416,6 +419,9 @@ mod tests {
         let input_streams_data = create_input_streams(&arrays, true);
         let select_stream_data = create_select_streams(true);
         let ground_truth = create_ground_truth(&arrays, true);
+        println!("Input Streams: {:?}", input_streams_data);
+        println!("Select Stream: {:?}", select_stream_data);
+        println!("Ground Truth: {:?}", ground_truth);
 
         let mut ctx = ProgramBuilder::default();
         let (out_data_snd, out_data_rcv) = ctx.unbounded();
