@@ -16,7 +16,7 @@ pub struct FlatPartitionConfig {
 pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
     in_stream: Receiver<Elem<Tile<A>>>,
     sel_stream: Receiver<Elem<SELT>>,
-    out_stream: Vec<Sender<Elem<Tile<A>>>>,
+    out_streams: Vec<Sender<Elem<Tile<A>>>>,
     partition_rank: StopType,
     config: FlatPartitionConfig, 
     _phantom: PhantomData<E>,
@@ -34,14 +34,14 @@ where
     pub fn new(
         in_stream: Receiver<Elem<Tile<A>>>,
         sel_stream: Receiver<Elem<SELT>>,
-        out_stream: Vec<Sender<Elem<Tile<A>>>>,
+        out_streams: Vec<Sender<Elem<Tile<A>>>>,
         partition_rank: StopType,
         config: FlatPartitionConfig,
     ) -> Self {
         let ctx = Self {
             in_stream,
             sel_stream,
-            out_stream,
+            out_streams,
             partition_rank,
             config,
             context_info: Default::default(),
@@ -49,7 +49,7 @@ where
         };
         ctx.in_stream.attach_receiver(&ctx);
         ctx.sel_stream.attach_receiver(&ctx);
-        for out in &ctx.out_stream {
+        for out in &ctx.out_streams {
             out.attach_sender(&ctx);
         }
 
@@ -69,6 +69,7 @@ where
         let mut write_cycle = 0;
         
         // Find maximum switch cycle among selected experts
+        // TODO: This could be optimized further
         for expert_idx in select_vec.iter() {
             if self.config.switch_cycles[*expert_idx] > write_cycle {
                 write_cycle = self.config.switch_cycles[*expert_idx];
@@ -86,7 +87,7 @@ where
     /// Helper function to enqueue data to all selected expert output streams
     fn enqueue_to_experts(&mut self, select_vec: &[usize], elem: Elem<Tile<A>>) {
         for expert_idx in select_vec.iter() {
-            self.out_stream[*expert_idx]
+            self.out_streams[*expert_idx]
                 .enqueue(&self.time, ChannelElement { 
                     time: self.time.tick(), 
                     data: elem.clone() 
@@ -118,15 +119,14 @@ where
                         } else if stop_lev > self.partition_rank {
                             panic!("The stop level in the select stream is greater than the partition rank!");
                         }
-                        self.handle_load_cycles(&x);
-                        self.in_stream.dequeue(&self.time).unwrap();
-                        self.handle_write_cycles(select_vec, &x);
-                        
                         // Determine output stop level
                         let output_stop_level = expected_stop_level
                             .map(|_| self.partition_rank)
                             .unwrap_or(stop_lev);
-                        
+
+                        self.handle_load_cycles(&x);
+                        self.in_stream.dequeue(&self.time).unwrap();
+                        self.handle_write_cycles(select_vec, &x);
                         self.enqueue_to_experts(select_vec, Elem::ValStop(x.clone(), output_stop_level));
                         // Break if we've reached the partition rank
                         if stop_lev == self.partition_rank || expected_stop_level == Some(stop_lev) {
@@ -182,8 +182,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::array;
-
     use crate::primitives::select::MultiHotN;
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{CheckerContext, GeneratorContext};
