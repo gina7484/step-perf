@@ -227,7 +227,7 @@ where
                 self.enqueue_val_element(x, index, total_streams, 0)
             }
             Elem::ValStop(x, level) => {
-                if self.in_stream_rank == 0 {
+                if *level > self.in_stream_rank {
                     panic!("The in_stream_rank does not match the stop token level!");
                 }
                 self.handle_memory_writeback(x);
@@ -347,7 +347,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::primitives::select::MultiHotN;
+    use crate::primitives::select::{MultiHotN, SelectAdapter};
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
     use ndarray::Array2;
@@ -480,6 +480,105 @@ mod tests {
         // println!("Expected output: {:?}", ground_truth);
         // ctx.add_child(PrinterContext::new(out_data_rcv));
 
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flat_reassemble_1d_multi_hot_rank_0() {
+        fn create_multi_hot_arrays<const N: usize>(sel: usize, length: usize, read_from_mu: bool) -> Vec<MultiHotN<N>> {
+            let mut multi_hot_arrays = Vec::new();
+            for i in 0..length {
+                let mut selection = vec![false; N];
+                for j in 0..sel {
+                    selection[(i + j) % N] = true;
+                }
+                // Convert Vec<bool> to [bool; N]
+                let array: [bool; N] = selection.try_into().unwrap();
+                multi_hot_arrays.push(MultiHotN::new(array, read_from_mu));
+            }
+            multi_hot_arrays
+        }
+
+        fn create_input_streams<const N: usize>(arrays: &[Array2<i32>], multi_hot: &Vec<MultiHotN<N>>, read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+            let mut input_streams: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); N];
+
+            for (i, array_idx) in multi_hot.iter().enumerate() {
+                for (j, &is_selected) in array_idx.iter().enumerate() {
+                    if is_selected {
+                        let tile = Tile::new(arrays[i].clone().into(), 4, read_from_mu);
+                        input_streams[j].push(Elem::Val(tile));
+                    }
+                }
+            }
+            input_streams
+        }
+
+        // If the tiles are different 
+        fn create_ground_truth(arrays: &[Array2<i32>], sel: usize, read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
+            let mut ground_truth = Vec::new();
+            for elem in arrays.iter() {
+                for _ in 0..sel {
+                    let tile = Tile::new(elem.clone().into(), 4, read_from_mu);
+                    ground_truth.push(Elem::ValStop(tile, 1));
+                }
+            }
+            ground_truth
+        }
+
+        let arrays: Vec<Array2<i32>> = (0..9)
+            .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
+            .collect();
+        let multi_hot = create_multi_hot_arrays::<4>(2, 9, true);
+        let input_streams_data = create_input_streams(&arrays, &multi_hot, true);
+        let ground_truth = create_ground_truth(&arrays, 2, true);
+        let select_stream_data: Vec<Elem<MultiHotN<4>>> = multi_hot.iter().map(|m| Elem::Val(m.clone())).collect();
+        let mut ctx = ProgramBuilder::default();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+        let (in_sel_snd, in_sel_rcv) = ctx.unbounded();
+        let (exp1_snd, exp1_rcv) = ctx.unbounded();
+        let (exp2_snd, exp2_rcv) = ctx.unbounded();
+        let (exp3_snd, exp3_rcv) = ctx.unbounded();
+        let (exp4_snd, exp4_rcv) = ctx.unbounded();
+        let config = FlatReassembleConfig {
+            switch_cycles: vec![1, 2, 3, 4],
+            write_back_mu: true,
+        };
+        ctx.add_child(GeneratorContext::new(
+            || input_streams_data[0].clone().into_iter(),
+            exp1_snd
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || input_streams_data[1].clone().into_iter(),
+            exp2_snd
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || input_streams_data[2].clone().into_iter(),
+            exp3_snd
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || input_streams_data[3].clone().into_iter(),
+            exp4_snd
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || select_stream_data.into_iter(),
+            in_sel_snd
+        ));
+        ctx.add_child(FlatReassemble::<DummyEvent, _, _>::new(
+            vec![exp1_rcv, exp2_rcv, exp3_rcv, exp4_rcv],
+            in_sel_rcv,
+            out_data_snd,
+            0,
+            config,
+        ));
+        ctx.add_child(ApproxCheckerContext::new(
+            || ground_truth.into_iter(), 
+            out_data_rcv,
+            tolerance_fn,
+        ));
+        // println!("Expected output: {:?}", ground_truth);
+        // ctx.add_child(PrinterContext::new(out_data_rcv));
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
