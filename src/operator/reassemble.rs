@@ -349,13 +349,23 @@ where
 mod tests {
     use crate::primitives::select::MultiHotN;
     use dam::simulation::ProgramBuilder;
-    use dam::utility_contexts::{PrinterContext, GeneratorContext};
+    use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
     use ndarray::Array2;
     use crate::{
         primitives::{elem::Elem, tile::Tile},
         operator::reassemble::{FlatReassemble, FlatReassembleConfig},
         utils::events::DummyEvent
     };
+
+    fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
+        match (a, b) {
+            (Elem::Val(a_tile), Elem::Val(b_tile)) => a_tile == b_tile,
+            (Elem::ValStop(a_tile, a_level), Elem::ValStop(b_tile, b_level)) => {
+                a_tile == b_tile && a_level == b_level
+            }
+            _ => false,
+        }
+    }
 
     // Use the same index and output streams as input from `fn flat_partition_2d_multi_hot_rank_1()`
     #[test]
@@ -462,18 +472,17 @@ mod tests {
             config,
         ));
 
-        // ctx.add_child(CheckerContext::new(
-        //     || ground_truth.into_iter(), 
-        //     out_data_rcv
-        // ));
-        println!("Expected output: {:?}", ground_truth);
-        ctx.add_child(PrinterContext::new(out_data_rcv));
+        ctx.add_child(ApproxCheckerContext::new(
+            || ground_truth.into_iter(), 
+            out_data_rcv,
+            tolerance_fn,
+        ));
+        // println!("Expected output: {:?}", ground_truth);
+        // ctx.add_child(PrinterContext::new(out_data_rcv));
 
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
-
-
     }
 
 }

@@ -127,7 +127,11 @@ where
                         self.handle_load_cycles(&x);
                         self.in_stream.dequeue(&self.time).unwrap();
                         self.handle_write_cycles(select_vec, &x);
-                        self.enqueue_to_experts(select_vec, Elem::ValStop(x.clone(), output_stop_level));
+                        if output_stop_level == 0 {
+                            self.enqueue_to_experts(select_vec, Elem::Val(x.clone()));
+                        } else {
+                            self.enqueue_to_experts(select_vec, Elem::ValStop(x.clone(), output_stop_level));
+                        }
                         // Break if we've reached the partition rank
                         if stop_lev == self.partition_rank || expected_stop_level == Some(stop_lev) {
                             break;
@@ -184,7 +188,7 @@ where
 mod tests {
     use crate::primitives::select::MultiHotN;
     use dam::simulation::ProgramBuilder;
-    use dam::utility_contexts::{CheckerContext, GeneratorContext};
+    use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext};
     use ndarray::Array2;
     use crate::{
         primitives::{elem::Elem, tile::Tile},
@@ -192,6 +196,15 @@ mod tests {
         utils::events::DummyEvent
     };
 
+    fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
+        match (a, b) {
+            (Elem::Val(a_tile), Elem::Val(b_tile)) => a_tile == b_tile,
+            (Elem::ValStop(a_tile, a_level), Elem::ValStop(b_tile, b_level)) => {
+                a_tile == b_tile && a_level == b_level
+            }
+            _ => false,
+        }
+    }
     #[test]
     fn flat_partition_2d_multi_hot_rank_1() {
 
@@ -290,23 +303,26 @@ mod tests {
         ));
 
         // Step 9: Create CheckerContexts for each output stream to verify the results
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[0].clone().into_iter(),
             exp1_rcv,
+            tolerance_fn,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[1].clone().into_iter(),
             exp2_rcv,
+            tolerance_fn,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[2].clone().into_iter(),
             exp3_rcv,
+            tolerance_fn,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[3].clone().into_iter(),
             exp4_rcv,
+            tolerance_fn,
         ));
-
         // Step 10: Initialize and run the context
         ctx.initialize(Default::default())
             .unwrap()
@@ -395,21 +411,25 @@ mod tests {
             0, // partition_rank
             config,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[0].clone().into_iter(),
             exp1_rcv,
+            tolerance_fn,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[1].clone().into_iter(),
             exp2_rcv,
+            tolerance_fn,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[2].clone().into_iter(),
             exp3_rcv,
+            tolerance_fn,
         ));
-        ctx.add_child(CheckerContext::new(
+        ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[3].clone().into_iter(),
             exp4_rcv,
+            tolerance_fn,
         ));
         ctx.initialize(Default::default())
             .unwrap()
