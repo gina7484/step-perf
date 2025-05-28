@@ -515,7 +515,7 @@ mod tests {
             input_streams
         }
 
-        // If the tiles are different 
+        // If the tiles are different, then the ground truth should consider the timing.
         fn create_ground_truth(arrays: &[Array2<i32>], sel: usize, read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
             let mut ground_truth = Vec::new();
             for elem in arrays.iter() {
