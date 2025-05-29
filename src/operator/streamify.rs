@@ -63,6 +63,7 @@ where
                     time: _,
                     data: buff_elem,
                 }) => {
+                    let start_time = self.time.tick().time();
                     match buff_elem {
                         Elem::Val(buff) => {
                             if self.repeat_factor.is_empty() {
@@ -222,6 +223,9 @@ where
                         }
                     }
                     self.in_stream.dequeue(&self.time).unwrap();
+
+                    dam::logging::log_event(&E::new(start_time, self.time.tick().time(), false))
+                        .unwrap();
                 }
                 Err(_) => {
                     println!("Reached HEre!");
@@ -253,14 +257,14 @@ mod tests {
 
     #[test]
     fn round_trip_test_3d() {
-        // Tiled stream shape: [3, 2, 2] => [3,|2, 2] =>[3, 2, 2, 2] (2D repeat)
-        //                                                  |_ repeated
+        // Tiled stream shape: [1,3, 2, 2] => [1,3,|2, 2] =>[1,3, 2, 2, 2] (2D repeat)
+        //                                                        |_ repeated
         type VT = u32;
 
         let mut ctx = ProgramBuilder::default();
         let bufferize_rank = 2;
 
-        // [3,2,2]
+        // [1,3,2,2]
         let input_tiled_stream = vec![
             Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
             Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
@@ -297,7 +301,7 @@ mod tests {
             out_snd,
         ));
 
-        // [3,2,2,2]
+        // [1,3,2,2,2]
         let output_tiled_stream = vec![
             Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
             Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
@@ -338,13 +342,13 @@ mod tests {
 
     #[test]
     fn round_trip_test_0d() {
-        // Tiled stream shape: [2, 2] => [|2, 2] => [2, 2]
+        // Tiled stream shape: [2, 2, 2] => [2, |2, 2] => [2, 2, 2]
         type VT = u32;
 
         let mut ctx = ProgramBuilder::default();
         let bufferize_rank = 2;
 
-        // [3,2,2]
+        // [2,2,2]
         let input_tiled_stream = vec![
             Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
             Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
@@ -377,7 +381,7 @@ mod tests {
             out_snd,
         ));
 
-        // [2,2]
+        // [2, 2, 2]
         let output_tiled_stream = vec![
             Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
             Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
