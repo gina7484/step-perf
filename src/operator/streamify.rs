@@ -228,7 +228,6 @@ where
                         .unwrap();
                 }
                 Err(_) => {
-                    println!("Reached HEre!");
                     return;
                 }
             }
@@ -238,23 +237,26 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use dam::{
-        simulation::ProgramBuilder,
-        utility_contexts::{
-            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext,
-        },
-    };
-    use ndarray::{ArcArray, IxDyn};
-
-    use super::Buffer;
+    use crate::utils::events::LoggableEventSimple;
     use crate::{
+        define_simple_event,
         operator::bufferize::Bufferize,
         primitives::{elem::Elem, tile::Tile},
         utils::events::DummyEvent,
     };
+    use dam::dam_macros::event_type;
+    use dam::{
+        simulation::{
+            LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder, RunOptionsBuilder,
+        },
+        utility_contexts::{
+            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext,
+        },
+    };
+    use serde::{Deserialize, Serialize};
 
+    define_simple_event!(BufferizeEvent);
+    define_simple_event!(StreamifyEvent);
     #[test]
     fn round_trip_test_3d() {
         // Tiled stream shape: [1,3, 2, 2] => [1,3,|2, 2] =>[1,3, 2, 2, 2] (2D repeat)
@@ -287,14 +289,14 @@ mod tests {
         ));
 
         let (buff_snd, buff_rcv) = ctx.bounded(1);
-        ctx.add_child(Bufferize::<DummyEvent, _>::new(
+        ctx.add_child(Bufferize::<BufferizeEvent, _>::new(
             rcv,
             buff_snd,
             bufferize_rank,
         ));
 
         let (out_snd, out_rcv) = ctx.unbounded();
-        ctx.add_child(super::Streamify::<DummyEvent, _>::new(
+        ctx.add_child(super::Streamify::<StreamifyEvent, _>::new(
             vec![2],
             bufferize_rank,
             buff_rcv,
@@ -335,9 +337,28 @@ mod tests {
             |x, y| x == y,
         ));
 
-        ctx.initialize(Default::default())
-            .unwrap()
-            .run(Default::default());
+        let logging = true;
+        if logging {
+            let initialized = ctx.initialize(Default::default()).unwrap();
+            let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
+                // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
+                dam::logging::LogFilter::AllowAll,
+            ));
+            let run_options = run_options.logging(LoggingOptions::Mongo(
+                MongoOptionsBuilder::default()
+                    .db("test_streamify".to_string())
+                    .uri("mongodb://127.0.0.1:27017".to_string())
+                    .build()
+                    .unwrap(),
+            ));
+            let summary = initialized.run(run_options.build().unwrap());
+            // Check the summary
+            println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
+        } else {
+            ctx.initialize(Default::default())
+                .unwrap()
+                .run(Default::default());
+        }
     }
 
     #[test]

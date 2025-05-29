@@ -85,46 +85,49 @@ where
         let mut stop_level = None;
         loop {
             match stream.dequeue(manager) {
-                Ok(ChannelElement { time: _time, data }) => match data {
-                    Elem::Val(value) => {
-                        buffer.push(value);
-                        if shape_info.len() == 1 {
-                            shape_info[0] += 1;
-                        }
+                Ok(ChannelElement { time: _time, data }) => {
+                    match data {
+                        Elem::Val(value) => {
+                            buffer.push(value);
+                            if shape_info.len() == 1 {
+                                shape_info[0] += 1;
+                            }
 
-                        if creation_time.is_none() {
-                            // If it's the first element, set the creation time
-                            creation_time = Some(manager.tick().time());
+                            if creation_time.is_none() {
+                                // If it's the first element, set the creation time
+                                creation_time = Some(manager.tick().time());
+                            }
+                            // As the compute node encodes the overhead to store data, we will not increment cycle here
                         }
-                        // As the compute node encodes the overhead to store data, we will not increment cycle here
+                        Elem::ValStop(value, st) => {
+                            buffer.push(value);
+
+                            let st_as_usize: usize = st.try_into().unwrap_or_else(|_| {
+                                panic!("Error converting a stop token into a usize!")
+                            });
+
+                            if st_as_usize == rank {
+                                shape_info[rank - 1] += 1;
+                                break;
+                            } else if st_as_usize > rank {
+                                shape_info[rank - 1] += 1;
+                                stop_level = Some(st_as_usize - rank);
+                                break;
+                            }
+
+                            if shape_info.len() == st_as_usize {
+                                shape_info[st_as_usize - 1] += 1;
+                                shape_info.push(1);
+                                tracked_shape_info.push(true);
+                            } else if shape_info.len() > st_as_usize
+                                && (tracked_shape_info.len() <= st_as_usize)
+                            {
+                                shape_info[st_as_usize] += 1;
+                            }
+                        }
                     }
-                    Elem::ValStop(value, st) => {
-                        buffer.push(value);
-
-                        let st_as_usize: usize = st.try_into().unwrap_or_else(|_| {
-                            panic!("Error converting a stop token into a usize!")
-                        });
-
-                        if st_as_usize == rank {
-                            shape_info[rank - 1] += 1;
-                            break;
-                        } else if st_as_usize > rank {
-                            shape_info[rank - 1] += 1;
-                            stop_level = Some(st_as_usize - rank);
-                            break;
-                        }
-
-                        if shape_info.len() == st_as_usize {
-                            shape_info[st_as_usize - 1] += 1;
-                            shape_info.push(1);
-                            tracked_shape_info.push(true);
-                        } else if shape_info.len() > st_as_usize
-                            && (tracked_shape_info.len() <= st_as_usize)
-                        {
-                            shape_info[st_as_usize] += 1;
-                        }
-                    }
-                },
+                    manager.incr_cycles(1);
+                }
                 Err(_) if buffer.is_empty() => return Err(BufferizeError::Finished),
                 Err(_) => return Err(BufferizeError::Incomplete),
             }
