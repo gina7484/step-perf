@@ -131,6 +131,12 @@ where
         }
 
         // At this point, we have a full "tensor"
+        dam::logging::log_event(&E::new(
+            creation_time.unwrap(),
+            manager.tick().time(),
+            false,
+        ))
+        .unwrap();
 
         // Our shape info is also backwards because we keep pushing.
         shape_info.reverse();
