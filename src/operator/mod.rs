@@ -6,6 +6,8 @@ pub mod map_accum;
 pub mod dynstreamify;
 pub mod repeat;
 pub mod streamify;
+pub mod partition;
+pub mod reassemble;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;
