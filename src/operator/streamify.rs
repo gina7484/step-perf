@@ -1,19 +1,13 @@
 use std::marker::PhantomData;
 
+use dam::context_tools::*;
 use dam::logging::LogEvent;
-use dam::{context_tools::*, types::StaticallySized};
-use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
 
 use crate::primitives::buffer::Buffer;
 use crate::primitives::elem::Bufferizable;
-use crate::{
-    primitives::elem::{Elem, StopType},
-    ramulator::access::MemoryData,
-};
+use crate::primitives::elem::{Elem, StopType};
 
 use crate::utils::events::LoggableEventSimple;
-
-use crate::primitives::tile::Tile;
 
 /// * `repeat_factor``: The number of repeated linear reads to do for each buffer. The final output shape will be `repeat_factor * buffer.shape()`.
 #[context_macro]
@@ -71,48 +65,64 @@ where
                 }) => {
                     match buff_elem {
                         Elem::Val(buff) => {
-                            // streamify based on the view
-                            for (i, repeat_factor) in self.repeat_factor.iter().rev().enumerate() {
-                                // For each buffer, we will repeat the elements based on the repeat factor
-                                for repeat_i in 0..*repeat_factor {
-                                    let buff_clone = buff.clone();
-                                    for elem in buff_clone.to_elem_iter() {
-                                        match elem {
-                                            Elem::Val(tile) => {
-                                                self.out_stream
-                                                    .enqueue(
-                                                        &self.time,
-                                                        ChannelElement {
-                                                            time: self.time.tick(),
-                                                            data: Elem::Val(tile),
-                                                        },
-                                                    )
-                                                    .unwrap();
+                            if self.repeat_factor.is_empty() {
+                                for elem in buff.to_elem_iter() {
+                                    self.out_stream
+                                        .enqueue(
+                                            &self.time,
+                                            ChannelElement {
+                                                time: self.time.tick(),
+                                                data: elem,
+                                            },
+                                        )
+                                        .unwrap();
+                                    self.time.incr_cycles(1);
+                                }
+                            } else {
+                                for (i, repeat_factor) in
+                                    self.repeat_factor.iter().rev().enumerate()
+                                {
+                                    // For each buffer, we will repeat the elements based on the repeat factor
+                                    for repeat_i in 0..*repeat_factor {
+                                        let buff_clone = buff.clone();
+                                        for elem in buff_clone.to_elem_iter() {
+                                            match elem {
+                                                Elem::Val(tile) => {
+                                                    self.out_stream
+                                                        .enqueue(
+                                                            &self.time,
+                                                            ChannelElement {
+                                                                time: self.time.tick(),
+                                                                data: Elem::Val(tile),
+                                                            },
+                                                        )
+                                                        .unwrap();
 
-                                                self.time.incr_cycles(1);
-                                            }
-                                            Elem::ValStop(tile, stop_lev) => {
-                                                let new_stop_level = if stop_lev == self.rank
-                                                    && repeat_i == (*repeat_factor - 1)
-                                                {
-                                                    stop_lev + 1 + i as StopType
-                                                } else {
-                                                    stop_lev
-                                                };
-                                                self.out_stream
-                                                    .enqueue(
-                                                        &self.time,
-                                                        ChannelElement {
-                                                            time: self.time.tick(),
-                                                            data: Elem::ValStop(
-                                                                tile,
-                                                                new_stop_level,
-                                                            ),
-                                                        },
-                                                    )
-                                                    .unwrap();
+                                                    self.time.incr_cycles(1);
+                                                }
+                                                Elem::ValStop(tile, stop_lev) => {
+                                                    let new_stop_level = if stop_lev == self.rank
+                                                        && repeat_i == (*repeat_factor - 1)
+                                                    {
+                                                        stop_lev + 1 + i as StopType
+                                                    } else {
+                                                        stop_lev
+                                                    };
+                                                    self.out_stream
+                                                        .enqueue(
+                                                            &self.time,
+                                                            ChannelElement {
+                                                                time: self.time.tick(),
+                                                                data: Elem::ValStop(
+                                                                    tile,
+                                                                    new_stop_level,
+                                                                ),
+                                                            },
+                                                        )
+                                                        .unwrap();
 
-                                                self.time.incr_cycles(1);
+                                                    self.time.incr_cycles(1);
+                                                }
                                             }
                                         }
                                     }
@@ -120,47 +130,90 @@ where
                             }
                         }
                         Elem::ValStop(buff, outer_stop_lev) => {
-                            for (i, repeat_factor) in self.repeat_factor.iter().rev().enumerate() {
-                                // For each buffer, we will repeat the elements based on the repeat factor
-                                for repeat_i in 0..*repeat_factor {
-                                    let buff_clone = buff.clone();
-                                    for elem in buff_clone.to_elem_iter() {
-                                        match elem {
-                                            Elem::Val(tile) => {
-                                                self.out_stream
-                                                    .enqueue(
-                                                        &self.time,
-                                                        ChannelElement {
-                                                            time: self.time.tick(),
-                                                            data: Elem::Val(tile),
-                                                        },
-                                                    )
-                                                    .unwrap();
+                            if self.repeat_factor.is_empty() {
+                                for elem in buff.to_elem_iter() {
+                                    match elem {
+                                        Elem::Val(tile) => {
+                                            self.out_stream
+                                                .enqueue(
+                                                    &self.time,
+                                                    ChannelElement {
+                                                        time: self.time.tick(),
+                                                        data: Elem::Val(tile),
+                                                    },
+                                                )
+                                                .unwrap();
 
-                                                self.time.incr_cycles(1);
-                                            }
-                                            Elem::ValStop(tile, stop_lev) => {
-                                                let new_stop_level = if stop_lev == self.rank
-                                                    && repeat_i == (*repeat_factor - 1)
-                                                {
-                                                    stop_lev + outer_stop_lev + 1 + i as StopType
-                                                } else {
-                                                    stop_lev
-                                                };
-                                                self.out_stream
-                                                    .enqueue(
-                                                        &self.time,
-                                                        ChannelElement {
-                                                            time: self.time.tick(),
-                                                            data: Elem::ValStop(
-                                                                tile,
-                                                                new_stop_level,
-                                                            ),
-                                                        },
-                                                    )
-                                                    .unwrap();
+                                            self.time.incr_cycles(1);
+                                        }
+                                        Elem::ValStop(tile, stop_lev) => {
+                                            let new_stop_level = if stop_lev == self.rank {
+                                                stop_lev + outer_stop_lev
+                                            } else {
+                                                stop_lev
+                                            };
+                                            self.out_stream
+                                                .enqueue(
+                                                    &self.time,
+                                                    ChannelElement {
+                                                        time: self.time.tick(),
+                                                        data: Elem::ValStop(tile, new_stop_level),
+                                                    },
+                                                )
+                                                .unwrap();
 
-                                                self.time.incr_cycles(1);
+                                            self.time.incr_cycles(1);
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (i, repeat_factor) in
+                                    self.repeat_factor.iter().rev().enumerate()
+                                {
+                                    // For each buffer, we will repeat the elements based on the repeat factor
+                                    for repeat_i in 0..*repeat_factor {
+                                        let buff_clone = buff.clone();
+                                        for elem in buff_clone.to_elem_iter() {
+                                            match elem {
+                                                Elem::Val(tile) => {
+                                                    self.out_stream
+                                                        .enqueue(
+                                                            &self.time,
+                                                            ChannelElement {
+                                                                time: self.time.tick(),
+                                                                data: Elem::Val(tile),
+                                                            },
+                                                        )
+                                                        .unwrap();
+
+                                                    self.time.incr_cycles(1);
+                                                }
+                                                Elem::ValStop(tile, stop_lev) => {
+                                                    let new_stop_level = if stop_lev == self.rank
+                                                        && repeat_i == (*repeat_factor - 1)
+                                                    {
+                                                        stop_lev
+                                                            + outer_stop_lev
+                                                            + 1
+                                                            + i as StopType
+                                                    } else {
+                                                        stop_lev
+                                                    };
+                                                    self.out_stream
+                                                        .enqueue(
+                                                            &self.time,
+                                                            ChannelElement {
+                                                                time: self.time.tick(),
+                                                                data: Elem::ValStop(
+                                                                    tile,
+                                                                    new_stop_level,
+                                                                ),
+                                                            },
+                                                        )
+                                                        .unwrap();
+
+                                                    self.time.incr_cycles(1);
+                                                }
                                             }
                                         }
                                     }
@@ -170,7 +223,10 @@ where
                     }
                     self.in_stream.dequeue(&self.time).unwrap();
                 }
-                Err(_) => return,
+                Err(_) => {
+                    println!("Reached HEre!");
+                    return;
+                }
             }
         }
     }
@@ -197,6 +253,8 @@ mod tests {
 
     #[test]
     fn round_trip_test_3d() {
+        // Tiled stream shape: [3, 2, 2] => [3,|2, 2] =>[3, 2, 2, 2] (2D repeat)
+        //                                                  |_ repeated
         type VT = u32;
 
         let mut ctx = ProgramBuilder::default();
@@ -265,6 +323,70 @@ mod tests {
             Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
             Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
             Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 4),
+        ];
+
+        ctx.add_child(ApproxCheckerContext::new(
+            move || output_tiled_stream.into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_0d() {
+        // Tiled stream shape: [2, 2] => [|2, 2] => [2, 2]
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+        let bufferize_rank = 2;
+
+        // [3,2,2]
+        let input_tiled_stream = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+        ];
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(
+            || input_tiled_stream.into_iter(),
+            snd,
+        ));
+
+        let (buff_snd, buff_rcv) = ctx.bounded(1);
+        ctx.add_child(Bufferize::<DummyEvent, _>::new(
+            rcv,
+            buff_snd,
+            bufferize_rank,
+        ));
+
+        let (out_snd, out_rcv) = ctx.unbounded();
+        ctx.add_child(super::Streamify::<DummyEvent, _>::new(
+            vec![],
+            bufferize_rank,
+            buff_rcv,
+            out_snd,
+        ));
+
+        // [2,2]
+        let output_tiled_stream = vec![
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
+            Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
+            Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
         ];
 
         ctx.add_child(ApproxCheckerContext::new(
