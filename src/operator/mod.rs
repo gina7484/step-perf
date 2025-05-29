@@ -4,8 +4,7 @@ pub mod map;
 pub mod map_accum;
 // pub mod mux_demux;
 pub mod repeat;
-
-// pub mod streamify;
+pub mod streamify;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;

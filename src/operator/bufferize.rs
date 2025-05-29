@@ -5,7 +5,7 @@ use dam::{context_tools::*, logging::LogEvent};
 use crate::{
     primitives::{
         buffer::{Buffer, BufferizeError},
-        elem::{Bufferizable, Elem},
+        elem::{Bufferizable, Elem, StopType},
         tile::Tile,
     },
     utils::events::LoggableEventSimple,
@@ -15,7 +15,7 @@ use crate::{
 pub struct Bufferize<E, T: Clone> {
     in_stream: Receiver<Elem<T>>,
     out_stream: Sender<Elem<Buffer<T>>>,
-    rank: usize,
+    rank: StopType,
     _phantom: PhantomData<E>,
 }
 
@@ -30,7 +30,7 @@ where
     pub fn new(
         in_stream: Receiver<Elem<T>>,
         out_stream: Sender<Elem<Buffer<T>>>,
-        rank: usize,
+        rank: StopType,
     ) -> Self {
         let ctx = Self {
             in_stream,
@@ -56,7 +56,7 @@ where
 {
     fn run(&mut self) {
         loop {
-            match Buffer::<T>::from_stream::<E>(&self.in_stream, &self.time, self.rank) {
+            match Buffer::<T>::from_stream::<E>(&self.in_stream, &self.time, self.rank as usize) {
                 Ok(buffer) => {
                     self.out_stream
                         .enqueue(
