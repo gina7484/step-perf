@@ -4,6 +4,7 @@ from deepseekv3.utils import torch_tensor_to_npy, create_indices, create_route_s
 import os
 import torch.multiprocessing as mp
 import torch.distributed as dist
+import numpy as np
 
 def create_weights(model: MoE):
     torch.manual_seed(42)
@@ -34,18 +35,18 @@ def save_weights(model: MoE, base_path: str):
     for i, expert in enumerate(model.experts):
         if expert is None:
             continue
-        torch_tensor_to_npy(expert.w1.weight, f"{base_path}/expert_{i}_w1.npy", dtype=torch.float32)
-        torch_tensor_to_npy(expert.w2.weight, f"{base_path}/expert_{i}_w2.npy", dtype=torch.float32)
-        torch_tensor_to_npy(expert.w3.weight, f"{base_path}/expert_{i}_w3.npy", dtype=torch.float32)
-    torch_tensor_to_npy(model.shared_experts.w1.weight, f"{base_path}/shared_w1.npy", dtype=torch.float32)
-    torch_tensor_to_npy(model.shared_experts.w2.weight, f"{base_path}/shared_w2.npy", dtype=torch.float32)
-    torch_tensor_to_npy(model.shared_experts.w3.weight, f"{base_path}/shared_w3.npy", dtype=torch.float32)
+        torch_tensor_to_npy(expert.w1.weight, f"{base_path}/expert_{i}_w1.npy", dtype=np.float32)
+        torch_tensor_to_npy(expert.w2.weight, f"{base_path}/expert_{i}_w2.npy", dtype=np.float32)
+        torch_tensor_to_npy(expert.w3.weight, f"{base_path}/expert_{i}_w3.npy", dtype=np.float32)
+    torch_tensor_to_npy(model.shared_experts.w1.weight, f"{base_path}/shared_w1.npy", dtype=np.float32)
+    torch_tensor_to_npy(model.shared_experts.w2.weight, f"{base_path}/shared_w2.npy", dtype=np.float32)
+    torch_tensor_to_npy(model.shared_experts.w3.weight, f"{base_path}/shared_w3.npy", dtype=np.float32)
 
 def save_tensors(base_path: str, input, indices, scales, output):
-    torch_tensor_to_npy(input, f"{base_path}/input.npy", dtype=torch.float32)
-    torch_tensor_to_npy(indices, f"{base_path}/indices.npy", dtype=torch.int64)
-    torch_tensor_to_npy(scales, f"{base_path}/scales.npy", dtype=torch.float32)
-    torch_tensor_to_npy(output, f"{base_path}/output.npy", dtype=torch.float32)
+    torch_tensor_to_npy(input, f"{base_path}/input.npy", dtype=np.float32)
+    torch_tensor_to_npy(indices, f"{base_path}/indices.npy", dtype=np.int64)
+    torch_tensor_to_npy(scales, f"{base_path}/scales.npy", dtype=np.float32)
+    torch_tensor_to_npy(output, f"{base_path}/output.npy", dtype=np.float32)
 
 
 class MoEParallelTester:
@@ -58,11 +59,11 @@ class MoEParallelTester:
     
     def run_parallel(self, rank, world_size):
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
-        model = MoE(model_args)
+        model = MoE(self.model_args)
         create_weights(model)
         with torch.no_grad():
-            output = self.model(self.input_tensor, self.scales, self.indices)
-            save_weights(model, base_path) 
+            output = model(self.input_tensor, self.scales, self.indices)
+            save_weights(model, self.model_args.base_path) 
         if rank == 0:
             self.output = output
         dist.destroy_process_group()
@@ -86,11 +87,11 @@ if __name__ == "__main__":
         moe_inter_dim=1408,
         n_routed_experts=64,
         n_shared_experts=2,
-        n_activated_experts=6
+        n_activated_experts=6,
+        base_path = "/scratch/zgh23/step-perf/data"
     )
     expert_par = 8
     num_tokens = 1000
-    base_path = "/scratch/zgh23/step-perf/data"
     
     input_tensor, indices, scales = create_inputs(
         model_args.n_routed_experts, model_args.dim, model_args.n_activated_experts, num_tokens
@@ -99,7 +100,7 @@ if __name__ == "__main__":
     tester = MoEParallelTester(model_args, input_tensor, indices, scales)
     tester.kickoff(world_size=expert_par)
     if tester.output is not None:
-        save_tensors(base_path, input_tensor, indices, scales, tester.output)
+        save_tensors(model_args.base_path, input_tensor, indices, scales, tester.output)
         print("Test completed successfully and data saved.")
     else:
         print("Test failed or no output generated.")

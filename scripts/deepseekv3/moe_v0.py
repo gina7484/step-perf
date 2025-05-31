@@ -15,7 +15,7 @@ class ModelArgs:
         n_routed_experts (int): Number of routed experts for MoE layers.
         n_shared_experts (int): Number of shared experts for MoE layers.
         n_activated_experts (int): Number of activated experts in MoE layers.
-        world_size (int): Number of distributed processes or devices.
+        base_path (str): Base path for saving model weights and tensors.
     """
 
     dim: int = 2048
@@ -23,6 +23,7 @@ class ModelArgs:
     n_routed_experts: int = 64
     n_shared_experts: int = 2
     n_activated_experts: int = 6
+    base_path: str = "/scratch/zgh23/step-perf/data"
 
 class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int, dtype=None):
