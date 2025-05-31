@@ -57,27 +57,35 @@ class MoEParallelTester:
         self.scales = scales
         self.output = None
     
-    def run_parallel(self, rank, world_size):
+    def run_parallel(self, rank, world_size, return_dict):
         dist.init_process_group("gloo", rank=rank, world_size=world_size)
         model = MoE(self.model_args)
         create_weights(model)
+        print(f"Rank {rank} finished loading weights.")
         with torch.no_grad():
             output = model(self.input_tensor, self.scales, self.indices)
             save_weights(model, self.model_args.base_path) 
         if rank == 0:
-            self.output = output
+            return_dict['output'] = output
         dist.destroy_process_group()
 
 
-    def run_worker(self, rank, world_size):
-        return self.run_parallel(rank, world_size)
+    def run_worker(self, rank, world_size, return_dict):
+        return self.run_parallel(rank, world_size, return_dict)
 
     def kickoff(self, world_size):
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = '12355'
         
+        # Use Manager to share data between processes
+        manager = mp.Manager()
+        return_dict = manager.dict()
+        
         # Launch processes
-        mp.spawn(self.run_worker, args=(world_size,), nprocs=world_size, join=True)
+        mp.spawn(self.run_worker, args=(world_size, return_dict), nprocs=world_size, join=True)
+        
+        # Get output from shared dictionary
+        self.output = return_dict.get('output', None)
 
 if __name__ == "__main__":
     # Example usage
@@ -91,12 +99,13 @@ if __name__ == "__main__":
         base_path = "/scratch/zgh23/step-perf/data"
     )
     expert_par = 8
-    num_tokens = 1000
+    num_tokens = 10
     
     input_tensor, indices, scales = create_inputs(
         model_args.n_routed_experts, model_args.dim, model_args.n_activated_experts, num_tokens
     )
-
+    print("Indices: ", indices)
+    print("Scales: ", scales)
     tester = MoEParallelTester(model_args, input_tensor, indices, scales)
     tester.kickoff(world_size=expert_par)
     if tester.output is not None:
