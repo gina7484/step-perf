@@ -4,21 +4,6 @@ from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
-
-class ParallelismConfig:
-    def __init__(self, world_size: int):
-        self.world_size = world_size
-        self.rank = dist.get_rank()
-    
-parallel_config = None
-
-def get_world_size():
-    return parallel_config.world_size
-
-def get_rank():
-    return parallel_config.rank
-        
-
 @dataclass
 class ModelArgs:
     """
@@ -49,6 +34,16 @@ class Linear(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x @ self.weight.t()
 
+class MLP(nn.Module):
+    def __init__(self, dim: int, inter_dim: int):
+        super().__init__()
+        self.w1 = Linear(dim, inter_dim)
+        self.w2 = Linear(inter_dim, dim)
+        self.w3 = Linear(dim, inter_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+
 class Expert(nn.Module):
     def __init__(self, dim: int, inter_dim: int):
         super().__init__()
@@ -75,16 +70,17 @@ class MoE(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.dim = args.dim
-        self.world_size = get_world_size()
+        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
         assert args.n_routed_experts % self.world_size == 0, f"Number of experts must be divisible by world size (world_size={self.world_size})"
         self.n_routed_experts = args.n_routed_experts
         self.n_local_experts = args.n_routed_experts // self.world_size
         self.n_activated_experts = args.n_activated_experts
-        self.experts_start_idx = get_rank() * self.n_local_experts
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.experts_start_idx = self.rank * self.n_local_experts
         self.experts_end_idx = self.experts_start_idx + self.n_local_experts
         self.experts = nn.ModuleList([Expert(args.dim, args.moe_inter_dim) if self.experts_start_idx <= i < self.experts_end_idx else None
                                       for i in range(self.n_routed_experts)])
-        self.shared_experts = Linear(args.dim, args.n_shared_experts * args.moe_inter_dim) # Only consider expert paralleism for now
+        self.shared_experts = MLP(args.dim, args.n_shared_experts * args.moe_inter_dim) # Only consider expert paralleism for now
 
     def forward(self, x: torch.Tensor, weights: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         shape = x.size()
@@ -99,11 +95,5 @@ class MoE(nn.Module):
         z = self.shared_experts(x)
         if self.world_size > 1:
             dist.all_reduce(y)
-        return (y + z).view(shape)
+        return (y + z).view(shape)    
 
-def initialize_parallelism(expert_parallel_size: int):
-    global parallel_config
-    if not dist.is_initialized():
-        dist.init_process_group(backend='gloo')
-    
-    parallel_config = ParallelismConfig(world_size=expert_parallel_size)

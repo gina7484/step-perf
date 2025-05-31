@@ -8,22 +8,6 @@ def npy_to_torch_tensor(filename):
     data = np.load(filename, allow_pickle=True)
     return torch.tensor(data, dtype=torch.float32)
 
-def create_multihot(expert_dist, num_tokens, num_selected):
-    """
-    expert_dist: [num_experts] tensor of probabilities for each expert
-    num_tokens: the total number of tokens
-    num_selected: the number of experts to select for each token
-
-    Return a [num_tokens, num_experts] tensor where each row is a multihot vector
-    representing the selected experts for that token.
-    """
-    num_experts = expert_dist.shape[0]
-    selected_experts = torch.multinomial(expert_dist, num_samples=num_selected, replacement=True)
-    multihot = torch.zeros((num_tokens, num_experts), dtype=torch.float32)
-    for i in range(num_tokens):
-        multihot[i, selected_experts[i]] = 1.0
-    return multihot
-
 def create_indices(expert_dist, num_tokens, num_selected):
     """
     Create expert selection indices that maintain the target expert_distribution.
@@ -72,37 +56,3 @@ def create_route_scale(num_tokens, num_selected):
     scale_factors = random_values / random_values.sum(dim=1, keepdim=True)
     
     return scale_factors
-
-
-if __name__ == "__main__":
-    # Example parameters
-    num_experts = 8
-    num_tokens = 1000
-    num_selected = 3  # Select 3 unique experts per token
-    
-    # Create a target expert_distribution (e.g., some experts are more likely)
-    expert_dist = torch.tensor([0.2, 0.15, 0.1, 0.05, 0.15, 0.1, 0.15, 0.1])
-
-
-    def verify_distribution(indices, num_experts):
-        """
-        Verify that the empirical distribution matches the target distribution.
-        
-        Args:
-            indices: [num_tokens, num_selected] tensor of expert indices
-            num_experts: total number of experts
-            
-        Returns:
-            empirical_dist: [num_experts] empirical probability distribution
-        """
-        flat_indices = indices.flatten()
-        counts = torch.bincount(flat_indices, minlength=num_experts)
-        empirical_dist = counts.float() / counts.sum()
-        return empirical_dist
-
-    indices1 = create_indices(expert_dist, num_tokens, num_selected)
-    empirical1 = verify_distribution(indices1, num_experts)
-    print("\nSimple multinomial sampling:")
-    print("Empirical distribution:", empirical1)
-    print("Expert distribution:", expert_dist)
-    print("Max difference:", (empirical1 - expert_dist).abs().max())
