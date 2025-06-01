@@ -104,8 +104,6 @@ if __name__ == "__main__":
     input_tensor, indices, scales = create_inputs(
         model_args.n_routed_experts, model_args.dim, model_args.n_activated_experts, num_tokens
     )
-    print("Indices: ", indices)
-    print("Scales: ", scales)
     tester = MoEParallelTester(model_args, input_tensor, indices, scales)
     tester.kickoff(world_size=expert_par)
     if tester.output is not None:
@@ -113,4 +111,5 @@ if __name__ == "__main__":
         print("Test completed successfully and data saved.")
     else:
         print("Test failed or no output generated.")
+
 
