@@ -15,7 +15,7 @@ use crate::utils::events::LoggableEventSimple;
 use crate::primitives::tile::Tile;
 
 #[context_macro]
-pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
+pub struct OffChipStoreRamulator<E: LoggableEventSimple, T: DAMType> {
     pub tensor_shape_tiled: Vec<usize>,
     pub tile_row: usize,
     pub tile_col: usize,
@@ -32,7 +32,7 @@ pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         T: DAMType + npyz::AutoSerialize,
-    > OffChipStore<E, T>
+    > OffChipStoreRamulator<E, T>
 where
     Elem<Tile<T>>: DAMType,
 {
@@ -83,7 +83,7 @@ where
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         T: DAMType + npyz::AutoSerialize,
-    > Context for OffChipStore<E, T>
+    > Context for OffChipStoreRamulator<E, T>
 where
     Elem<Tile<T>>: DAMType,
 {

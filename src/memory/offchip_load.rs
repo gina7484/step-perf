@@ -20,7 +20,7 @@ pub enum HbmAddrEnum<T: DAMType> {
 }
 
 #[context_macro]
-pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
+pub struct OffChipLoadRamulator<E: LoggableEventSimple, T: DAMType> {
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
     pub stride: Vec<usize>,             // Express the view information with strides
     pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
@@ -40,7 +40,7 @@ pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         T: npyz::Deserialize + DAMType,
-    > OffChipLoad<E, T>
+    > OffChipLoadRamulator<E, T>
 where
     Elem<Tile<T>>: DAMType,
 {
@@ -264,7 +264,7 @@ where
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         T: npyz::Deserialize + DAMType,
-    > Context for OffChipLoad<E, T>
+    > Context for OffChipLoadRamulator<E, T>
 where
     Elem<Tile<T>>: DAMType,
 {
@@ -337,7 +337,7 @@ where
 mod test {
     use std::default;
 
-    use super::{HbmAddrEnum, OffChipLoad};
+    use super::{HbmAddrEnum, OffChipLoadRamulator};
     use crate::primitives::tile::Tile;
     // use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
 
@@ -536,7 +536,7 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-        let mat1 = OffChipLoad::<InputLoad, f32>::new(
+        let mat1 = OffChipLoadRamulator::<InputLoad, f32>::new(
             vec![2, 1], // As we don't tile K, the second element is 1
             vec![1, 0, 1],
             vec![2, 4, 1],
@@ -607,7 +607,7 @@ mod test {
            let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
            let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
 
-           let mat1 = OffChipLoad::<InputLoad, f32>::new(
+           let mat1 = OffChipLoadRamulator::<InputLoad, f32>::new(
                vec![2, 1], // As we don't tile K, the second element is 1
                vec![1, 0, 1],
                vec![2, 4, 1],
@@ -630,7 +630,7 @@ mod test {
            // let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
            // let (on_chip_snd2, on_chip_rcv2) = ctx.unbounded();
 
-           // let mat2 = OffChipLoad::<WeightQLoad>::new(
+           // let mat2 = OffChipLoadRamulator::<WeightQLoad>::new(
            //     [1, 4], // As we don't tile K, the second element is 1
            //     vec![0, 4, 1],
            //     vec![2, 1, 4],
