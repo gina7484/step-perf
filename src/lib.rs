@@ -2,18 +2,32 @@ pub mod functions;
 pub mod memory;
 pub mod operator;
 pub mod primitives;
+pub mod proto_driver;
 pub mod ramulator;
 pub mod test;
 pub mod utils;
 
+use std::fs;
+
+use prost::Message;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
-#[pyfunction]
-fn run_graph(py: Python) -> (bool) {
-    println!("From run_graph in Rust");
+use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
 
-    return true;
+#[pyfunction]
+fn run_graph(py: Python, proto: String) -> (bool, u64) {
+    let step_graph: ProgramGraph = {
+        let file_contents = fs::read(proto).unwrap();
+        ProgramGraph::decode(file_contents.as_slice()).unwrap()
+    };
+
+    // let (passed, cycles) = parse_proto(step_graph);
+
+    // println!("Passed: {}, Elapsed Cycles: {}", passed, cycles);
+
+    // return (passed, cycles);
+    (true, 0)
 }
 
 #[pymodule]
