@@ -4,10 +4,10 @@ pub mod map;
 pub mod map_accum;
 // pub mod mux_demux;
 pub mod dynstreamify;
-pub mod repeat;
-pub mod streamify;
 pub mod partition;
 pub mod reassemble;
+pub mod repeat;
+pub mod streamify;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;

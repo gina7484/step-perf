@@ -13,6 +13,7 @@ pub struct HBMConfig {
     pub per_channel_latency: u64,
     pub per_channel_init_interval: u64,
     pub per_channel_outstanding: usize,
+    pub per_channel_start_up_time: u64, // Time to wait before the first request can be processed
 }
 
 #[derive(Constructor, Clone, Default, Debug)]
@@ -59,6 +60,7 @@ pub struct HBMChannelContext {
     latency: u64,
     init_interval: u64,
     outstanding: usize,
+    start_up_time: u64,
 }
 
 impl HBMChannelContext {
@@ -68,6 +70,7 @@ impl HBMChannelContext {
         per_channel_latency: u64,
         per_channel_init_interval: u64,
         per_channel_outstanding: usize,
+        per_channel_start_up_time: u64,
     ) -> Self {
         let ctx = Self {
             in_request,
@@ -75,6 +78,7 @@ impl HBMChannelContext {
             latency: per_channel_latency,
             init_interval: per_channel_init_interval,
             outstanding: per_channel_outstanding,
+            start_up_time: per_channel_start_up_time,
             context_info: Default::default(),
         };
         ctx.in_request.attach_receiver(&ctx);
@@ -86,6 +90,7 @@ impl HBMChannelContext {
 
 impl Context for HBMChannelContext {
     fn run(&mut self) {
+        let mut initial_request = true;
         loop {
             // check if there's enough slot for in-flight requests (self.outstanding)
             // to incorporate this, we might have to move to peek
@@ -94,11 +99,17 @@ impl Context for HBMChannelContext {
                     match data {
                         RequestEnum::Request(req) => {
                             // Process the request
+                            let enq_start_time = if initial_request {
+                                // If this is the first request, we need to wait for the start-up time
+                                self.time.tick() + self.start_up_time
+                            } else {
+                                self.time.tick()
+                            };
                             self.out_rsp
                                 .enqueue(
                                     &self.time,
                                     ChannelElement {
-                                        time: self.time.tick() + self.latency,
+                                        time: enq_start_time + self.latency,
                                         data: Response::new(req.is_write, req.address, req.id),
                                     },
                                 )
@@ -261,6 +272,7 @@ impl HBMContext {
                 config.per_channel_latency,
                 config.per_channel_init_interval,
                 config.per_channel_outstanding,
+                config.per_channel_start_up_time,
             ));
 
             channels.push(ChannelBundle::new(req_snd, rsp_rcv));
@@ -435,6 +447,7 @@ mod test {
                 per_channel_latency: 4,
                 per_channel_init_interval: 4,
                 per_channel_outstanding: 1, // For now, this does not have any effect
+                per_channel_start_up_time: 14, // Time to wait before the first request can be processed
             },
         );
 
@@ -529,6 +542,7 @@ mod test {
                 per_channel_latency: 4,
                 per_channel_init_interval: 4,
                 per_channel_outstanding: 1, // For now, this does not have any effect
+                per_channel_start_up_time: 14, // Time to wait before the first request can be processed
             },
         );
 
