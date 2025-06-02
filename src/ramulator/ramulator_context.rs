@@ -682,15 +682,8 @@ mod test {
         let (raddr_snd, raddr_rcv) = parent.unbounded();
         let (rdata_snd, rdata_rcv) = parent.unbounded::<MemoryData>();
         let (resp_addr_snd, resp_addr_rcv) = parent.unbounded::<u64>();
-        /*
-        let addrs = {
-            let rand_stride = vec![12u64, 0, 4, 2, 6, 9, 11, 12, 19, 24, 36, 72, 3, 5, 9, 11];
-            let addr_iter =
-                (0..(MEM_SIZE as u64)).map(move |x| rand_stride[(x % 16) as usize] * ADDR_OFFSET);
-            move || addr_iter.clone()
-        };
-        */
-        let addrs = || (0..(MEM_SIZE as u64)).map(|x| 0); //x * ADDR_OFFSET);
+
+        let addrs = || (0..(MEM_SIZE as u64)).map(|x| 0);
         parent.add_child(GeneratorContext::new(addrs, raddr_snd));
 
         let mut read_ctx = FunctionContext::new();
@@ -725,50 +718,43 @@ mod test {
         });
 
         // // ========================== Read Bundle 2 =============================
-        // let (raddr_snd2, raddr_rcv2) = parent.unbounded();
-        // let (rdata_snd2, rdata_rcv2) = parent.unbounded::<MemoryData>();
-        // let (resp_addr_snd2, resp_addr_rcv2) = parent.unbounded::<u64>();
-        // /*
-        // let addrs2 = {
-        //     let rand_stride = vec![12u64, 0, 4, 2, 6, 9, 11, 12, 19, 24, 36, 72, 3, 5, 9, 11];
-        //     let addr_iter =
-        //         (0..(MEM_SIZE as u64)).map(move |x| rand_stride[(x % 16) as usize] * ADDR_OFFSET);
-        //     move || addr_iter.clone()
-        // };
-        //  */
-        // let addrs2 = || (0..(MEM_SIZE as u64)).map(|x| 32); //x * ADDR_OFFSET);
-        // parent.add_child(GeneratorContext::new(addrs2, raddr_snd2));
+        let (raddr_snd2, raddr_rcv2) = parent.unbounded();
+        let (rdata_snd2, rdata_rcv2) = parent.unbounded::<MemoryData>();
+        let (resp_addr_snd2, resp_addr_rcv2) = parent.unbounded::<u64>();
 
-        // let mut read_ctx2 = FunctionContext::new();
-        // rdata_rcv2.attach_receiver(&read_ctx2);
-        // resp_addr_rcv2.attach_receiver(&read_ctx2);
-        // read_ctx2.set_run(move |time| {
-        //     let mut received_addr_time: Vec<(u64, u64, u64)> = vec![];
-        //     for _ in 0..MEM_SIZE {
-        //         let (addr, addr_time) = match resp_addr_rcv2.dequeue(time) {
-        //             Ok(addr) => (addr.data, time.tick().time()),
-        //             Err(_) => {
-        //                 panic!("Failed to dequeue response address");
-        //             }
-        //         };
-        //         let data_time = match rdata_rcv2.dequeue(time) {
-        //             Ok(addr) => time.tick().time(),
-        //             Err(_) => {
-        //                 panic!("Failed to dequeue response data");
-        //             }
-        //         };
-        //         received_addr_time.push((addr, addr_time, data_time));
-        //         // time.incr_cycles(1);
-        //     }
-        //     println!("Received: {:?}", received_addr_time);
-        // });
-        // parent.add_child(read_ctx2);
+        let addrs2 = || (0..(MEM_SIZE as u64)).map(|x| 32);
+        parent.add_child(GeneratorContext::new(addrs2, raddr_snd2));
 
-        // mem_context.add_reader(ReadBundle {
-        //     addr: Box::new(raddr_rcv2),
-        //     resp: Box::new(rdata_snd2),
-        //     resp_addr: Box::new(resp_addr_snd2),
-        // });
+        let mut read_ctx2 = FunctionContext::new();
+        rdata_rcv2.attach_receiver(&read_ctx2);
+        resp_addr_rcv2.attach_receiver(&read_ctx2);
+        read_ctx2.set_run(move |time| {
+            let mut received_addr_time: Vec<(u64, u64, u64)> = vec![];
+            for _ in 0..MEM_SIZE {
+                let (addr, addr_time) = match resp_addr_rcv2.dequeue(time) {
+                    Ok(addr) => (addr.data, time.tick().time()),
+                    Err(_) => {
+                        panic!("Failed to dequeue response address");
+                    }
+                };
+                let data_time = match rdata_rcv2.dequeue(time) {
+                    Ok(addr) => time.tick().time(),
+                    Err(_) => {
+                        panic!("Failed to dequeue response data");
+                    }
+                };
+                received_addr_time.push((addr, addr_time, data_time));
+                // time.incr_cycles(1);
+            }
+            println!("Received: {:?}", received_addr_time);
+        });
+        parent.add_child(read_ctx2);
+
+        mem_context.add_reader(ReadBundle {
+            addr: Box::new(raddr_rcv2),
+            resp: Box::new(rdata_snd2),
+            resp_addr: Box::new(resp_addr_snd2),
+        });
 
         parent.add_child(mem_context);
 
