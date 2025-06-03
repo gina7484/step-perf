@@ -121,7 +121,7 @@ where
                         }
                         tile_data
                     }
-                    Elem::ValStop(tile_data, _) => {
+                    Elem::ValStop(tile_data, s) => {
                         if self.store_path.is_some() {
                             assert!(tile_data.underlying.is_some());
 
@@ -148,7 +148,7 @@ where
                         tile_data
                     }
                 },
-                Err(_) => {
+                Err(v) => {
                     if self.store_path.is_some() {
                         // Save the collected so far and return
 
@@ -162,10 +162,13 @@ where
                         let data: Vec<T> = accum.into_raw_vec_and_offset().0;
 
                         // Save data in .npy
-                        let data_file_path = format!("output.npy");
-                        match npyz::to_file_1d(self.store_path.clone().unwrap(), data) {
+                        let data_file_path = format!("{}.npy", self.store_path.clone().unwrap());
+                        match npyz::to_file_1d(data_file_path, data) {
                             Ok(_) => {}
-                            Err(_) => panic!("Error while writing data to {}", data_file_path),
+                            Err(_) => panic!(
+                                "Error while writing data to {}",
+                                format!("{}.npy", self.store_path.clone().unwrap())
+                            ),
                         }
 
                         // save metadata as json file
@@ -176,7 +179,8 @@ where
                             self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
                         shape.append(&mut vec![total_rows, total_cols]);
 
-                        let meta_file_path: String = format!("output.json");
+                        let meta_file_path: String =
+                            format!("{}.json", self.store_path.clone().unwrap());
                         let meta_file = File::create(meta_file_path.clone()).unwrap();
                         match serde_json::to_writer(meta_file, &shape) {
                             Ok(_) => {}

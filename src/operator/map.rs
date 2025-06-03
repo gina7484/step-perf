@@ -104,7 +104,9 @@ where
                 },
                 (Ok(_), Err(_)) => panic!("One stream closed earlier"),
                 (Err(_), Ok(_)) => panic!("One stream closed earlier"),
-                (Err(_), Err(_)) => return,
+                (Err(_), Err(_)) => {
+                    return;
+                }
             };
 
             let start_time = self.time.tick().time();

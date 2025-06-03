@@ -12,6 +12,7 @@ use serde_json::de::Read;
 
 #[derive(Debug, Clone)]
 pub struct HBMConfig {
+    pub addr_offset: u64, // number of bytes read for each request
     pub channel_num: usize,
     pub per_channel_latency: u64,
     pub per_channel_init_interval: u64,
@@ -22,6 +23,10 @@ pub struct HBMConfig {
 impl<'py> FromPyObject<'py> for HBMConfig {
     fn extract_bound(obj: &pyo3::Bound<'py, PyAny>) -> PyResult<Self> {
         // Retrieve each attribute from the object
+        let addr_offset_obj = obj.getattr("addr_offset").map_err(|_| {
+            PyTypeError::new_err("Expected 'addr_offset' attribute in HBMConfig object")
+        })?;
+
         let channel_num_obj = obj.getattr("channel_num").map_err(|_| {
             PyTypeError::new_err("Expected 'channel_num' attribute in HBMConfig object")
         })?;
@@ -49,6 +54,10 @@ impl<'py> FromPyObject<'py> for HBMConfig {
             })?;
 
         // Extract each field into the appropriate type
+        let addr_offset: u64 = addr_offset_obj
+            .extract()
+            .map_err(|_| PyTypeError::new_err("Expected 'addr_offset' to be an integer"))?;
+
         let channel_num: usize = channel_num_obj
             .extract()
             .map_err(|_| PyTypeError::new_err("Expected 'channel_num' to be an integer"))?;
@@ -73,6 +82,7 @@ impl<'py> FromPyObject<'py> for HBMConfig {
             })?;
 
         Ok(HBMConfig {
+            addr_offset,
             channel_num,
             per_channel_latency,
             per_channel_init_interval,
@@ -509,6 +519,7 @@ mod test {
         let mut mem_context = HBMContext::new(
             &mut parent,
             HBMConfig {
+                addr_offset: 64,
                 channel_num: 8,
                 per_channel_latency: 4,
                 per_channel_init_interval: 4,
@@ -604,6 +615,7 @@ mod test {
         let mut mem_context = HBMContext::new(
             &mut parent,
             HBMConfig {
+                addr_offset: 64,
                 channel_num: 8,
                 per_channel_latency: 4,
                 per_channel_init_interval: 4,

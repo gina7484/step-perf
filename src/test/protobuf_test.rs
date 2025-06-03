@@ -42,6 +42,7 @@ mod test {
             step_graph,
             false,
             HBMConfig {
+                addr_offset: 64, // 32 elements in this test case
                 channel_num: 8,
                 per_channel_latency: 4,
                 per_channel_init_interval: 4,

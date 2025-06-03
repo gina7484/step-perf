@@ -27,7 +27,7 @@ fn build_from_proto<'a>(
     let mut mem_context = HBMContext::new(builder, hbm_config.clone());
 
     for operation in step_graph.operators {
-        println!("processing {:?}", operation);
+        println!("processing {:?}\n", operation);
         match operation.op_type.clone().unwrap() {
             OpType::Binarymap(binary_map) => match (
                 binary_map.dtype_a.clone().unwrap().r#type.clone().unwrap(),
@@ -101,7 +101,7 @@ fn build_from_proto<'a>(
                             off_chip_load.tile_col as usize,
                             4,
                             0,
-                            0,
+                            hbm_config.addr_offset,
                             addr_snd,
                             resp_rcv,
                             on_chip_snd,
@@ -141,7 +141,7 @@ fn build_from_proto<'a>(
                             off_chip_store.tile_col as usize,
                             Some(off_chip_store.store_path),
                             0,
-                            64,
+                            hbm_config.addr_offset,
                             on_chip_rcv,
                             addr_snd,
                             resp_rcv,

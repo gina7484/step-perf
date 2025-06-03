@@ -662,7 +662,7 @@ mod test {
 
     use crate::define_simple_event;
     use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle};
-    use crate::utils::events::{SimpleEvent, LoggableEventSimple, DUMMY_ID};
+    use crate::utils::events::{LoggableEventSimple, SimpleEvent, DUMMY_ID};
     use dam::dam_macros::event_type;
     use dam::simulation::{InitializationOptions, RunOptions};
     use dam::utility_contexts::{FunctionContext, PrinterContext};
@@ -831,6 +831,7 @@ mod test {
         let mut mem_context = HBMContext::new(
             &mut parent,
             HBMConfig {
+                addr_offset: 64, // 64 bytes
                 channel_num: 8,
                 per_channel_latency: 4,
                 per_channel_init_interval: 4,

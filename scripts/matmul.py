@@ -52,7 +52,7 @@ def reconstruct_numpy(output_path: str, delete_npy: bool = False) -> NDArray:
 
 
 def check_gold(sim_out_path, gold_path):
-    out_sim = reconstruct_numpy(sim_out_path, delete_npy=True)
+    out_sim = reconstruct_numpy(sim_out_path, delete_npy=False)
     gold: NDArray = np.load(f"{gold_path}.npy")
     try:
         torch.testing.assert_close(
@@ -64,5 +64,7 @@ def check_gold(sim_out_path, gold_path):
 
 
 # generate_input_gold()
-check_gold("/home/ginasohn/step-perf/output", "/home/ginasohn/step-perf/gold")
+check_gold(
+    "/home/ginasohn/step_tl/step-perf/output", "/home/ginasohn/step_tl/step-perf/gold"
+)
 # print(np.load("/home/ginasohn/step-perf/gold.npy"))

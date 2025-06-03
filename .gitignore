@@ -6,3 +6,4 @@ data/
 *.html
 *.npy
 *.pb
+*.json
