@@ -26,6 +26,7 @@ pub struct DynStreamify<E: LoggableEventSimple, T: Bufferizable + Clone, R: Clon
     pub ref_stream: Receiver<Elem<R>>, // rank = repeat_rank + in_stream's rank
     pub in_stream: Receiver<Elem<Buffer<T>>>,
     pub out_stream: Sender<Elem<T>>,
+    pub id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -43,6 +44,7 @@ where
         ref_stream: Receiver<Elem<R>>,
         in_stream: Receiver<Elem<Buffer<T>>>,
         out_stream: Sender<Elem<T>>,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             rank,
@@ -50,6 +52,7 @@ where
             ref_stream,
             in_stream,
             out_stream,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -241,8 +244,13 @@ where
                         }
                     }
                     self.in_stream.dequeue(&self.time).unwrap();
-                    dam::logging::log_event(&E::new(start_time, self.time.tick().time(), false))
-                        .unwrap();
+                    dam::logging::log_event(&E::new(
+                        self.id,
+                        start_time,
+                        self.time.tick().time(),
+                        false,
+                    ))
+                    .unwrap();
                 }
                 Err(_) => return,
             }
@@ -266,7 +274,7 @@ mod tests {
     use crate::{
         operator::bufferize::Bufferize,
         primitives::{elem::Elem, tile::Tile},
-        utils::events::DummyEvent,
+        utils::events::{SimpleEvent, DUMMY_ID},
     };
 
     #[test]
@@ -320,8 +328,8 @@ mod tests {
             ref_snd,
         ));
 
-        ctx.add_child(super::DynStreamify::<DummyEvent, _, _>::new(
-            2, 1, ref_rcv, rcv, out_snd,
+        ctx.add_child(super::DynStreamify::<SimpleEvent, _, _>::new(
+            2, 1, ref_rcv, rcv, out_snd, DUMMY_ID,
         ));
 
         ctx.add_child(ApproxCheckerContext::new(

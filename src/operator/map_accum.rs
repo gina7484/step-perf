@@ -20,6 +20,7 @@ pub struct BinaryMapAccum<E, T: DAMType, OT: DAMType> {
     rank: StopType,
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
+    id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -43,6 +44,7 @@ where
         rank: StopType,
         compute_bw: u64, // FLOPs / cycle
         write_back_mu: bool,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in1_stream,
@@ -53,6 +55,7 @@ where
             rank,
             compute_bw,
             write_back_mu,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -122,6 +125,7 @@ where
 
                         // Logging
                         dam::logging::log_event(&E::new(
+                            self.id,
                             self.time.tick().time() - roofline_cycles,
                             self.time.tick().time(),
                             false,
@@ -164,6 +168,7 @@ where
 
                             // Logging
                             dam::logging::log_event(&E::new(
+                                self.id,
                                 self.time.tick().time() - roofline_cycles,
                                 self.time.tick().time(),
                                 false,
@@ -209,6 +214,7 @@ where
 
                             // Logging
                             dam::logging::log_event(&E::new(
+                                self.id,
                                 self.time.tick().time() - roofline_cycles,
                                 self.time.tick().time(),
                                 false,
@@ -266,6 +272,7 @@ where
 
                             // Logging
                             dam::logging::log_event(&E::new(
+                                self.id,
                                 self.time.tick().time() - roofline_cycles,
                                 self.time.tick().time(),
                                 true,

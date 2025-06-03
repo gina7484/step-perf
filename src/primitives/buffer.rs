@@ -68,6 +68,7 @@ where
         stream: &Receiver<Elem<T>>,
         manager: &TimeManager,
         rank: usize,
+        id: u32,
     ) -> Result<Self, BufferizeError<T>> {
         assert!(
             rank > 0,
@@ -135,6 +136,7 @@ where
 
         // At this point, we have a full "tensor"
         dam::logging::log_event(&E::new(
+            id,
             creation_time.unwrap(),
             manager.tick().time(),
             false,
@@ -245,7 +247,7 @@ mod tests {
     use super::Buffer;
     use crate::{
         primitives::{buffer, elem::Elem, tile::Tile},
-        utils::events::DummyEvent,
+        utils::events::{SimpleEvent, DUMMY_ID},
     };
 
     #[test]
@@ -370,7 +372,7 @@ mod tests {
         let mut output_check = FunctionContext::new();
         rcv.attach_receiver(&output_check);
         output_check.set_run(move |time| {
-            let buffer = Buffer::from_stream::<DummyEvent>(&rcv, time, 2).unwrap();
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 2, DUMMY_ID).unwrap();
             assert_eq!(buffer, tensor);
         });
         ctx.add_child(output_check);
@@ -414,7 +416,7 @@ mod tests {
         let mut output_check = FunctionContext::new();
         rcv.attach_receiver(&output_check);
         output_check.set_run(move |time| {
-            let buffer = Buffer::from_stream::<DummyEvent>(&rcv, time, 3).unwrap();
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 3, DUMMY_ID).unwrap();
             assert_eq!(buffer, tensor);
             assert!(buffer.eq_with_time(&tensor));
         });

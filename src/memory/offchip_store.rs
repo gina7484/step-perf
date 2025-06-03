@@ -2,6 +2,7 @@ use std::{fs::File, marker::PhantomData};
 
 use dam::context_tools::*;
 use dam::logging::LogEvent;
+use graphviz_rust::attributes::id;
 use half::f16;
 use ndarray::{concatenate, Array2, Axis};
 
@@ -24,7 +25,8 @@ pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub addr_offset: u64,    // The data received per request
     pub on_chip_rcv: Receiver<Elem<Tile<T>>>,
     pub addr_snd: Sender<u64>,
-    pub ack_rcv: Receiver<bool>,
+    pub ack_rcv: Receiver<u64>,
+    pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -44,7 +46,8 @@ where
         addr_offset: u64,
         on_chip_rcv: Receiver<Elem<Tile<T>>>,
         addr_snd: Sender<u64>,
-        ack_rcv: Receiver<bool>,
+        ack_rcv: Receiver<u64>,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             tensor_shape_tiled,
@@ -56,6 +59,7 @@ where
             on_chip_rcv,
             addr_snd,
             ack_rcv,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -233,6 +237,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
                 false,
@@ -257,6 +262,7 @@ pub struct OffChipStoreRamulator<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<u64>,
     pub wdata_snd: Sender<MemoryData>,
     pub ack_rcv: Receiver<bool>,
+    pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -278,6 +284,7 @@ where
         addr_snd: Sender<u64>,
         wdata_snd: Sender<MemoryData>,
         ack_rcv: Receiver<bool>,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             tensor_shape_tiled,
@@ -290,6 +297,7 @@ where
             addr_snd,
             wdata_snd,
             ack_rcv,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -478,6 +486,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
                 false,

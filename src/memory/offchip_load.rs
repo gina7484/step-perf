@@ -33,6 +33,7 @@ pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<u64>,
     pub resp_addr_rcv: Receiver<u64>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -56,6 +57,7 @@ where
         addr_snd: Sender<u64>,
         resp_addr_rcv: Receiver<u64>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
+        id: u32,
     ) -> Self {
         let underlying = match npy_path {
             Some(file_path) => {
@@ -98,6 +100,7 @@ where
             addr_snd,
             resp_addr_rcv,
             on_chip_snd,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -305,6 +308,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
                 is_stop,
@@ -343,6 +347,7 @@ pub struct OffChipLoadRamulator<E: LoggableEventSimple, T: DAMType> {
     pub resp_addr_rcv: Receiver<u64>,
     pub rdata_rcv: Receiver<MemoryData>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -367,6 +372,7 @@ where
         resp_addr_rcv: Receiver<u64>,
         rdata_rcv: Receiver<MemoryData>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
+        id: u32,
     ) -> Self {
         let underlying = match npy_path {
             Some(file_path) => {
@@ -410,6 +416,7 @@ where
             resp_addr_rcv,
             rdata_rcv,
             on_chip_snd,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -619,6 +626,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
                 is_stop,
@@ -654,7 +662,7 @@ mod test {
 
     use crate::define_simple_event;
     use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle};
-    use crate::utils::events::{DummyEvent, LoggableEventSimple};
+    use crate::utils::events::{SimpleEvent, LoggableEventSimple, DUMMY_ID};
     use dam::dam_macros::event_type;
     use dam::simulation::{InitializationOptions, RunOptions};
     use dam::utility_contexts::{FunctionContext, PrinterContext};
@@ -836,7 +844,7 @@ mod test {
         let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
         let (data_snd, data_rcv) = parent.unbounded();
 
-        parent.add_child(OffChipLoad::<DummyEvent, f32>::new(
+        parent.add_child(OffChipLoad::<SimpleEvent, f32>::new(
             vec![2, 1],
             vec![1, 1],
             vec![2, 1],
@@ -849,6 +857,7 @@ mod test {
             raddr_snd,
             resp_addr_rcv,
             data_snd,
+            DUMMY_ID,
         ));
 
         parent.add_child(PrinterContext::new(data_rcv));

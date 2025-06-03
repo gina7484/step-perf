@@ -3,22 +3,25 @@
 use dam::dam_macros::event_type;
 use serde::{Deserialize, Serialize};
 
+pub const DUMMY_ID: u32 = 0;
+
 pub trait LoggableEventSimple {
-    fn new(start_ns: u64, end_ns: u64, is_stop: bool) -> Self;
+    fn new(id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self;
 }
 
-/// A dummy event to pass as a generic if you don't want to do logging
 #[derive(Serialize, Deserialize, Debug)]
 #[event_type]
-pub struct DummyEvent {
+pub struct SimpleEvent {
+    id: u32,
     start_ns: u64,
     end_ns: u64,
     is_stop: bool,
 }
 
-impl LoggableEventSimple for DummyEvent {
-    fn new(start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
-        DummyEvent {
+impl LoggableEventSimple for SimpleEvent {
+    fn new(id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
+        SimpleEvent {
+            id,
             start_ns,
             end_ns,
             is_stop,
@@ -26,8 +29,8 @@ impl LoggableEventSimple for DummyEvent {
     }
 }
 
-impl DummyEvent {
-    pub const NAME: &'static str = stringify!(DummyEvent);
+impl SimpleEvent {
+    pub const NAME: &'static str = stringify!(SimpleEvent);
 }
 
 #[macro_export]
@@ -36,6 +39,7 @@ macro_rules! define_simple_event {
         #[derive(Serialize, Deserialize, Debug)]
         #[event_type]
         struct $event_name {
+            id: u32,
             start_ns: u64,
             end_ns: u64,
             is_stop: bool,
@@ -43,8 +47,9 @@ macro_rules! define_simple_event {
 
         // Implement the trait for $event_name
         impl LoggableEventSimple for $event_name {
-            fn new(start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
+            fn new(id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
                 $event_name {
+                    id,
                     start_ns,
                     end_ns,
                     is_stop,

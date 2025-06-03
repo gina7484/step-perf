@@ -6,14 +6,80 @@ use dam::{
     types::StaticallySized,
 };
 use derive_more::Constructor;
+use pyo3::exceptions::PyTypeError;
+use pyo3::prelude::*;
 use serde_json::de::Read;
 
+#[derive(Debug, Clone)]
 pub struct HBMConfig {
     pub channel_num: usize,
     pub per_channel_latency: u64,
     pub per_channel_init_interval: u64,
     pub per_channel_outstanding: usize,
     pub per_channel_start_up_time: u64, // Time to wait before the first request can be processed
+}
+
+impl<'py> FromPyObject<'py> for HBMConfig {
+    fn extract_bound(obj: &pyo3::Bound<'py, PyAny>) -> PyResult<Self> {
+        // Retrieve each attribute from the object
+        let channel_num_obj = obj.getattr("channel_num").map_err(|_| {
+            PyTypeError::new_err("Expected 'channel_num' attribute in HBMConfig object")
+        })?;
+
+        let per_channel_latency_obj = obj.getattr("per_channel_latency").map_err(|_| {
+            PyTypeError::new_err("Expected 'per_channel_latency' attribute in HBMConfig object")
+        })?;
+
+        let per_channel_init_interval_obj =
+            obj.getattr("per_channel_init_interval").map_err(|_| {
+                PyTypeError::new_err(
+                    "Expected 'per_channel_init_interval' attribute in HBMConfig object",
+                )
+            })?;
+
+        let per_channel_outstanding_obj = obj.getattr("per_channel_outstanding").map_err(|_| {
+            PyTypeError::new_err("Expected 'per_channel_outstanding' attribute in HBMConfig object")
+        })?;
+
+        let per_channel_start_up_time_obj =
+            obj.getattr("per_channel_start_up_time").map_err(|_| {
+                PyTypeError::new_err(
+                    "Expected 'per_channel_start_up_time' attribute in HBMConfig object",
+                )
+            })?;
+
+        // Extract each field into the appropriate type
+        let channel_num: usize = channel_num_obj
+            .extract()
+            .map_err(|_| PyTypeError::new_err("Expected 'channel_num' to be an integer"))?;
+
+        let per_channel_latency: u64 = per_channel_latency_obj
+            .extract()
+            .map_err(|_| PyTypeError::new_err("Expected 'per_channel_latency' to be an integer"))?;
+
+        let per_channel_init_interval: u64 =
+            per_channel_init_interval_obj.extract().map_err(|_| {
+                PyTypeError::new_err("Expected 'per_channel_init_interval' to be an integer")
+            })?;
+
+        let per_channel_outstanding: usize =
+            per_channel_outstanding_obj.extract().map_err(|_| {
+                PyTypeError::new_err("Expected 'per_channel_outstanding' to be an integer")
+            })?;
+
+        let per_channel_start_up_time: u64 =
+            per_channel_start_up_time_obj.extract().map_err(|_| {
+                PyTypeError::new_err("Expected 'per_channel_start_up_time' to be an integer")
+            })?;
+
+        Ok(HBMConfig {
+            channel_num,
+            per_channel_latency,
+            per_channel_init_interval,
+            per_channel_outstanding,
+            per_channel_start_up_time,
+        })
+    }
 }
 
 #[derive(Constructor, Clone, Default, Debug)]
@@ -299,7 +365,7 @@ impl HBMContext {
         self.readers.push(ReadBundle { addr, resp });
     }
 
-    pub fn add_writerr(&mut self, WriteBundle { addr, resp }: WriteBundle) {
+    pub fn add_writer(&mut self, WriteBundle { addr, resp }: WriteBundle) {
         addr.attach_receiver(self);
         resp.attach_sender(self);
         self.writers.push(WriteBundle { addr, resp });

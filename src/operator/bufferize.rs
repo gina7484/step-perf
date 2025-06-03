@@ -16,6 +16,7 @@ pub struct Bufferize<E, T: Clone> {
     in_stream: Receiver<Elem<T>>,
     out_stream: Sender<Elem<Buffer<T>>>,
     rank: StopType,
+    id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -31,11 +32,13 @@ where
         in_stream: Receiver<Elem<T>>,
         out_stream: Sender<Elem<Buffer<T>>>,
         rank: StopType,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in_stream,
             out_stream,
             rank,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -56,7 +59,12 @@ where
 {
     fn run(&mut self) {
         loop {
-            match Buffer::<T>::from_stream::<E>(&self.in_stream, &self.time, self.rank as usize) {
+            match Buffer::<T>::from_stream::<E>(
+                &self.in_stream,
+                &self.time,
+                self.rank as usize,
+                self.id,
+            ) {
                 Ok(buffer) => {
                     self.out_stream
                         .enqueue(
@@ -103,7 +111,7 @@ mod tests {
     use crate::{
         operator::bufferize::Bufferize,
         primitives::{elem::Elem, tile::Tile},
-        utils::events::DummyEvent,
+        utils::events::{SimpleEvent, DUMMY_ID},
     };
 
     #[test]
@@ -125,7 +133,7 @@ mod tests {
         ctx.add_child(GeneratorContext::new(|| golden.into_iter(), snd));
 
         let (out_snd, out_rcv) = ctx.unbounded();
-        ctx.add_child(Bufferize::<DummyEvent, _>::new(rcv, out_snd, 1));
+        ctx.add_child(Bufferize::<SimpleEvent, _>::new(rcv, out_snd, 1, DUMMY_ID));
 
         let tile_vec = vec![
             Tile::<VT>::new_blank(vec![2, 2], 2, false),
@@ -153,7 +161,7 @@ mod tests {
         // let mut output_check = FunctionContext::new();
         // rcv.attach_receiver(&output_check);
         // output_check.set_run(move |time| {
-        //     let buffer = Buffer::from_stream::<DummyEvent>(&rcv, time, 3).unwrap();
+        //     let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 3).unwrap();
         //     assert_eq!(buffer.shape(), tensor.shape());
         //     assert_eq!(buffer, tensor);
         // });
