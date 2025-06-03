@@ -1,12 +1,12 @@
-use core::panic;
-use std::marker::PhantomData;
-use crate::utils::events::LoggableEventSimple;
 use crate::memory::PMU_BW;
+use crate::primitives::elem::{Bufferizable, Elem, StopType};
+use crate::primitives::{select::SelectAdapter, tile::Tile};
+use crate::utils::calculation::div_ceil;
+use crate::utils::events::LoggableEventSimple;
+use core::panic;
 use dam::channel::PeekResult;
 use dam::{context_tools::*, logging::LogEvent};
-use crate::primitives::elem::{Elem, StopType, Bufferizable};
-use crate::primitives::{tile::Tile, select::SelectAdapter};
-use crate::utils::calculation::div_ceil;
+use std::marker::PhantomData;
 
 pub struct FlatReassembleConfig {
     pub switch_cycles: Vec<u64>,
@@ -23,13 +23,12 @@ pub struct FlatReassemble<E, A: DAMType, SELT: DAMType> {
     _phantom: PhantomData<E>,
 }
 
-
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         A: DAMType,
         SELT: DAMType + SelectAdapter + Bufferizable,
     > FlatReassemble<E, A, SELT>
-where 
+where
     Elem<Tile<A>>: DAMType,
     Elem<SELT>: DAMType,
 {
@@ -67,34 +66,37 @@ where
     fn process_input_stream(&mut self, select_vec: &[usize], index_level: Option<StopType>) {
         'expert: loop {
             let peek_results = self.peek_all_streams(select_vec);
-            
+
             if peek_results.is_empty() {
                 return; // All streams closed
             }
 
             self.validate_peek_results(&peek_results);
             let data_ready_times = self.calculate_data_ready_times(&peek_results, select_vec);
-            
+
             self.dequeue_streams_in_order(&data_ready_times, select_vec);
             self.advance_time_to_max_ready(&peek_results);
-            
+
             if self.process_and_enqueue_outputs(&peek_results, select_vec, index_level) {
                 break 'expert;
             }
         }
     }
 
-    fn peek_all_streams(&mut self, select_vec: &[usize]) -> Vec<Option<ChannelElement<Elem<Tile<A>>>>> {
+    fn peek_all_streams(
+        &mut self,
+        select_vec: &[usize],
+    ) -> Vec<Option<ChannelElement<Elem<Tile<A>>>>> {
         let mut peeked = vec![false; select_vec.len()];
         let mut num_peeked = 0;
         let mut peek_results = vec![None; select_vec.len()];
-        
+
         while num_peeked < select_vec.len() {
             for (i, &idx) in select_vec.iter().enumerate() {
                 if peeked[i] {
                     continue;
                 }
-                
+
                 match self.in_streams[idx].peek() {
                     PeekResult::Something(elem) => {
                         peek_results[i] = Some(elem);
@@ -106,59 +108,71 @@ where
                 }
             }
         }
-        
+
         peek_results
     }
 
     fn validate_peek_results(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) {
         let (data_arrive_times, all_data) = self.check_all_data(peek_results);
         let (stop_values, stop_arrive_times, all_stop) = self.check_all_stop(peek_results);
-        
+
         if !all_data && !all_stop {
             panic!("Not all selected streams have data or stop tokens available");
         }
     }
 
-    fn check_all_data(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) -> (Vec<u64>, bool) {
+    fn check_all_data(
+        &self,
+        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
+    ) -> (Vec<u64>, bool) {
         let mut data_arrive_times = vec![];
-        let all_data = peek_results.iter().all(|t| {
-            match t {
-                Some(ChannelElement { time: arrive, data: Elem::Val(_) }) => {
-                    data_arrive_times.push(arrive.time());
-                    true
-                }
-                _ => false,
+        let all_data = peek_results.iter().all(|t| match t {
+            Some(ChannelElement {
+                time: arrive,
+                data: Elem::Val(_),
+            }) => {
+                data_arrive_times.push(arrive.time());
+                true
             }
+            _ => false,
         });
         (data_arrive_times, all_data)
     }
 
-    fn check_all_stop(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) -> (Vec<StopType>, Vec<u64>, bool) {
+    fn check_all_stop(
+        &self,
+        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
+    ) -> (Vec<StopType>, Vec<u64>, bool) {
         let mut stop_values = vec![];
         let mut stop_arrive_times = vec![];
-        let all_stop = peek_results.iter().all(|t| {
-            match t {
-                Some(ChannelElement { time: arrive, data: Elem::ValStop(_, level) }) => {
-                    stop_arrive_times.push(arrive.time());
-                    stop_values.push(*level);
-                    true
-                }
-                _ => false,
+        let all_stop = peek_results.iter().all(|t| match t {
+            Some(ChannelElement {
+                time: arrive,
+                data: Elem::ValStop(_, level),
+            }) => {
+                stop_arrive_times.push(arrive.time());
+                stop_values.push(*level);
+                true
             }
+            _ => false,
         });
-        
+
         let uniform_stop = all_stop && stop_values.iter().all(|s| s == &stop_values[0]);
         (stop_values, stop_arrive_times, uniform_stop)
     }
 
-    fn calculate_data_ready_times(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>], select_vec: &[usize]) -> Vec<u64> {
+    fn calculate_data_ready_times(
+        &self,
+        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
+        select_vec: &[usize],
+    ) -> Vec<u64> {
         let mut data_ready_times = vec![];
-        
+
         for (i, peek_elem) in peek_results.iter().enumerate() {
             if let Some(elem) = peek_elem {
                 let stream_id = select_vec[i];
                 let base_time = elem.time.time() + self.config.switch_cycles[stream_id];
-                
+
                 let ready_time = match &elem.data {
                     Elem::Val(x) | Elem::ValStop(x, _) => {
                         if x.read_from_mu() {
@@ -171,7 +185,7 @@ where
                 data_ready_times.push(ready_time);
             }
         }
-        
+
         data_ready_times
     }
 
@@ -179,31 +193,34 @@ where
         // Dequeue in ascending order of data ready times (FIFO scheduling)
         let mut sorted_indices: Vec<usize> = (0..data_ready_times.len()).collect();
         sorted_indices.sort_by_key(|&i| data_ready_times[i]);
-        
+
         for &i in sorted_indices.iter() {
             self.in_streams[select_vec[i]].dequeue(&self.time).unwrap();
         }
     }
 
-    fn advance_time_to_max_ready(&mut self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) {
+    fn advance_time_to_max_ready(
+        &mut self,
+        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
+    ) {
         let max_ready_time = peek_results
             .iter()
             .filter_map(|opt| opt.as_ref())
             .map(|elem| elem.time.time())
             .max()
             .unwrap_or(0);
-        
+
         self.time.advance(max_ready_time.into());
     }
 
     fn process_and_enqueue_outputs(
-        &mut self, 
-        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>], 
-        select_vec: &[usize], 
-        index_level: Option<StopType>
+        &mut self,
+        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
+        select_vec: &[usize],
+        index_level: Option<StopType>,
     ) -> bool {
         let additional_rank = index_level.unwrap_or(0);
-        
+
         for i in 0..select_vec.len() {
             if let Some(elem) = &peek_results[i] {
                 if self.process_single_element(elem, i, select_vec.len(), additional_rank) {
@@ -215,11 +232,11 @@ where
     }
 
     fn process_single_element(
-        &mut self, 
-        elem: &ChannelElement<Elem<Tile<A>>>, 
-        index: usize, 
-        total_streams: usize, 
-        additional_rank: StopType
+        &mut self,
+        elem: &ChannelElement<Elem<Tile<A>>>,
+        index: usize,
+        total_streams: usize,
+        additional_rank: StopType,
     ) -> bool {
         match &elem.data {
             Elem::Val(x) => {
@@ -238,27 +255,30 @@ where
 
     fn handle_memory_writeback(&mut self, x: &Tile<A>) {
         if self.config.write_back_mu {
-            self.time.incr_cycles(div_ceil(x.size_in_bytes() as u64, PMU_BW));
+            self.time
+                .incr_cycles(div_ceil(x.size_in_bytes() as u64, PMU_BW));
         }
     }
 
     fn enqueue_val_element(
-        &mut self, 
-        x: &Tile<A>, 
-        index: usize, 
-        total_streams: usize, 
-        additional_rank: StopType
+        &mut self,
+        x: &Tile<A>,
+        index: usize,
+        total_streams: usize,
+        additional_rank: StopType,
     ) -> bool {
         if index == total_streams - 1 {
             // Last stream - always enqueue as ValStop
-            self.out_stream.enqueue(
-                &self.time, 
-                ChannelElement { 
-                    time: self.time.tick(), 
-                    data: Elem::ValStop(x.clone(), additional_rank + 1) 
-                }
-            ).unwrap();
-            
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: Elem::ValStop(x.clone(), additional_rank + 1),
+                    },
+                )
+                .unwrap();
+
             self.in_stream_rank == 0
         } else {
             // Not last stream
@@ -267,47 +287,56 @@ where
             } else {
                 Elem::Val(x.clone())
             };
-            
-            self.out_stream.enqueue(
-                &self.time, 
-                ChannelElement { time: self.time.tick(), data }
-            ).unwrap();
-            
+
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data,
+                    },
+                )
+                .unwrap();
+
             false
         }
     }
 
     fn enqueue_val_stop_element(
-        &mut self, 
-        x: &Tile<A>, 
-        level: StopType, 
-        index: usize, 
-        total_streams: usize, 
-        additional_rank: StopType
+        &mut self,
+        x: &Tile<A>,
+        level: StopType,
+        index: usize,
+        total_streams: usize,
+        additional_rank: StopType,
     ) -> bool {
         let base_rank = additional_rank + level;
-        
+
         if index == total_streams - 1 {
             // Last stream
-            self.out_stream.enqueue(
-                &self.time, 
-                ChannelElement { 
-                    time: self.time.tick(), 
-                    data: Elem::ValStop(x.clone(), base_rank + 1) 
-                }
-            ).unwrap();
-            
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: Elem::ValStop(x.clone(), base_rank + 1),
+                    },
+                )
+                .unwrap();
+
             level == self.in_stream_rank
         } else {
             // Not last stream
-            self.out_stream.enqueue(
-                &self.time, 
-                ChannelElement { 
-                    time: self.time.tick(), 
-                    data: Elem::Val(x.clone()) 
-                }
-            ).unwrap();
-            
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: Elem::Val(x.clone()),
+                    },
+                )
+                .unwrap();
+
             false
         }
     }
@@ -318,21 +347,24 @@ impl<
         A: DAMType,
         SELT: DAMType + SelectAdapter + Bufferizable,
     > Context for FlatReassemble<E, A, SELT>
-where 
+where
     Elem<Tile<A>>: DAMType,
     Elem<SELT>: DAMType,
 {
     fn run(&mut self) {
         loop {
             match self.sel_stream.peek_next(&self.time) {
-                Ok(ChannelElement { time: _, data: sel_data}) => match sel_data {
+                Ok(ChannelElement {
+                    time: _,
+                    data: sel_data,
+                }) => match sel_data {
                     Elem::Val(sel) => {
                         self.handle_load_cycles(&sel);
                         self.sel_stream.dequeue(&self.time).unwrap();
                         let select_vec = sel.to_sel_vec();
                         self.process_input_stream(&select_vec, None);
                     }
-                    Elem::ValStop(sel, sel_level ) => {
+                    Elem::ValStop(sel, sel_level) => {
                         self.handle_load_cycles(&sel);
                         self.sel_stream.dequeue(&self.time).unwrap();
                         let select_vec = sel.to_sel_vec();
@@ -348,14 +380,14 @@ where
 #[cfg(test)]
 mod tests {
     use crate::primitives::select::{MultiHotN, SelectAdapter};
+    use crate::{
+        operator::reassemble::{FlatReassemble, FlatReassembleConfig},
+        primitives::{elem::Elem, tile::Tile},
+        utils::events::SimpleEvent,
+    };
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
     use ndarray::Array2;
-    use crate::{
-        primitives::{elem::Elem, tile::Tile},
-        operator::reassemble::{FlatReassemble, FlatReassembleConfig},
-        utils::events::DummyEvent
-    };
 
     fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
         match (a, b) {
@@ -370,21 +402,24 @@ mod tests {
     // Use the same index and output streams as input from `fn flat_partition_2d_multi_hot_rank_1()`
     #[test]
     fn flat_reassemble_2d_multi_hot_rank_1() {
-        fn create_input_streams(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+        fn create_input_streams(
+            arrays: &[Array2<i32>],
+            read_from_mu: bool,
+        ) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut input_streams: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); 4];
-            
+
             // Define the mapping of which arrays go to which output streams
             let stream_mappings = [
-                vec![0, 1, 2],  // Stream 0: arrays 0, 1, 2S1
-                vec![0, 1, 2, 3, 4, 5],  // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1
-                vec![3, 4, 5, 6, 7, 8],  // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1
-                vec![6, 7, 8],  // Stream 3: arrays 6, 7, 8S1
+                vec![0, 1, 2],          // Stream 0: arrays 0, 1, 2S1
+                vec![0, 1, 2, 3, 4, 5], // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1
+                vec![3, 4, 5, 6, 7, 8], // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1
+                vec![6, 7, 8],          // Stream 3: arrays 6, 7, 8S1
             ];
-            
+
             for (stream_idx, array_indices) in stream_mappings.iter().enumerate() {
                 for (pos, &array_idx) in array_indices.iter().enumerate() {
                     let tile = Tile::new(arrays[array_idx].clone().into(), 4, read_from_mu);
-                    
+
                     // Add ValStop at the end of each group of 3 elements
                     if (pos + 1) % 3 == 0 {
                         input_streams[stream_idx].push(Elem::ValStop(tile, 1));
@@ -393,7 +428,7 @@ mod tests {
                     }
                 }
             }
-            
+
             input_streams
         }
 
@@ -445,26 +480,26 @@ mod tests {
 
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[0].clone().into_iter(),
-            exp1_snd
+            exp1_snd,
         ));
 
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[1].clone().into_iter(),
-            exp2_snd
+            exp2_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[2].clone().into_iter(),
-            exp3_snd
+            exp3_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[3].clone().into_iter(),
-            exp4_snd
+            exp4_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || select_stream_data.into_iter(),
-            in_sel_snd
+            in_sel_snd,
         ));
-        ctx.add_child(FlatReassemble::<DummyEvent, _, _>::new(
+        ctx.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
             vec![exp1_rcv, exp2_rcv, exp3_rcv, exp4_rcv],
             in_sel_rcv,
             out_data_snd,
@@ -473,7 +508,7 @@ mod tests {
         ));
 
         ctx.add_child(ApproxCheckerContext::new(
-            || ground_truth.into_iter(), 
+            || ground_truth.into_iter(),
             out_data_rcv,
             tolerance_fn,
         ));
@@ -487,7 +522,11 @@ mod tests {
 
     #[test]
     fn flat_reassemble_1d_multi_hot_rank_0() {
-        fn create_multi_hot_arrays<const N: usize>(sel: usize, length: usize, read_from_mu: bool) -> Vec<MultiHotN<N>> {
+        fn create_multi_hot_arrays<const N: usize>(
+            sel: usize,
+            length: usize,
+            read_from_mu: bool,
+        ) -> Vec<MultiHotN<N>> {
             let mut multi_hot_arrays = Vec::new();
             for i in 0..length {
                 let mut selection = vec![false; N];
@@ -501,7 +540,11 @@ mod tests {
             multi_hot_arrays
         }
 
-        fn create_input_streams<const N: usize>(arrays: &[Array2<i32>], multi_hot: &Vec<MultiHotN<N>>, read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+        fn create_input_streams<const N: usize>(
+            arrays: &[Array2<i32>],
+            multi_hot: &Vec<MultiHotN<N>>,
+            read_from_mu: bool,
+        ) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut input_streams: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); N];
 
             for (i, array_idx) in multi_hot.iter().enumerate() {
@@ -516,7 +559,11 @@ mod tests {
         }
 
         // If the tiles are different, then the ground truth should consider the timing.
-        fn create_ground_truth(arrays: &[Array2<i32>], sel: usize, read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
+        fn create_ground_truth(
+            arrays: &[Array2<i32>],
+            sel: usize,
+            read_from_mu: bool,
+        ) -> Vec<Elem<Tile<i32>>> {
             let mut ground_truth = Vec::new();
             for elem in arrays.iter() {
                 for _ in 0..sel {
@@ -533,7 +580,8 @@ mod tests {
         let multi_hot = create_multi_hot_arrays::<4>(2, 9, true);
         let input_streams_data = create_input_streams(&arrays, &multi_hot, true);
         let ground_truth = create_ground_truth(&arrays, 2, true);
-        let select_stream_data: Vec<Elem<MultiHotN<4>>> = multi_hot.iter().map(|m| Elem::Val(m.clone())).collect();
+        let select_stream_data: Vec<Elem<MultiHotN<4>>> =
+            multi_hot.iter().map(|m| Elem::Val(m.clone())).collect();
         let mut ctx = ProgramBuilder::default();
         let (out_data_snd, out_data_rcv) = ctx.unbounded();
         let (in_sel_snd, in_sel_rcv) = ctx.unbounded();
@@ -547,25 +595,25 @@ mod tests {
         };
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[0].clone().into_iter(),
-            exp1_snd
+            exp1_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[1].clone().into_iter(),
-            exp2_snd
+            exp2_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[2].clone().into_iter(),
-            exp3_snd
+            exp3_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || input_streams_data[3].clone().into_iter(),
-            exp4_snd
+            exp4_snd,
         ));
         ctx.add_child(GeneratorContext::new(
             || select_stream_data.into_iter(),
-            in_sel_snd
+            in_sel_snd,
         ));
-        ctx.add_child(FlatReassemble::<DummyEvent, _, _>::new(
+        ctx.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
             vec![exp1_rcv, exp2_rcv, exp3_rcv, exp4_rcv],
             in_sel_rcv,
             out_data_snd,
@@ -573,7 +621,7 @@ mod tests {
             config,
         ));
         ctx.add_child(ApproxCheckerContext::new(
-            || ground_truth.into_iter(), 
+            || ground_truth.into_iter(),
             out_data_rcv,
             tolerance_fn,
         ));
@@ -583,5 +631,4 @@ mod tests {
             .unwrap()
             .run(Default::default());
     }
-
 }

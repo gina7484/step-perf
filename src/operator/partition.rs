@@ -1,15 +1,15 @@
+use crate::memory::PMU_BW;
+use crate::primitives::elem::{Bufferizable, Elem, StopType};
+use crate::primitives::{select::SelectAdapter, tile::Tile};
+use crate::utils::calculation::div_ceil;
+use crate::utils::events::LoggableEventSimple;
+use dam::{context_tools::*, logging::LogEvent};
 use std::marker::PhantomData;
 use std::panic;
-use crate::utils::events::LoggableEventSimple;
-use crate::memory::PMU_BW;
-use dam::{context_tools::*, logging::LogEvent};
-use crate::primitives::elem::{Elem, StopType, Bufferizable};
-use crate::primitives::{tile::Tile, select::SelectAdapter};
-use crate::utils::calculation::div_ceil;
 
 pub struct FlatPartitionConfig {
     pub switch_cycles: Vec<u64>, // cycles between receiving
-    pub write_back_mu: bool, // Whether the output is written to a memory unit
+    pub write_back_mu: bool,     // Whether the output is written to a memory unit
 }
 
 #[context_macro]
@@ -18,7 +18,7 @@ pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
     sel_stream: Receiver<Elem<SELT>>,
     out_streams: Vec<Sender<Elem<Tile<A>>>>,
     partition_rank: StopType,
-    config: FlatPartitionConfig, 
+    config: FlatPartitionConfig,
     _phantom: PhantomData<E>,
 }
 
@@ -67,7 +67,7 @@ where
     /// Helper function to calculate and increment write cycles based on expert indices
     fn handle_write_cycles<T: Bufferizable>(&mut self, select_vec: &[usize], data: &T) {
         let mut write_cycle = 0;
-        
+
         // Find maximum switch cycle among selected experts
         // TODO: This could be optimized further
         for expert_idx in select_vec.iter() {
@@ -75,12 +75,12 @@ where
                 write_cycle = self.config.switch_cycles[*expert_idx];
             }
         }
-        
+
         // Add memory write back cycles if configured
         if self.config.write_back_mu {
             write_cycle += div_ceil(data.size_in_bytes() as u64, PMU_BW);
         }
-        
+
         self.time.incr_cycles(write_cycle);
     }
 
@@ -88,18 +88,29 @@ where
     fn enqueue_to_experts(&mut self, select_vec: &[usize], elem: Elem<Tile<A>>) {
         for expert_idx in select_vec.iter() {
             self.out_streams[*expert_idx]
-                .enqueue(&self.time, ChannelElement { 
-                    time: self.time.tick(), 
-                    data: elem.clone() 
-                }).unwrap();
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: elem.clone(),
+                    },
+                )
+                .unwrap();
         }
     }
 
     /// Process input stream elements with the given select vector
-    fn process_input_stream(&mut self, select_vec: &[usize], expected_stop_level: Option<StopType>) {
+    fn process_input_stream(
+        &mut self,
+        select_vec: &[usize],
+        expected_stop_level: Option<StopType>,
+    ) {
         loop {
             match self.in_stream.peek_next(&self.time) {
-                Ok(ChannelElement { time: _, data: val_data }) => match val_data {
+                Ok(ChannelElement {
+                    time: _,
+                    data: val_data,
+                }) => match val_data {
                     Elem::Val(x) => {
                         self.handle_load_cycles(&x);
                         self.in_stream.dequeue(&self.time).unwrap();
@@ -130,10 +141,14 @@ where
                         if output_stop_level == 0 {
                             self.enqueue_to_experts(select_vec, Elem::Val(x.clone()));
                         } else {
-                            self.enqueue_to_experts(select_vec, Elem::ValStop(x.clone(), output_stop_level));
+                            self.enqueue_to_experts(
+                                select_vec,
+                                Elem::ValStop(x.clone(), output_stop_level),
+                            );
                         }
                         // Break if we've reached the partition rank
-                        if stop_lev == self.partition_rank || expected_stop_level == Some(stop_lev) {
+                        if stop_lev == self.partition_rank || expected_stop_level == Some(stop_lev)
+                        {
                             break;
                         }
                     }
@@ -163,7 +178,10 @@ where
     fn run(&mut self) {
         loop {
             match self.sel_stream.peek_next(&self.time) {
-                Ok(ChannelElement { time: _, data: sel_data }) => match sel_data {
+                Ok(ChannelElement {
+                    time: _,
+                    data: sel_data,
+                }) => match sel_data {
                     Elem::Val(sel) => {
                         self.handle_load_cycles(&sel);
                         self.sel_stream.dequeue(&self.time).unwrap();
@@ -187,14 +205,14 @@ where
 #[cfg(test)]
 mod tests {
     use crate::primitives::select::MultiHotN;
+    use crate::{
+        operator::partition::{FlatPartition, FlatPartitionConfig},
+        primitives::{elem::Elem, tile::Tile},
+        utils::events::SimpleEvent,
+    };
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext};
     use ndarray::Array2;
-    use crate::{
-        primitives::{elem::Elem, tile::Tile},
-        operator::partition::{FlatPartition, FlatPartitionConfig},
-        utils::events::DummyEvent
-    };
 
     fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
         match (a, b) {
@@ -207,22 +225,24 @@ mod tests {
     }
     #[test]
     fn flat_partition_2d_multi_hot_rank_1() {
-
-        fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+        fn create_ground_truth(
+            arrays: &[Array2<i32>],
+            read_from_mu: bool,
+        ) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); 4];
-            
+
             // Define the mapping of which arrays go to which output streams
             let stream_mappings = [
-                vec![0, 1, 2],  // Stream 0: arrays 0, 1, 2S1
-                vec![0, 1, 2, 3, 4, 5],  // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1
-                vec![3, 4, 5, 6, 7, 8],  // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1
-                vec![6, 7, 8],  // Stream 3: arrays 6, 7, 8S1
+                vec![0, 1, 2],          // Stream 0: arrays 0, 1, 2S1
+                vec![0, 1, 2, 3, 4, 5], // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1
+                vec![3, 4, 5, 6, 7, 8], // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1
+                vec![6, 7, 8],          // Stream 3: arrays 6, 7, 8S1
             ];
-            
+
             for (stream_idx, array_indices) in stream_mappings.iter().enumerate() {
                 for (pos, &array_idx) in array_indices.iter().enumerate() {
                     let tile = Tile::new(arrays[array_idx].clone().into(), 4, read_from_mu);
-                    
+
                     // Add ValStop at the end of each group of 3 elements
                     if (pos + 1) % 3 == 0 {
                         ground_truth[stream_idx].push(Elem::ValStop(tile, 1));
@@ -231,11 +251,10 @@ mod tests {
                     }
                 }
             }
-            
+
             ground_truth
         }
 
-        
         // Step 1: Create 9 different ndarray::ArcArray2<T> with shape 2x2
         let arrays: Vec<Array2<i32>> = (0..9)
             .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
@@ -245,7 +264,7 @@ mod tests {
         let in_read_from_mu = true;
         for (i, arr) in arrays.iter().enumerate() {
             let tile = Tile::new(arr.clone().into(), 4, in_read_from_mu);
-            
+
             // Add ValStop at indices 2, 5, 8 (end of each row in 3x3 grid)
             if i % 3 == 2 {
                 if i == 8 {
@@ -260,9 +279,18 @@ mod tests {
         // Step 3: Create a 3 rank-1 select stream with 2of4 multi-hot selections
         let select_read_from_mu = true;
         let select_stream_data = vec![
-            Elem::Val(MultiHotN::new([true, true, false, false], select_read_from_mu)),
-            Elem::Val(MultiHotN::new([false, true, true, false], select_read_from_mu)),
-            Elem::ValStop(MultiHotN::new([false, false, true, true], select_read_from_mu), 1),
+            Elem::Val(MultiHotN::new(
+                [true, true, false, false],
+                select_read_from_mu,
+            )),
+            Elem::Val(MultiHotN::new(
+                [false, true, true, false],
+                select_read_from_mu,
+            )),
+            Elem::ValStop(
+                MultiHotN::new([false, false, true, true], select_read_from_mu),
+                1,
+            ),
         ];
 
         // Step 4: Create the ground truth for 4 output streams
@@ -282,7 +310,7 @@ mod tests {
             switch_cycles: vec![1, 2, 3, 4],
             write_back_mu: true,
         };
-        
+
         // Step 7: Create two GeneratorContexts for input and select streams
         ctx.add_child(GeneratorContext::new(
             || in_stream_data.into_iter(),
@@ -294,7 +322,7 @@ mod tests {
         ));
 
         // Step 8: Create the FlatPartition context
-        ctx.add_child(FlatPartition::<DummyEvent, _, _>::new(
+        ctx.add_child(FlatPartition::<SimpleEvent, _, _>::new(
             in_data_rcv,
             in_sel_rcv,
             vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
@@ -331,8 +359,11 @@ mod tests {
 
     #[test]
     fn flat_partition_1d_multi_hot_rank_0() {
-
-        fn create_ground_truth<const N: usize>(arrays: &[Array2<i32>], multi_hot: &Vec<MultiHotN<N>>, read_from_mu: bool) -> Vec<Vec<Elem<Tile<i32>>>> {
+        fn create_ground_truth<const N: usize>(
+            arrays: &[Array2<i32>],
+            multi_hot: &Vec<MultiHotN<N>>,
+            read_from_mu: bool,
+        ) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); N];
 
             for (i, array_idx) in multi_hot.iter().enumerate() {
@@ -346,7 +377,11 @@ mod tests {
             ground_truth
         }
 
-        fn create_multi_hot_arrays<const N: usize>(sel: usize, length: usize, read_from_mu: bool) -> Vec<MultiHotN<N>> {
+        fn create_multi_hot_arrays<const N: usize>(
+            sel: usize,
+            length: usize,
+            read_from_mu: bool,
+        ) -> Vec<MultiHotN<N>> {
             let mut multi_hot_arrays = Vec::new();
             for i in 0..length {
                 let mut selection = vec![false; N];
@@ -404,7 +439,7 @@ mod tests {
             || select_stream_data.into_iter(),
             in_sel_snd,
         ));
-        ctx.add_child(FlatPartition::<DummyEvent, _, _>::new(
+        ctx.add_child(FlatPartition::<SimpleEvent, _, _>::new(
             in_data_rcv,
             in_sel_rcv,
             vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
@@ -435,5 +470,4 @@ mod tests {
             .unwrap()
             .run(Default::default());
     }
-
 }
