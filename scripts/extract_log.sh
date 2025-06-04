@@ -1,13 +1,15 @@
 # ======================= HBM Store =======================
-event_name="InputLoad"
+event_name="SimpleEvent"
+db_name="test_sim"
 # event_name="WeightQLoad"
 # event_name="GenQ"
 # event_name="StoreOutput"
-mongosh --quiet test_mm --eval 'print("timestamp,start_ns,end_ns,is_stop"); db.log.aggregate([
+mongosh --quiet ${db_name} --eval 'print("timestamp,id,start_ns,end_ns,is_stop"); db.log.aggregate([
   { $match: { event_type: "'${event_name}'" } },
   { $project: { 
       _id: 0, 
       timestamp: 1, 
+      id: "$event_data.id", 
       start_ns: "$event_data.start_ns", 
       end_ns: "$event_data.end_ns",
       is_stop: "$event_data.is_stop",
@@ -15,5 +17,5 @@ mongosh --quiet test_mm --eval 'print("timestamp,start_ns,end_ns,is_stop"); db.l
   },
   { $sort: { timestamp: 1 } }
 ]).forEach(function(doc) { 
-  print(doc.timestamp + "," + doc.start_ns + "," + doc.end_ns + "," + doc.is_stop); 
+  print(doc.timestamp + "," + doc.id + "," + doc.start_ns + "," + doc.end_ns + "," + doc.is_stop); 
 })' > data/${event_name}.csv
