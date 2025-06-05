@@ -2890,6 +2890,7 @@ dependencies = [
  "fxhash",
  "graphviz-rust",
  "half",
+ "itertools 0.14.0",
  "linkme",
  "ndarray 0.16.1",
  "npyz",

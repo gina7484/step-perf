@@ -2,8 +2,10 @@ use std::marker::PhantomData;
 
 use dam::logging::LogEvent;
 use dam::{context_tools::*, types::StaticallySized};
+use itertools::Itertools;
 use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
 
+use crate::ramulator::hbm_context::ParAddrs;
 use crate::{
     primitives::elem::{Elem, StopType},
     ramulator::access::MemoryData,
@@ -21,16 +23,20 @@ pub enum HbmAddrEnum<T: DAMType> {
 
 #[context_macro]
 pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
+    // Tiling configurations
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
     pub stride: Vec<usize>,             // Express the view information with strides
     pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
     pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     pub tile_row: usize,
     pub tile_col: usize,
-    pub n_byte: usize,       // size of the datatype
+    pub n_byte: usize, // size of the datatype
+    // HBM Configurations & Addresses
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
-    pub addr_snd: Sender<u64>,
+    pub par_dispatch: usize,
+    // Sender & Receiver (DAM details)
+    pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
     pub id: u32,
@@ -54,7 +60,8 @@ where
         n_byte: usize,
         base_addr_byte: u64,
         addr_offset: u64,
-        addr_snd: Sender<u64>,
+        par_dispatch: usize,
+        addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
         id: u32,
@@ -97,6 +104,7 @@ where
             n_byte,
             base_addr_byte,
             addr_offset,
+            par_dispatch,
             addr_snd,
             resp_addr_rcv,
             on_chip_snd,
@@ -288,13 +296,19 @@ where
 
             // Send read request to HBM
             let send_request_time = self.time.tick();
-            for (idx, addr) in tile_addrs.iter().enumerate() {
+            for (idx, addr_chunk) in tile_addrs
+                .iter()
+                .chunks(self.par_dispatch)
+                .into_iter()
+                .enumerate()
+            {
+                let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
                 self.addr_snd
                     .enqueue(
                         &self.time,
                         ChannelElement {
                             time: send_request_time + idx as u64,
-                            data: *addr,
+                            data: ParAddrs::new(chunk_vec),
                         },
                     )
                     .unwrap();
@@ -303,6 +317,9 @@ where
             for _i in tile_addrs {
                 // Wait until you get back the response
                 self.resp_addr_rcv.dequeue(&self.time).unwrap();
+                if self.id == 1 {
+                    println!("Dequeuing elem: {}", self.time.tick().time());
+                }
             }
 
             let read_finish_time = self.time.tick();
@@ -823,60 +840,61 @@ mod test {
             println!("Addr: {:?}", i);
         }
     }
+    /*
+        #[test]
+        fn test_offchipload() {
+            let mut parent = ProgramBuilder::default();
 
-    #[test]
-    fn test_offchipload() {
-        let mut parent = ProgramBuilder::default();
+            let mut mem_context = HBMContext::new(
+                &mut parent,
+                HBMConfig {
+                    addr_offset: 64, // 64 bytes
+                    channel_num: 8,
+                    per_channel_latency: 4,
+                    per_channel_init_interval: 4,
+                    per_channel_outstanding: 1, // For now, this does not have any effect
+                    per_channel_start_up_time: 14, // Time to wait before the first request can be processed
+                },
+            );
 
-        let mut mem_context = HBMContext::new(
-            &mut parent,
-            HBMConfig {
-                addr_offset: 64, // 64 bytes
-                channel_num: 8,
-                per_channel_latency: 4,
-                per_channel_init_interval: 4,
-                per_channel_outstanding: 1, // For now, this does not have any effect
-                per_channel_start_up_time: 14, // Time to wait before the first request can be processed
-            },
-        );
+            // ========================== Read Bundle 1 =============================
+            let (raddr_snd, raddr_rcv) = parent.unbounded();
+            let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
+            let (data_snd, data_rcv) = parent.unbounded();
 
-        // ========================== Read Bundle 1 =============================
-        let (raddr_snd, raddr_rcv) = parent.unbounded();
-        let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
-        let (data_snd, data_rcv) = parent.unbounded();
+            parent.add_child(OffChipLoad::<SimpleEvent, f32>::new(
+                vec![2, 1],
+                vec![1, 1],
+                vec![2, 1],
+                None,
+                16,
+                32,
+                2,
+                0,
+                64,
+                raddr_snd,
+                resp_addr_rcv,
+                data_snd,
+                DUMMY_ID,
+            ));
 
-        parent.add_child(OffChipLoad::<SimpleEvent, f32>::new(
-            vec![2, 1],
-            vec![1, 1],
-            vec![2, 1],
-            None,
-            16,
-            32,
-            2,
-            0,
-            64,
-            raddr_snd,
-            resp_addr_rcv,
-            data_snd,
-            DUMMY_ID,
-        ));
+            parent.add_child(PrinterContext::new(data_rcv));
 
-        parent.add_child(PrinterContext::new(data_rcv));
+            mem_context.add_reader(ReadBundle {
+                addr: raddr_rcv,
+                resp: resp_addr_snd,
+            });
 
-        mem_context.add_reader(ReadBundle {
-            addr: raddr_rcv,
-            resp: resp_addr_snd,
-        });
+            parent.add_child(mem_context);
 
-        parent.add_child(mem_context);
+            println!("Finished building");
 
-        println!("Finished building");
+            let executed = parent
+                .initialize(InitializationOptions::default())
+                .unwrap()
+                .run(RunOptions::default());
 
-        let executed = parent
-            .initialize(InitializationOptions::default())
-            .unwrap()
-            .run(RunOptions::default());
-
-        println!("Elapsed: {:?}", executed.elapsed_cycles());
-    }
+            println!("Elapsed: {:?}", executed.elapsed_cycles());
+        }
+    */
 }

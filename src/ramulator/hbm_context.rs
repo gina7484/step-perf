@@ -1,6 +1,6 @@
 use dam::{
     channel::{ChannelElement, PeekResult, Receiver, Sender},
-    context::Context,
+    context::{self, Context},
     dam_macros::context_macro,
     simulation::ProgramBuilder,
     types::StaticallySized,
@@ -207,15 +207,24 @@ pub struct ChannelBundle {
     pub rcv: Receiver<Response>,
 }
 
+#[derive(Constructor, Clone, Default, Debug)]
+pub struct ParAddrs {
+    pub addrs: Vec<u64>,
+}
+
+impl StaticallySized for ParAddrs {
+    const SIZE: usize = 64;
+}
+
 #[derive(Constructor)]
 pub struct ReadBundle {
-    pub addr: Receiver<u64>,
+    pub addr: Receiver<ParAddrs>,
     pub resp: Sender<u64>,
 }
 
 #[derive(Constructor)]
 pub struct WriteBundle {
-    pub addr: Receiver<u64>,
+    pub addr: Receiver<ParAddrs>,
     pub resp: Sender<u64>,
 }
 
@@ -260,7 +269,6 @@ impl Context for HBMContext {
                         .unwrap();
                 }
             }
-
             // Collect incoming requests in the current cycle and send it to channels
             let requests = self.dequeue_requests_at_current_cycle();
 
@@ -385,19 +393,32 @@ impl HBMContext {
         let mut requests = vec![];
 
         for (i, reader) in self.readers.iter().enumerate() {
+            if self.time.tick().time() > 64 && self.time.tick().time() < 262 {
+                println!(
+                    "Before iterating the next reader: time = {}",
+                    self.time.tick().time()
+                );
+            }
+
             match reader.addr.peek() {
                 PeekResult::Something(ChannelElement {
                     time: elem_time,
-                    data: addr,
+                    data: addr_vec,
                 }) => {
                     let context_time = self.time.tick().time();
                     let element_visible_time = elem_time.time();
                     if context_time >= element_visible_time {
                         // If the response is visible at the current time, we can dequeue it
-                        requests.push(Request::new(false, addr, i));
+                        for addr_i in addr_vec.addrs {
+                            requests.push(Request::new(false, addr_i, i));
+                        }
                         reader.addr.dequeue(&self.time).unwrap();
                     } else {
                         // If not, we skip this response
+                        println!(
+                            "Context time {}, Elem time: {}, {:?}",
+                            context_time, element_visible_time, addr_vec
+                        );
                         continue;
                     }
                 }
@@ -409,16 +430,29 @@ impl HBMContext {
         for (i, writer) in self.writers.iter().enumerate() {
             match writer.addr.peek() {
                 PeekResult::Something(ChannelElement {
-                    time: _,
-                    data: addr,
+                    time: elem_time,
+                    data: addr_vec,
                 }) => {
-                    requests.push(Request::new(true, addr, i));
-                    writer.addr.dequeue(&self.time).unwrap();
+                    let context_time = self.time.tick().time();
+                    let element_visible_time = elem_time.time();
+                    if context_time >= element_visible_time {
+                        for addr_i in addr_vec.addrs {
+                            requests.push(Request::new(true, addr_i, i));
+                        }
+                        writer.addr.dequeue(&self.time).unwrap();
+                    }
                 }
                 PeekResult::Nothing(_time) => continue,
                 PeekResult::Closed => continue,
             }
         }
+
+        println!(
+            "Got {} requests at cycle ({})",
+            requests.len(),
+            self.time.tick().time()
+        );
+
         requests
     }
 
@@ -508,11 +542,16 @@ mod test {
         utility_contexts::{FunctionContext, GeneratorContext},
     };
 
-    use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle};
+    use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ParAddrs, ReadBundle};
 
     #[test]
     fn read_from_two_bundle() {
-        const MEM_SIZE: usize = 32;
+        const MEM_SIZE: usize = 256;
+        const PAR_DISPATCH: usize = 8;
+        // The result of using any parallel dispatch factor equal or larger than
+        // 4 gives the same result as we have two readers.
+        // This is because we're using 8 channels in the HBM configuraation,
+        // meaning that a parallel dispatch factor of 4 will saturate the parallelsim across channels.
 
         let mut parent = ProgramBuilder::default();
 
@@ -521,8 +560,8 @@ mod test {
             HBMConfig {
                 addr_offset: 64,
                 channel_num: 8,
-                per_channel_latency: 4,
-                per_channel_init_interval: 4,
+                per_channel_latency: 2,
+                per_channel_init_interval: 2,
                 per_channel_outstanding: 1, // For now, this does not have any effect
                 per_channel_start_up_time: 14, // Time to wait before the first request can be processed
             },
@@ -532,7 +571,9 @@ mod test {
         let (raddr_snd, raddr_rcv) = parent.unbounded();
         let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
 
-        let addrs = || (0..(MEM_SIZE as u64)).map(|x| 0);
+        let addrs = || {
+            (0..((MEM_SIZE / PAR_DISPATCH) as u64)).map(|x| ParAddrs::new(vec![0; PAR_DISPATCH]))
+        };
         parent.add_child(GeneratorContext::new(addrs, raddr_snd));
 
         let mut read_ctx = FunctionContext::new();
@@ -565,7 +606,9 @@ mod test {
         let (raddr_snd2, raddr_rcv2) = parent.unbounded();
         let (resp_addr_snd2, resp_addr_rcv2) = parent.unbounded::<u64>();
 
-        let addrs2 = || (0..(MEM_SIZE as u64)).map(|x| 32);
+        let addrs2 = || {
+            (0..((MEM_SIZE / PAR_DISPATCH) as u64)).map(|x| ParAddrs::new(vec![32; PAR_DISPATCH]))
+        };
         parent.add_child(GeneratorContext::new(addrs2, raddr_snd2));
 
         let mut read_ctx2 = FunctionContext::new();
@@ -607,8 +650,75 @@ mod test {
     }
 
     #[test]
+    fn read_from_eight_bundles() {
+        const MEM_SIZE: usize = 32 * 4;
+        const PAR_SENDS: i32 = 16;
+
+        let mut parent = ProgramBuilder::default();
+
+        let mut mem_context = HBMContext::new(
+            &mut parent,
+            HBMConfig {
+                addr_offset: 64,
+                channel_num: 8,
+                per_channel_latency: 2,
+                per_channel_init_interval: 2,
+                per_channel_outstanding: 1,
+                per_channel_start_up_time: 14,
+            },
+        );
+
+        for i in 0..PAR_SENDS {
+            let (raddr_snd, raddr_rcv) = parent.unbounded();
+            let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
+
+            // Each bundle generates a different address pattern for clarity
+            let addrs =
+                move || (0..(MEM_SIZE as u64)).map(move |_| ParAddrs::new(vec![i as u64 * 100]));
+            parent.add_child(GeneratorContext::new(addrs, raddr_snd));
+
+            let mut read_ctx = FunctionContext::new();
+            resp_addr_rcv.attach_receiver(&read_ctx);
+            let idx = i; // capture for move
+            read_ctx.set_run(move |time| {
+                let mut received_addr_time: Vec<(u64, u64)> = vec![];
+                for _ in 0..MEM_SIZE {
+                    let (addr, addr_time) = match resp_addr_rcv.dequeue(time) {
+                        Ok(ChannelElement {
+                            data: addr,
+                            time: _,
+                        }) => (addr, time.tick().time()),
+                        Err(_) => {
+                            panic!("Failed to dequeue response address for bundle {}", idx);
+                        }
+                    };
+                    received_addr_time.push((addr, addr_time));
+                }
+                println!("Bundle {} received: {:?}", idx, received_addr_time);
+            });
+            parent.add_child(read_ctx);
+
+            mem_context.add_reader(ReadBundle {
+                addr: raddr_rcv,
+                resp: resp_addr_snd,
+            });
+        }
+
+        parent.add_child(mem_context);
+
+        println!("Finished building");
+
+        let executed = parent
+            .initialize(InitializationOptions::default())
+            .unwrap()
+            .run(RunOptions::default());
+
+        println!("Elapsed: {:?}", executed.elapsed_cycles());
+    }
+
+    #[test]
     fn read_simple_32() {
-        const MEM_SIZE: usize = 32;
+        const MEM_SIZE: usize = 32 * 8;
 
         let mut parent = ProgramBuilder::default();
 
@@ -628,7 +738,7 @@ mod test {
         let (raddr_snd, raddr_rcv) = parent.unbounded();
         let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
 
-        let addrs = || (0..(MEM_SIZE as u64)).map(|x| 0);
+        let addrs = || (0..(MEM_SIZE as u64)).map(|x| ParAddrs::new(vec![0]));
         parent.add_child(GeneratorContext::new(addrs, raddr_snd));
 
         let mut read_ctx = FunctionContext::new();

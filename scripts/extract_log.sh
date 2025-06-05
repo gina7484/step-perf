@@ -1,6 +1,6 @@
 # ======================= HBM Store =======================
 event_name="SimpleEvent"
-db_name="test_sim"
+db_name="test_mm"
 # event_name="WeightQLoad"
 # event_name="GenQ"
 # event_name="StoreOutput"

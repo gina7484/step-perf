@@ -4,11 +4,12 @@ use dam::context_tools::*;
 use dam::logging::LogEvent;
 use graphviz_rust::attributes::id;
 use half::f16;
+use itertools::Itertools;
 use ndarray::{concatenate, Array2, Axis};
 
 use crate::{
     primitives::elem::{Bufferizable, Elem, StopType},
-    ramulator::access::MemoryData,
+    ramulator::{access::MemoryData, hbm_context::ParAddrs},
 };
 
 use crate::utils::events::LoggableEventSimple;
@@ -17,14 +18,19 @@ use crate::primitives::tile::Tile;
 
 #[context_macro]
 pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
+    // Tiling configurations
     pub tensor_shape_tiled: Vec<usize>,
     pub tile_row: usize,
     pub tile_col: usize,
+    // Data
     pub store_path: Option<String>,
+    // HBM Configurations & Addresses
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
+    pub par_dispatch: usize,
+    // Sender & Receiver (DAM details)
     pub on_chip_rcv: Receiver<Elem<Tile<T>>>,
-    pub addr_snd: Sender<u64>,
+    pub addr_snd: Sender<ParAddrs>,
     pub ack_rcv: Receiver<u64>,
     pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
@@ -44,8 +50,9 @@ where
         store_path: Option<String>,
         base_addr_byte: u64,
         addr_offset: u64,
+        par_dispatch: usize,
         on_chip_rcv: Receiver<Elem<Tile<T>>>,
-        addr_snd: Sender<u64>,
+        addr_snd: Sender<ParAddrs>,
         ack_rcv: Receiver<u64>,
         id: u32,
     ) -> Self {
@@ -57,6 +64,7 @@ where
             base_addr_byte,
             addr_offset,
             on_chip_rcv,
+            par_dispatch,
             addr_snd,
             ack_rcv,
             id,
@@ -221,13 +229,19 @@ where
 
             // Send write request to HBM
             let send_request_time = self.time.tick();
-            for (idx, addr) in tile_addrs.iter().enumerate() {
+            for (idx, addr_chunk) in tile_addrs
+                .iter()
+                .chunks(self.par_dispatch)
+                .into_iter()
+                .enumerate()
+            {
+                let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
                 self.addr_snd
                     .enqueue(
                         &self.time,
                         ChannelElement {
                             time: send_request_time + idx as u64,
-                            data: *addr,
+                            data: ParAddrs::new(chunk_vec),
                         },
                     )
                     .unwrap();

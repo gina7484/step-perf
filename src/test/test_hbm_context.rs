@@ -42,11 +42,12 @@ mod test {
             - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
          */
         const ADDR_OFFSET: u64 = 64; // 32 elements in this test case
+        const PAR_DISPATCH: usize = 8;
 
         const B: usize = 32;
         const H: usize = 64;
 
-        let n_byte = 2;
+        let n_byte = 4;
 
         let par_b = 16;
 
@@ -81,16 +82,17 @@ mod test {
             vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
-            Some("/home/ginasohn/step_tl/step-perf/input.npy".to_string()),
+            None, //Some("/home/ginasohn/step_tl/step-perf/input.npy".to_string()),
             tile_m_gen_q,
             tile_k_gen_q,
             n_byte as usize,
             tensor_addrs.get("Input").unwrap().clone() as u64,
             ADDR_OFFSET,
+            PAR_DISPATCH,
             addr_snd1,
             resp_addr_rcv1,
             repeat_snd1,
-            DUMMY_ID,
+            0,
         );
 
         let (on_chip_snd1, on_chip_rcv1) = ctx.bounded(1);
@@ -115,16 +117,17 @@ mod test {
             vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             mat2_stride,
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
-            Some("/home/ginasohn/step_tl/step-perf/w_q.npy".to_string()),
+            None, //Some("/home/ginasohn/step_tl/step-perf/w_q.npy".to_string()),
             tile_k_gen_q,
             tile_n_gen_q,
             n_byte as usize,
             tensor_addrs.get("W_Q").unwrap().clone() as u64,
             ADDR_OFFSET,
+            PAR_DISPATCH,
             addr_snd2,
             resp_addr_rcv2,
             on_chip_snd2,
-            DUMMY_ID,
+            1,
         );
 
         // ====================== Matmul Context ======================
@@ -158,7 +161,7 @@ mod test {
             }),
             1022,
             true,
-            DUMMY_ID,
+            3,
         );
 
         // ====================== Store Context ======================
@@ -168,25 +171,25 @@ mod test {
             vec![B / tile_m_gen_q, H / tile_n_gen_q],
             tile_m_gen_q,
             tile_n_gen_q,
-            Some("/home/ginasohn/step_tl/step-perf/output.npy".to_string()),
+            None, //Some("/home/ginasohn/step_tl/step-perf/output.npy".to_string()),
             tensor_addrs.get("Output").unwrap().clone() as u64,
             ADDR_OFFSET,
+            PAR_DISPATCH,
             mm_rcv,
             waddr_snd,
             ack_rcv,
-            DUMMY_ID,
+            4,
         );
 
-        // ====================== Ramulator Context ======================
+        // ====================== HBM Context ======================
 
-        let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
         let mut mem_context = HBMContext::new(
             &mut ctx,
             HBMConfig {
                 addr_offset: ADDR_OFFSET, // 32 elements in this test case
                 channel_num: 8,
-                per_channel_latency: 4,
-                per_channel_init_interval: 4,
+                per_channel_latency: 2,
+                per_channel_init_interval: 2,
                 per_channel_outstanding: 1, // For now, this does not have any effect
                 per_channel_start_up_time: 14, // Time to wait before the first request can be processed
             },
