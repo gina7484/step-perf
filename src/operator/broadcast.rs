@@ -5,15 +5,20 @@ use dam::{
     types::DAMType,
 };
 
+use crate::primitives::{elem::Elem, tile::Tile};
+
 /// Since DAM channels are single-producer single-consumer, Broadcasts can be used to send from a single channel to multiple channels.
 
 #[context_macro]
 pub struct BroadcastContext<T: Clone> {
-    receiver: Receiver<T>,
-    targets: Vec<Sender<T>>,
+    receiver: Receiver<Elem<Tile<T>>>,
+    targets: Vec<Sender<Elem<Tile<T>>>>,
 }
 
-impl<T: DAMType> Context for BroadcastContext<T> {
+impl<T: DAMType> Context for BroadcastContext<T>
+where
+    Elem<Tile<T>>: DAMType,
+{
     fn run(&mut self) {
         loop {
             let value = self.receiver.dequeue(&self.time);
@@ -33,9 +38,12 @@ impl<T: DAMType> Context for BroadcastContext<T> {
     }
 }
 
-impl<T: DAMType> BroadcastContext<T> {
+impl<T: DAMType> BroadcastContext<T>
+where
+    Elem<Tile<T>>: DAMType,
+{
     /// Sets up a broadcast context with an empty target list.
-    pub fn new(receiver: Receiver<T>) -> Self {
+    pub fn new(receiver: Receiver<Elem<Tile<T>>>) -> Self {
         let x = Self {
             receiver,
             targets: vec![],
@@ -46,7 +54,7 @@ impl<T: DAMType> BroadcastContext<T> {
     }
 
     /// Registers a target for the broadcast
-    pub fn add_target(&mut self, target: Sender<T>) {
+    pub fn add_target(&mut self, target: Sender<Elem<Tile<T>>>) {
         target.attach_sender(self);
         self.targets.push(target);
     }
