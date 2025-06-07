@@ -3,6 +3,7 @@ pub mod proto_headers;
 use crate::functions;
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
+use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
     RunOptionsBuilder,
@@ -266,6 +267,57 @@ fn build_from_proto<'a>(
                             }
                             _ => panic!("Unsupported data type"),
                         }
+                    }
+                    _ => panic!("Unsupported data type"),
+                }
+            }
+            OpType::Reassemble(reassemble) => {
+                let mut rcv_list = vec![];
+                for (rcv_id, stream_idx) in reassemble
+                    .input_id_list
+                    .into_iter()
+                    .zip(reassemble.stream_idx_list.into_iter())
+                {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        rcv_id,
+                        Some(stream_idx),
+                        builder,
+                        Some(1),
+                    );
+                    rcv_list.push(rcv);
+                }
+
+                let snd = channel_map_collection.tile_f32.get_sender(
+                    operation.id,
+                    None,
+                    builder,
+                    Some(1),
+                );
+                match reassemble
+                    .control_dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::MultiHot(multi_hot) => {
+                        let control_rcv = channel_map_collection.multihot.get_receiver(
+                            reassemble.control_id,
+                            reassemble.control_stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
+                            rcv_list,
+                            control_rcv,
+                            snd,
+                            reassemble.in_stream_rank,
+                            FlatReassembleConfig {
+                                switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                write_back_mu: reassemble.write_back_mu,
+                            },
+                        ))
                     }
                     _ => panic!("Unsupported data type"),
                 }
