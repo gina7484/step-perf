@@ -450,11 +450,14 @@ mod tests {
             ground_truth
         }
 
-        fn create_select_streams(read_from_mu: bool) -> Vec<Elem<MultiHotN<4>>> {
+        fn create_select_streams(read_from_mu: bool) -> Vec<Elem<MultiHotN>> {
             vec![
-                Elem::Val(MultiHotN::new([true, true, false, false], read_from_mu)),
-                Elem::Val(MultiHotN::new([false, true, true, false], read_from_mu)),
-                Elem::ValStop(MultiHotN::new([false, false, true, true], read_from_mu), 1),
+                Elem::Val(MultiHotN::new(vec![true, true, false, false], read_from_mu)),
+                Elem::Val(MultiHotN::new(vec![false, true, true, false], read_from_mu)),
+                Elem::ValStop(
+                    MultiHotN::new(vec![false, false, true, true], read_from_mu),
+                    1,
+                ),
             ]
         }
 
@@ -526,7 +529,7 @@ mod tests {
             sel: usize,
             length: usize,
             read_from_mu: bool,
-        ) -> Vec<MultiHotN<N>> {
+        ) -> Vec<MultiHotN> {
             let mut multi_hot_arrays = Vec::new();
             for i in 0..length {
                 let mut selection = vec![false; N];
@@ -534,15 +537,14 @@ mod tests {
                     selection[(i + j) % N] = true;
                 }
                 // Convert Vec<bool> to [bool; N]
-                let array: [bool; N] = selection.try_into().unwrap();
-                multi_hot_arrays.push(MultiHotN::new(array, read_from_mu));
+                multi_hot_arrays.push(MultiHotN::new(selection, read_from_mu));
             }
             multi_hot_arrays
         }
 
         fn create_input_streams<const N: usize>(
             arrays: &[Array2<i32>],
-            multi_hot: &Vec<MultiHotN<N>>,
+            multi_hot: &Vec<MultiHotN>,
             read_from_mu: bool,
         ) -> Vec<Vec<Elem<Tile<i32>>>> {
             let mut input_streams: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); N];
@@ -578,9 +580,9 @@ mod tests {
             .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
             .collect();
         let multi_hot = create_multi_hot_arrays::<4>(2, 9, true);
-        let input_streams_data = create_input_streams(&arrays, &multi_hot, true);
+        let input_streams_data = create_input_streams::<4>(&arrays, &multi_hot, true);
         let ground_truth = create_ground_truth(&arrays, 2, true);
-        let select_stream_data: Vec<Elem<MultiHotN<4>>> =
+        let select_stream_data: Vec<Elem<MultiHotN>> =
             multi_hot.iter().map(|m| Elem::Val(m.clone())).collect();
         let mut ctx = ProgramBuilder::default();
         let (out_data_snd, out_data_rcv) = ctx.unbounded();

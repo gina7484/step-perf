@@ -12,47 +12,40 @@ pub trait SelectAdapter {
 //      - K=number of experts to choose each time
 //      - When we don't choose any of them, it's None
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct MultiHotN<const N: usize> {
-    underlying: Option<[bool; N]>,
+pub struct MultiHotN {
+    underlying: Vec<bool>,
     read_from_mu: bool,
 }
 
-impl<const N: usize> MultiHotN<N> {
-    pub fn new(arr: [bool; N], read_from_mu: bool) -> Self {
+impl MultiHotN {
+    pub fn new(arr: Vec<bool>, read_from_mu: bool) -> Self {
         Self {
-            underlying: Some(arr),
+            underlying: arr,
             read_from_mu,
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.underlying.len()
+    }
 }
 
-impl<const N: usize> std::ops::Deref for MultiHotN<N> {
-    type Target = [bool; N];
+impl std::ops::Deref for MultiHotN {
+    type Target = Vec<bool>;
 
     fn deref(&self) -> &Self::Target {
-        self.underlying
-            .as_ref()
-            .expect("Can't deref a null buffer!")
+        self.underlying.as_ref()
     }
 }
 
-impl<const N: usize> std::ops::DerefMut for MultiHotN<N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.underlying
-            .as_mut()
-            .expect("Can't deref_mut a null buffer!")
-    }
+impl StaticallySized for MultiHotN {
+    const SIZE: usize = bool::SIZE * 64;
 }
 
-impl<const N: usize> StaticallySized for MultiHotN<N> {
-    const SIZE: usize = bool::SIZE * N;
-}
-
-impl<const N: usize> SelectAdapter for MultiHotN<N> {
+impl SelectAdapter for MultiHotN {
     fn to_sel_vec(&self) -> Vec<usize> {
-        let vec: Vec<bool> = self.underlying.unwrap().to_vec();
         let mut res_vec: Vec<usize> = vec![];
-        for (idx, data) in vec.iter().enumerate() {
+        for (idx, data) in self.underlying.iter().enumerate() {
             if *data {
                 res_vec.push(idx);
             }
@@ -61,9 +54,9 @@ impl<const N: usize> SelectAdapter for MultiHotN<N> {
     }
 }
 
-impl<const N: usize> Bufferizable for MultiHotN<N> {
+impl Bufferizable for MultiHotN {
     fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<bool>() * N
+        std::mem::size_of::<bool>() * self.underlying.len()
     }
     fn read_from_mu(&self) -> bool {
         self.read_from_mu
@@ -71,47 +64,36 @@ impl<const N: usize> Bufferizable for MultiHotN<N> {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct IndexN<const N: usize> {
-    underlying: Option<[Option<usize>; N]>,
+pub struct IndexN {
+    underlying: Vec<Option<usize>>,
     read_from_mu: bool,
 }
 
-impl<const N: usize> IndexN<N> {
-    pub fn new(arr: [Option<usize>; N], read_from_mu: bool) -> Self {
+impl IndexN {
+    pub fn new(data: Vec<Option<usize>>, read_from_mu: bool) -> Self {
         Self {
-            underlying: Some(arr),
+            underlying: data,
             read_from_mu,
         }
     }
 }
 
-impl<const N: usize> std::ops::Deref for IndexN<N> {
-    type Target = [Option<usize>; N];
+impl std::ops::Deref for IndexN {
+    type Target = Vec<Option<usize>>;
 
     fn deref(&self) -> &Self::Target {
-        self.underlying
-            .as_ref()
-            .expect("Can't deref a null buffer!")
+        self.underlying.as_ref()
     }
 }
 
-impl<const N: usize> std::ops::DerefMut for IndexN<N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.underlying
-            .as_mut()
-            .expect("Can't deref_mut a null buffer!")
-    }
+impl StaticallySized for IndexN {
+    const SIZE: usize = 64;
 }
 
-impl<const N: usize> StaticallySized for IndexN<N> {
-    const SIZE: usize = N;
-}
-
-impl<const N: usize> SelectAdapter for IndexN<N> {
+impl SelectAdapter for IndexN {
     fn to_sel_vec(&self) -> Vec<usize> {
-        let vec: Vec<Option<usize>> = self.underlying.unwrap().to_vec();
         let mut res_vec: Vec<usize> = vec![];
-        for data in vec.iter() {
+        for data in self.underlying.iter() {
             match data {
                 Some(x) => {
                     res_vec.push(*x);
@@ -123,9 +105,9 @@ impl<const N: usize> SelectAdapter for IndexN<N> {
     }
 }
 
-impl<const N: usize> Bufferizable for IndexN<N> {
+impl Bufferizable for IndexN {
     fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<usize>() * N
+        std::mem::size_of::<usize>() * self.underlying.len()
     }
     fn read_from_mu(&self) -> bool {
         self.read_from_mu
@@ -140,20 +122,23 @@ mod tests {
 
     #[test]
     fn test_one_hot() {
-        let one_hot_a: MultiHotN<2> = MultiHotN::new([false, true], false);
-        let one_hot_b: MultiHotN<3> = MultiHotN::new([false, true, true], false);
-        let one_hot_c: MultiHotN<16> = MultiHotN::new([
-            false, true, true, false, false, false, false, false, false, false, false, false,
-            false, false, false, false,
-        ], false);
+        let one_hot_a: MultiHotN = MultiHotN::new(vec![false, true], false);
+        let one_hot_b: MultiHotN = MultiHotN::new(vec![false, true, true], false);
+        let one_hot_c: MultiHotN = MultiHotN::new(
+            vec![
+                false, true, true, false, false, false, false, false, false, false, false, false,
+                false, false, false, false,
+            ],
+            false,
+        );
 
         assert!(one_hot_a.to_sel_vec() == vec![1usize]);
         assert!(one_hot_b.to_sel_vec() == vec![1usize, 2usize]);
         assert!(one_hot_c.to_sel_vec() == vec![1usize, 2usize]);
 
-        assert!(one_hot_a.dam_size() == 2);
-        assert!(one_hot_b.dam_size() == 3);
-        assert!(one_hot_c.dam_size() == 16);
+        assert!(one_hot_a.dam_size() == 64);
+        assert!(one_hot_b.dam_size() == 64);
+        assert!(one_hot_c.dam_size() == 64);
 
         dbg!(one_hot_a);
         dbg!(one_hot_b);
@@ -162,21 +147,23 @@ mod tests {
 
     #[test]
     fn test_index_list() {
-        let index_a: IndexN<2> = IndexN::new([Some(1), Some(2)], false);
-        let index_b: IndexN<2> = IndexN::new([Some(1), None],false);
-        let index_c: IndexN<3> = IndexN::new([Some(1), Some(2), Some(3)],false);
-        let index_d: IndexN<6> =
-            IndexN::new([Some(0), Some(1), Some(2), Some(11), Some(20), Some(21)],false);
+        let index_a: IndexN = IndexN::new(vec![Some(1), Some(2)], false);
+        let index_b: IndexN = IndexN::new(vec![Some(1), None], false);
+        let index_c: IndexN = IndexN::new(vec![Some(1), Some(2), Some(3)], false);
+        let index_d: IndexN = IndexN::new(
+            vec![Some(0), Some(1), Some(2), Some(11), Some(20), Some(21)],
+            false,
+        );
 
         assert!(index_a.to_sel_vec() == vec![1usize, 2usize]);
         assert!(index_b.to_sel_vec() == vec![1usize]);
         assert!(index_c.to_sel_vec() == vec![1, 2, 3]);
         assert!(index_d.to_sel_vec() == vec![0, 1, 2, 11, 20, 21]);
 
-        assert!(index_a.dam_size() == 2);
-        assert!(index_b.dam_size() == 2);
-        assert!(index_c.dam_size() == 3);
-        assert!(index_d.dam_size() == 6);
+        assert!(index_a.dam_size() == 64);
+        assert!(index_b.dam_size() == 64);
+        assert!(index_c.dam_size() == 64);
+        assert!(index_d.dam_size() == 64);
 
         dbg!(index_a);
         dbg!(index_b);

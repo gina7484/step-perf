@@ -2,6 +2,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::operator::broadcast::BroadcastContext;
+use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
     RunOptionsBuilder,
@@ -17,7 +18,10 @@ use crate::proto_driver::proto_headers::graph_proto::{
     data_type::Type, elemto_elem_func, operation::OpType, ProgramGraph,
 };
 use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
-use crate::utils::{cast::to_usize_vec, events::SimpleEvent};
+use crate::utils::{
+    cast::{to_u64_vec, to_usize_vec},
+    events::SimpleEvent,
+};
 
 fn build_from_proto<'a>(
     step_graph: ProgramGraph,
@@ -208,38 +212,65 @@ fn build_from_proto<'a>(
                     _ => panic!("Unsupported data type for RepeatStatic operation"),
                 }
             }
-            OpType::FlatPartition(flat_partition) => match (
-                flat_partition.input_dtype.clone().unwrap().r#type.clone().unwrap(),
-                flat_partition.control_dtype.clone().unwrap().r#type.clone().unwrap(),
-            ) {
-                (Type::F32(_), Type::MultiHot(multihot)) => {
-                    let rcv = channel_map_collection.tile_f32.get_receiver(
-                        flat_partition.input_id,
-                        flat_partition.stream_idx,
-                        builder,
-                        Some(1),
-                    );
-                    let snd = channel_map_collection.tile_f32.get_sender(
-                        operation.id,
-                        None,
-                        builder,
-                        Some(1),
-                    );
-                    let control_rcv = channel_map_collection
-                        .tile_multi_hot
-                        .get_receiver(flat_partition.control_id, 0, builder, Some(1));
-                    
-                    builder.add_child(functions::flat_partition::FlatPartition::<SimpleEvent>::new(
-                        rcv,
-                        snd,
-                        control_rcv,
-                        control_snd,
-                        multihot.num_partitions as usize,
-                    ));
+            OpType::FlatPartition(flat_partition) => {
+                match flat_partition
+                    .input_dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(f32) => {
+                        let input_rcv = channel_map_collection.tile_f32.get_receiver(
+                            flat_partition.input_id,
+                            flat_partition.input_stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let mut snd_list = vec![];
+                        for i in 0..flat_partition.num_consumers {
+                            snd_list.push(channel_map_collection.tile_f32.get_sender(
+                                operation.id,
+                                Some(i),
+                                builder,
+                                Some(1),
+                            ));
+                        }
 
+                        match flat_partition
+                            .control_dtype
+                            .clone()
+                            .unwrap()
+                            .r#type
+                            .clone()
+                            .unwrap()
+                        {
+                            Type::MultiHot(multi_hot) => {
+                                let control_rcv = channel_map_collection.multihot.get_receiver(
+                                    flat_partition.control_id,
+                                    flat_partition.control_stream_idx,
+                                    builder,
+                                    Some(1),
+                                );
+                                builder.add_child(FlatPartition::<SimpleEvent, _, _>::new(
+                                    input_rcv,
+                                    control_rcv,
+                                    snd_list,
+                                    flat_partition.partition_rank,
+                                    FlatPartitionConfig {
+                                        switch_cycles: to_u64_vec(flat_partition.switch_cycles),
+                                        write_back_mu: flat_partition.write_back_mu,
+                                    },
+                                ))
+                            }
+                            _ => panic!("Unsupported data type"),
+                        }
+                    }
+                    _ => panic!("Unsupported data type"),
                 }
-                (_,_) => panic!("Unsupported data types for FlatPartition operation"),
             }
+            _ => todo!(),
         }
     }
 

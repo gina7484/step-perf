@@ -280,15 +280,15 @@ mod tests {
         let select_read_from_mu = true;
         let select_stream_data = vec![
             Elem::Val(MultiHotN::new(
-                [true, true, false, false],
+                vec![true, true, false, false],
                 select_read_from_mu,
             )),
             Elem::Val(MultiHotN::new(
-                [false, true, true, false],
+                vec![false, true, true, false],
                 select_read_from_mu,
             )),
             Elem::ValStop(
-                MultiHotN::new([false, false, true, true], select_read_from_mu),
+                MultiHotN::new(vec![false, false, true, true], select_read_from_mu),
                 1,
             ),
         ];
@@ -359,12 +359,12 @@ mod tests {
 
     #[test]
     fn flat_partition_1d_multi_hot_rank_0() {
-        fn create_ground_truth<const N: usize>(
+        fn create_ground_truth(
             arrays: &[Array2<i32>],
-            multi_hot: &Vec<MultiHotN<N>>,
+            multi_hot: &Vec<MultiHotN>,
             read_from_mu: bool,
         ) -> Vec<Vec<Elem<Tile<i32>>>> {
-            let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); N];
+            let mut ground_truth: Vec<Vec<Elem<Tile<i32>>>> = vec![Vec::new(); multi_hot.len()];
 
             for (i, array_idx) in multi_hot.iter().enumerate() {
                 for (j, &is_selected) in array_idx.iter().enumerate() {
@@ -381,16 +381,14 @@ mod tests {
             sel: usize,
             length: usize,
             read_from_mu: bool,
-        ) -> Vec<MultiHotN<N>> {
+        ) -> Vec<MultiHotN> {
             let mut multi_hot_arrays = Vec::new();
             for i in 0..length {
                 let mut selection = vec![false; N];
                 for j in 0..sel {
                     selection[(i + j) % N] = true;
                 }
-                // Convert Vec<bool> to [bool; N]
-                let array: [bool; N] = selection.try_into().unwrap();
-                multi_hot_arrays.push(MultiHotN::new(array, read_from_mu));
+                multi_hot_arrays.push(MultiHotN::new(selection, read_from_mu));
             }
             multi_hot_arrays
         }
@@ -411,7 +409,7 @@ mod tests {
 
         let select_read_from_mu = true;
         let select_multi_hots = create_multi_hot_arrays::<4>(2, 9, select_read_from_mu);
-        let mut select_stream_data: Vec<Elem<MultiHotN<4>>> = Vec::new();
+        let mut select_stream_data: Vec<Elem<MultiHotN>> = Vec::new();
         for (i, multi_hot) in select_multi_hots.iter().enumerate() {
             if i == 8 {
                 select_stream_data.push(Elem::ValStop(multi_hot.clone(), 1));
