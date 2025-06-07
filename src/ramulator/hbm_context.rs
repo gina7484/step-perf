@@ -393,12 +393,6 @@ impl HBMContext {
         let mut requests = vec![];
 
         for (i, reader) in self.readers.iter().enumerate() {
-            if self.time.tick().time() > 64 && self.time.tick().time() < 262 {
-                println!(
-                    "Before iterating the next reader: time = {}",
-                    self.time.tick().time()
-                );
-            }
 
             match reader.addr.peek() {
                 PeekResult::Something(ChannelElement {
@@ -415,10 +409,6 @@ impl HBMContext {
                         reader.addr.dequeue(&self.time).unwrap();
                     } else {
                         // If not, we skip this response
-                        println!(
-                            "Context time {}, Elem time: {}, {:?}",
-                            context_time, element_visible_time, addr_vec
-                        );
                         continue;
                     }
                 }
@@ -447,11 +437,6 @@ impl HBMContext {
             }
         }
 
-        println!(
-            "Got {} requests at cycle ({})",
-            requests.len(),
-            self.time.tick().time()
-        );
 
         requests
     }

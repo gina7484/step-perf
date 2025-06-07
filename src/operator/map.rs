@@ -125,10 +125,6 @@ where
             } else {
                 0_u64
             };
-            println!(
-                "load_cycle: {}, comp_cycle: {}, store_cycle: {}",
-                load_cycle, comp_cycles, store_cycles
-            );
 
             let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
                 .into_iter()
@@ -136,11 +132,6 @@ where
                 .unwrap_or(0);
 
             self.time.incr_cycles(roofline_cycles);
-            println!(
-                "start_time: {}, after_incr: {}",
-                start_time,
-                self.time.tick().time()
-            );
 
             let data = match stop_lev {
                 Some(level) => Elem::ValStop(out_tile, level),

@@ -208,6 +208,38 @@ fn build_from_proto<'a>(
                     _ => panic!("Unsupported data type for RepeatStatic operation"),
                 }
             }
+            OpType::FlatPartition(flat_partition) => match (
+                flat_partition.input_dtype.clone().unwrap().r#type.clone().unwrap(),
+                flat_partition.control_dtype.clone().unwrap().r#type.clone().unwrap(),
+            ) {
+                (Type::F32(_), Type::MultiHot(multihot)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        flat_partition.input_id,
+                        flat_partition.stream_idx,
+                        builder,
+                        Some(1),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        Some(1),
+                    );
+                    let control_rcv = channel_map_collection
+                        .tile_multi_hot
+                        .get_receiver(flat_partition.control_id, 0, builder, Some(1));
+                    
+                    builder.add_child(functions::flat_partition::FlatPartition::<SimpleEvent>::new(
+                        rcv,
+                        snd,
+                        control_rcv,
+                        control_snd,
+                        multihot.num_partitions as usize,
+                    ));
+
+                }
+                (_,_) => panic!("Unsupported data types for FlatPartition operation"),
+            }
         }
     }
 
