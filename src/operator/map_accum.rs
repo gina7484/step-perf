@@ -65,6 +65,99 @@ where
 
         ctx
     }
+
+    fn process_map_accum(&mut self, data1: Tile<T>, data2: Tile<T>, accumulator: &mut Tile<OT>) {
+        // Load
+        let mut load_cycle: u64 = 0;
+        if data1.read_from_mu {
+            load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+        }
+        if data2.read_from_mu {
+            load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+        }
+
+        // Compute
+        let (comp_cycles, out_tile) = (self.func)(
+            &data1,
+            &data2,
+            &accumulator,
+            self.compute_bw,
+            self.write_back_mu,
+        );
+        *accumulator = out_tile; // update accumulator
+
+        let roofline_cycles = [load_cycle, comp_cycles].into_iter().max().unwrap_or(0);
+
+        // increment cycles and dequeue inputs
+        self.time.incr_cycles(roofline_cycles);
+
+        self.in1_stream.dequeue(&self.time).unwrap();
+        self.in2_stream.dequeue(&self.time).unwrap();
+
+        // Logging
+        dam::logging::log_event(&E::new(
+            self.id,
+            self.time.tick().time() - roofline_cycles,
+            self.time.tick().time(),
+            false,
+        ))
+        .unwrap();
+    }
+
+    fn process_map_accum_init(
+        &mut self,
+        data1: Tile<T>,
+        data2: Tile<T>,
+        accumulator: &mut Tile<OT>,
+        is_reduction_rank: bool,
+    ) -> Tile<OT> {
+        let mut load_cycle: u64 = 0;
+        if data1.read_from_mu {
+            load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
+        }
+        if data2.read_from_mu {
+            load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
+        }
+
+        // Compute
+        let (comp_cycles, out_tile) = (self.func)(
+            &data1,
+            &data2,
+            &accumulator,
+            self.compute_bw,
+            self.write_back_mu,
+        );
+        *accumulator = (self.init_accum)(); // Initialize accumulator
+
+        // Store
+        let store_cycles = if self.write_back_mu {
+            div_ceil(accumulator.size_in_bytes() as u64, PMU_BW)
+        } else {
+            0_u64
+        };
+
+        let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+
+        // increment cycles and dequeue inputs
+        self.time.incr_cycles(roofline_cycles);
+
+        self.in1_stream.dequeue(&self.time).unwrap();
+        self.in2_stream.dequeue(&self.time).unwrap();
+
+        // Logging
+        dam::logging::log_event(&E::new(
+            self.id,
+            self.time.tick().time() - roofline_cycles,
+            self.time.tick().time(),
+            !is_reduction_rank,
+        ))
+        .unwrap();
+
+        out_tile
+    }
 }
 
 impl<
@@ -96,41 +189,7 @@ where
                 ) => match (data1_enum, data2_enum) {
                     (Elem::Val(data1), Elem::Val(data2)) => {
                         // Load
-                        let mut load_cycle: u64 = 0;
-                        if data1.read_from_mu {
-                            load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
-                        }
-                        if data2.read_from_mu {
-                            load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
-                        }
-
-                        // Compute
-                        let (comp_cycles, out_tile) = (self.func)(
-                            &data1,
-                            &data2,
-                            &accumulator,
-                            self.compute_bw,
-                            self.write_back_mu,
-                        );
-                        accumulator = out_tile; // update accumulator
-
-                        let roofline_cycles =
-                            [load_cycle, comp_cycles].into_iter().max().unwrap_or(0);
-
-                        // increment cycles and dequeue inputs
-                        self.time.incr_cycles(roofline_cycles);
-
-                        self.in1_stream.dequeue(&self.time).unwrap();
-                        self.in2_stream.dequeue(&self.time).unwrap();
-
-                        // Logging
-                        dam::logging::log_event(&E::new(
-                            self.id,
-                            self.time.tick().time() - roofline_cycles,
-                            self.time.tick().time(),
-                            false,
-                        ))
-                        .unwrap();
+                        self.process_map_accum(data1, data2, &mut accumulator);
                     }
                     (Elem::ValStop(data1, lev1), Elem::ValStop(data2, lev2)) => {
                         if lev1 != lev2 {
@@ -138,88 +197,14 @@ where
                         }
 
                         if lev1 < self.rank {
-                            // Load
-                            let mut load_cycle: u64 = 0;
-                            if data1.read_from_mu {
-                                load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
-                            }
-                            if data2.read_from_mu {
-                                load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
-                            }
-
-                            // Compute
-                            let (comp_cycles, out_tile) = (self.func)(
-                                &data1,
-                                &data2,
-                                &accumulator,
-                                self.compute_bw,
-                                self.write_back_mu,
-                            );
-                            accumulator = out_tile; // update accumulator
-
-                            let roofline_cycles =
-                                [load_cycle, comp_cycles].into_iter().max().unwrap_or(0);
-
-                            // increment cycles and dequeue inputs
-                            self.time.incr_cycles(roofline_cycles);
-
-                            self.in1_stream.dequeue(&self.time).unwrap();
-                            self.in2_stream.dequeue(&self.time).unwrap();
-
-                            // Logging
-                            dam::logging::log_event(&E::new(
-                                self.id,
-                                self.time.tick().time() - roofline_cycles,
-                                self.time.tick().time(),
-                                false,
-                            ))
-                            .unwrap();
+                            self.process_map_accum(data1, data2, &mut accumulator);
                         } else if lev1 == self.rank {
-                            // Load
-                            let mut load_cycle: u64 = 0;
-                            if data1.read_from_mu {
-                                load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
-                            }
-                            if data2.read_from_mu {
-                                load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
-                            }
-
-                            // Compute
-                            let (comp_cycles, out_tile) = (self.func)(
-                                &data1,
-                                &data2,
-                                &accumulator,
-                                self.compute_bw,
-                                self.write_back_mu,
+                            let out_tile = self.process_map_accum_init(
+                                data1,
+                                data2,
+                                &mut accumulator,
+                                lev1 == self.rank,
                             );
-                            accumulator = (self.init_accum)(); // Initialize accumulator
-
-                            // Store
-                            let store_cycles = if self.write_back_mu {
-                                div_ceil(accumulator.size_in_bytes() as u64, PMU_BW)
-                            } else {
-                                0_u64
-                            };
-
-                            let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
-                                .into_iter()
-                                .max()
-                                .unwrap_or(0);
-
-                            // increment cycles and dequeue inputs
-                            self.time.incr_cycles(roofline_cycles);
-
-                            self.in1_stream.dequeue(&self.time).unwrap();
-                            self.in2_stream.dequeue(&self.time).unwrap();
-
-                            // Logging
-                            dam::logging::log_event(&E::new(
-                                self.id,
-                                self.time.tick().time() - roofline_cycles,
-                                self.time.tick().time(),
-                                false,
-                            ))
-                            .unwrap();
 
                             // Enqueue
                             self.out_stream
@@ -233,51 +218,12 @@ where
                                 .unwrap();
                         } else {
                             // lev1 > self.rank
-                            // Load
-                            let mut load_cycle: u64 = 0;
-                            if data1.read_from_mu {
-                                load_cycle += div_ceil(data1.size_in_bytes() as u64, PMU_BW);
-                            }
-                            if data2.read_from_mu {
-                                load_cycle += div_ceil(data2.size_in_bytes() as u64, PMU_BW);
-                            }
-
-                            // Compute
-                            let (comp_cycles, out_tile) = (self.func)(
-                                &data1,
-                                &data2,
-                                &accumulator,
-                                self.compute_bw,
-                                self.write_back_mu,
+                            let out_tile = self.process_map_accum_init(
+                                data1,
+                                data2,
+                                &mut accumulator,
+                                lev1 == self.rank,
                             );
-                            accumulator = (self.init_accum)(); // Initialize accumulator
-
-                            // Store
-                            let store_cycles = if self.write_back_mu {
-                                div_ceil(accumulator.size_in_bytes() as u64, PMU_BW)
-                            } else {
-                                0_u64
-                            };
-
-                            let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
-                                .into_iter()
-                                .max()
-                                .unwrap_or(0);
-
-                            // increment cycles and dequeue inputs
-                            self.time.incr_cycles(roofline_cycles);
-
-                            self.in1_stream.dequeue(&self.time).unwrap();
-                            self.in2_stream.dequeue(&self.time).unwrap();
-
-                            // Logging
-                            dam::logging::log_event(&E::new(
-                                self.id,
-                                self.time.tick().time() - roofline_cycles,
-                                self.time.tick().time(),
-                                true,
-                            ))
-                            .unwrap();
 
                             // Enqueue
                             self.out_stream

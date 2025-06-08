@@ -41,3 +41,14 @@ impl<T> Tile<T> {
         }
     }
 }
+
+impl<T: Clone + num::Zero> Tile<T> {
+    pub fn new_zero(arr_shape: [usize; 2]) -> Self {
+        Self {
+            shape: arr_shape.to_vec(),
+            bytes_per_elem: std::mem::size_of::<T>(),
+            read_from_mu: false,
+            underlying: Some(ndarray::ArcArray2::zeros(arr_shape)),
+        }
+    }
+}

@@ -2,6 +2,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::operator::broadcast::BroadcastContext;
+use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
@@ -64,13 +65,14 @@ fn build_from_proto<'a>(
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
                     > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
                         elemto_elem_func::ElemElemFn::Matmul(matmul) => {
-                            Arc::new(|tile1, tile2, comp_bw, write_back_mu| {
+                            let weight_transposed = matmul.weight_transposed;
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::matmul(
                                     tile1,
                                     tile2,
                                     comp_bw,
                                     write_back_mu,
-                                    false,
+                                    weight_transposed,
                                 )
                             })
                         }
@@ -86,6 +88,79 @@ fn build_from_proto<'a>(
                     ));
                 }
                 _ => panic!("Unsupported data types for BinaryMap operation"),
+            },
+            OpType::BinarymapAccum(binary_map_accum) => match (
+                binary_map_accum
+                    .dtype_a
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap(),
+                binary_map_accum
+                    .dtype_b
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap(),
+            ) {
+                (Type::F32(_), Type::F32(_)) => {
+                    // create
+                    let in1_stream = channel_map_collection.tile_f32.get_receiver(
+                        binary_map_accum.input_id1,
+                        binary_map_accum.stream_idx1,
+                        builder,
+                        Some(1),
+                    );
+                    let in2_stream = channel_map_collection.tile_f32.get_receiver(
+                        binary_map_accum.input_id2,
+                        binary_map_accum.stream_idx2,
+                        builder,
+                        Some(1),
+                    );
+                    let out_stream = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        Some(1),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, &Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>)
+                            + Send
+                            + Sync,
+                    > = match binary_map_accum.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Matmul(matmul) => {
+                            let weight_transposed = matmul.weight_transposed;
+                            Arc::new(move |tile1, tile2, accumulator, comp_bw, write_back_mu| {
+                                functions::map_accum_fn::matmul(
+                                    tile1,
+                                    tile2,
+                                    accumulator,
+                                    comp_bw,
+                                    write_back_mu,
+                                    weight_transposed,
+                                )
+                            })
+                        }
+                    };
+
+                    let tile_row = binary_map_accum.tile_row as usize;
+                    let tile_col = binary_map_accum.tile_col as usize;
+
+                    builder.add_child(BinaryMapAccum::<SimpleEvent, _, _>::new(
+                        in1_stream,
+                        in2_stream,
+                        out_stream,
+                        map_fn,
+                        Arc::new(move || Tile::new_zero([tile_row, tile_col])),
+                        binary_map_accum.rank,
+                        binary_map_accum.compute_bw as u64,
+                        binary_map_accum.write_back_mu,
+                        operation.id,
+                    ));
+                }
+                (_, _) => todo!(),
             },
             OpType::OffChipLoad(off_chip_load) => {
                 match off_chip_load.dtype.clone().unwrap().r#type.clone().unwrap() {
