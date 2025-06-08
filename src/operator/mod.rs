@@ -6,6 +6,7 @@ pub mod map_accum;
 pub mod broadcast;
 pub mod dynstreamify;
 pub mod partition;
+pub mod promote;
 pub mod reassemble;
 pub mod repeat;
 pub mod streamify;
