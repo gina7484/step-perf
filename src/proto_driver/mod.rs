@@ -2,10 +2,13 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::operator::broadcast::BroadcastContext;
+use crate::operator::bufferize::Bufferize;
+use crate::operator::dynstreamify::DynStreamify;
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
+use crate::operator::streamify::Streamify;
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
     RunOptionsBuilder,
@@ -438,6 +441,105 @@ fn build_from_proto<'a>(
                         builder.add_child(PrinterContext::new(rcv));
                     }
                     _ => panic!("Unsupported data type for PrinterContext operation"),
+                }
+            }
+            OpType::Bufferize(bufferize) => {
+                match bufferize.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            bufferize.input_id,
+                            bufferize.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.buff_tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(Bufferize::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            bufferize.rank,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for Bufferize operation"),
+                }
+            }
+            OpType::Streamify(streamify) => {
+                match streamify.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
+                            streamify.input_id,
+                            streamify.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(Streamify::<SimpleEvent, _>::new(
+                            to_usize_vec(streamify.repeat_factor),
+                            streamify.rank,
+                            rcv,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for Streamify operation"),
+                }
+            }
+            OpType::DynStreamify(dyn_streamify) => {
+                match (
+                    dyn_streamify
+                        .input_dtype
+                        .clone()
+                        .unwrap()
+                        .r#type
+                        .clone()
+                        .unwrap(),
+                    dyn_streamify
+                        .ref_dtype
+                        .clone()
+                        .unwrap()
+                        .r#type
+                        .clone()
+                        .unwrap(),
+                ) {
+                    (Type::F32(_), Type::F32(_)) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
+                            dyn_streamify.input_id,
+                            dyn_streamify.input_stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let ref_rcv = channel_map_collection.tile_f32.get_receiver(
+                            dyn_streamify.ref_id,
+                            dyn_streamify.ref_stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(DynStreamify::<SimpleEvent, _, _>::new(
+                            rcv,
+                            dyn_streamify.bufferized_rank,
+                            dyn_streamify.repeat_rank,
+                            ref_rcv,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for DynStreamify operation"),
                 }
             }
             _ => todo!(),

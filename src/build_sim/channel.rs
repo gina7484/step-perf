@@ -1,6 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use crate::primitives::{elem::Elem, select::MultiHotN, tile::Tile};
+use crate::primitives::{buffer::Buffer, elem::Elem, select::MultiHotN, tile::Tile};
 use dam::{
     channel::{Receiver, Sender},
     simulation::ProgramBuilder,
@@ -266,6 +266,8 @@ pub struct ChannelMapCollection<'a> {
     pub dummy: ChannelMap<'a, ()>,
     // data types
     pub tile_f32: ChannelMap<'a, Tile<f32>>,
+    // buffered data types
+    pub buff_tile_f32: ChannelMap<'a, Buffer<Tile<f32>>>,
     // select
     pub multihot: ChannelMap<'a, MultiHotN>,
     pub u64: ChannelMap<'a, u64>,
