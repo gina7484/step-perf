@@ -10,6 +10,7 @@ use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
     RunOptionsBuilder,
 };
+use dam::utility_contexts::PrinterContext;
 use std::sync::Arc;
 
 use crate::build_sim::channel::ChannelMapCollection;
@@ -416,6 +417,27 @@ fn build_from_proto<'a>(
                         builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
                     }
                     _ => panic!("Unsupported data type"),
+                }
+            }
+            OpType::PrinterContext(printer_context) => {
+                match printer_context
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(PrinterContext::new(rcv));
+                    }
+                    _ => panic!("Unsupported data type for PrinterContext operation"),
                 }
             }
             _ => todo!(),
