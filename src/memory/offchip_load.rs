@@ -317,9 +317,6 @@ where
             for _i in tile_addrs {
                 // Wait until you get back the response
                 self.resp_addr_rcv.dequeue(&self.time).unwrap();
-                if self.id == 1 {
-                    println!("Dequeuing elem: {}", self.time.tick().time());
-                }
             }
 
             let read_finish_time = self.time.tick();

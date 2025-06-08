@@ -85,7 +85,6 @@ where
             self.write_back_mu,
         );
         *accumulator = out_tile; // update accumulator
-
         let roofline_cycles = [load_cycle, comp_cycles].into_iter().max().unwrap_or(0);
 
         // increment cycles and dequeue inputs
@@ -170,9 +169,8 @@ where
     Elem<Tile<OT>>: DAMType,
 {
     fn run(&mut self) {
+        let mut accumulator = (self.init_accum)();
         loop {
-            let mut accumulator = (self.init_accum)();
-
             let in1 = self.in1_stream.peek_next(&self.time);
             let in2 = self.in2_stream.peek_next(&self.time);
 
