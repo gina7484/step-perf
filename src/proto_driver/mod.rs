@@ -3,6 +3,7 @@ pub mod proto_headers;
 use crate::functions;
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
+use crate::operator::promote::Promote;
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
@@ -318,6 +319,26 @@ fn build_from_proto<'a>(
                                 write_back_mu: reassemble.write_back_mu,
                             },
                         ))
+                    }
+                    _ => panic!("Unsupported data type"),
+                }
+            }
+            OpType::Promote(promote) => {
+                match promote.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(f32) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            promote.input_id,
+                            promote.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
                     }
                     _ => panic!("Unsupported data type"),
                 }
