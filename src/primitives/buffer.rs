@@ -101,6 +101,11 @@ where
                             // As the compute node encodes the overhead to store data, we will not increment cycle here
                         }
                         Elem::ValStop(value, st) => {
+                            if creation_time.is_none() {
+                                // If it's the first element, set the creation time
+                                creation_time = Some(manager.tick().time());
+                            }
+
                             buffer.push(value);
 
                             let st_as_usize: usize = st.try_into().unwrap_or_else(|_| {
@@ -191,9 +196,14 @@ where
                     result
                 }
                 None => {
-                    previous_dim = Some(ind);
-                    previous_data = Some(val.clone());
-                    vec![]
+                    if self.underlying.as_ref().unwrap().len() == 1 {
+                        // Single element buffer
+                        vec![Elem::ValStop(val.clone(), 1)]
+                    } else {
+                        previous_dim = Some(ind);
+                        previous_data = Some(val.clone());
+                        vec![]
+                    }
                 }
             })
     }
