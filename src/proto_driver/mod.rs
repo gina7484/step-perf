@@ -441,6 +441,15 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(PrinterContext::new(rcv));
                     }
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(PrinterContext::new(rcv));
+                    }
                     _ => panic!("Unsupported data type for PrinterContext operation"),
                 }
             }
