@@ -1,6 +1,7 @@
 pub mod proto_headers;
 
 use crate::functions;
+use crate::memory::dyn_offchip_load::DynOffChipLoad;
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
@@ -550,6 +551,64 @@ fn build_from_proto<'a>(
                         ));
                     }
                     _ => panic!("Unsupported data type for DynStreamify operation"),
+                }
+            }
+            OpType::DynOffChipLoad(dyn_offchip_load) => {
+                match (
+                    dyn_offchip_load
+                        .dtype
+                        .clone()
+                        .unwrap()
+                        .r#type
+                        .clone()
+                        .unwrap(),
+                    dyn_offchip_load
+                        .ref_dtype
+                        .clone()
+                        .unwrap()
+                        .r#type
+                        .clone()
+                        .unwrap(),
+                ) {
+                    (Type::F32(_), Type::F32(_)) => {
+                        let ref_rcv = channel_map_collection.tile_f32.get_receiver(
+                            dyn_offchip_load.ref_id,
+                            dyn_offchip_load.ref_stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(DynOffChipLoad::<SimpleEvent, _, _>::new(
+                            to_usize_vec(dyn_offchip_load.tensor_shape_tiled),
+                            to_usize_vec(dyn_offchip_load.stride),
+                            to_usize_vec(dyn_offchip_load.out_shape_tiled),
+                            Some(dyn_offchip_load.npy_path),
+                            dyn_offchip_load.tile_row as usize,
+                            dyn_offchip_load.tile_col as usize,
+                            4,
+                            0,
+                            hbm_config.addr_offset,
+                            dyn_offchip_load.par_dispatch as usize,
+                            ref_rcv,
+                            addr_snd,
+                            resp_rcv,
+                            snd,
+                            operation.id,
+                        ));
+                        mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    _ => panic!("Unsupported data type for DynOffChipLoad operation"),
                 }
             }
             OpType::SelectGen(select_gen) => match select_gen.is_multihot {
