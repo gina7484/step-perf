@@ -11,15 +11,9 @@ use crate::{
     ramulator::access::MemoryData,
 };
 
-use crate::utils::events::LoggableEventSimple;
-
+use crate::memory::HbmAddrEnum;
 use crate::primitives::tile::Tile;
-
-#[derive(Debug)]
-pub enum HbmAddrEnum<T: DAMType> {
-    ADDR(Vec<u64>, Tile<T>),
-    ADDRSTOP(Vec<u64>, Tile<T>, StopType),
-}
+use crate::utils::events::LoggableEventSimple;
 
 #[context_macro]
 pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
