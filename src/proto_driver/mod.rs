@@ -9,11 +9,12 @@ use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::streamify::Streamify;
+use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
     RunOptionsBuilder,
 };
-use dam::utility_contexts::PrinterContext;
+use dam::utility_contexts::{GeneratorContext, PrinterContext};
 use std::sync::Arc;
 
 use crate::build_sim::channel::ChannelMapCollection;
@@ -542,6 +543,23 @@ fn build_from_proto<'a>(
                     _ => panic!("Unsupported data type for DynStreamify operation"),
                 }
             }
+            OpType::SelectGen(select_gen) => match select_gen.is_multihot {
+                true => {
+                    let snd = channel_map_collection.multihot.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        Some(1),
+                    );
+                    builder.add_child(GeneratorContext::new(
+                        move || {
+                            read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path).unwrap()
+                        },
+                        snd,
+                    ));
+                }
+                false => todo!("Add the same version for IndexN"),
+            },
             _ => todo!(),
         }
     }

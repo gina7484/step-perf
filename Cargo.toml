@@ -35,6 +35,7 @@ pyo3 = "0.25.0"
 prost = "0.13.5"
 protobuf = "3.7.2"
 itertools = "0.14.0"
+num-traits = "0.2.19"
 
 [build-dependencies]
 cmake = "0.1"

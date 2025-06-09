@@ -2896,6 +2896,7 @@ dependencies = [
  "npyz",
  "num",
  "num-bigint",
+ "num-traits",
  "prost 0.13.5",
  "prost-build",
  "protobuf",
