@@ -19,6 +19,8 @@ use crate::utils::events::LoggableEventSimple;
 pub struct DynOffChipLoad<E: LoggableEventSimple, T: DAMType, R: DAMType> {
     // Tiling configurations
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
+    pub stride: Vec<usize>,
+    pub out_shape_tiled: Vec<usize>,
     pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     pub tile_row: usize,
     pub tile_col: usize,
@@ -47,6 +49,8 @@ where
 {
     pub fn new(
         tensor_shape_tiled: Vec<usize>,
+        stride: Vec<usize>,
+        out_shape_tiled: Vec<usize>,
         npy_path: Option<String>,
         tile_row: usize,
         tile_col: usize,
@@ -89,6 +93,8 @@ where
         };
         let ctx = Self {
             tensor_shape_tiled,
+            stride,
+            out_shape_tiled,
             underlying,
             tile_row,
             tile_col,
@@ -114,7 +120,6 @@ where
 
     fn generate_addr(&self) -> impl Iterator<Item = HbmAddrEnum<T>> {
         let mut tile_data = vec![];
-
         // Tile the actual data
         match &self.underlying {
             Some(arr) => {
@@ -135,25 +140,37 @@ where
             None => {}
         };
 
-        // Calculate total elements in the tensor (no strided view, just the original shape)
-        let total_tiles: usize = self.tensor_shape_tiled.iter().product();
+        // Calculate total elements in the output tensor
+        let total_tiles: usize = self.out_shape_tiled.iter().product();
 
         // Create a vector to hold all the addresses
         let mut addrs: Vec<HbmAddrEnum<T>> = vec![];
 
         for flat_idx in 0..total_tiles {
-            // Convert flat index to multi-dimensional indices using tensor_shape_tiled
+            // Convert flat index to multi-dimensional indices
             let mut remaining = flat_idx;
-            let mut multi_index = vec![0; self.tensor_shape_tiled.len()];
+            let mut multi_index = vec![0; self.out_shape_tiled.len()];
 
             // Calculate multi-dimensional indices
-            for i in (0..self.tensor_shape_tiled.len()).rev() {
-                multi_index[i] = remaining % self.tensor_shape_tiled[i];
-                remaining /= self.tensor_shape_tiled[i];
+            for i in (0..self.out_shape_tiled.len()).rev() {
+                multi_index[i] = remaining % self.out_shape_tiled[i];
+                remaining /= self.out_shape_tiled[i];
             }
 
-            // Since we're not using strides, tile_idx is just the flat_idx
-            let tile_idx = flat_idx;
+            // Calculate the index in the original flat tensor using strides
+            let mut tile_idx = 0;
+            for (dim, &idx_in_dim) in multi_index.iter().enumerate() {
+                tile_idx += idx_in_dim * self.stride[dim];
+            }
+
+            // Ensure we don't go out of bounds of the original tensor
+            let original_size: usize = self.tensor_shape_tiled.iter().product();
+            if original_size > 0 {
+                tile_idx = tile_idx % original_size;
+            } else {
+                tile_idx = 0; // Handle empty tensor case
+            }
+            // println!("tile_idx: {}", tile_idx);
 
             // Generate addresses to fetch the given tile
             let tile_offset = self.tile_row * self.tile_col * self.n_byte;
@@ -169,20 +186,20 @@ where
                 }
             }
 
-            // Determine the highest-dimensional stop token needed based on tensor_shape_tiled
+            // Determine the highest-dimensional stop token needed
             let mut highest_stop_token: Option<u32> = None;
             let mut all_inner_dims_at_end = true;
 
             // Check from innermost to outermost
-            for dim in (0..self.tensor_shape_tiled.len()).rev() {
+            for dim in (0..self.out_shape_tiled.len()).rev() {
                 // If all inner dimensions are at their end, check this dimension
                 if all_inner_dims_at_end {
-                    let is_dim_size_one = self.tensor_shape_tiled[dim] == 1;
-                    let is_last_elem = multi_index[dim] == self.tensor_shape_tiled[dim] - 1;
+                    let is_dim_size_one = self.out_shape_tiled[dim] == 1;
+                    let is_last_elem = multi_index[dim] == self.out_shape_tiled[dim] - 1;
 
                     // If at end or dim size is 1, update the highest stop token
                     if is_last_elem || is_dim_size_one {
-                        highest_stop_token = Some((self.tensor_shape_tiled.len() - dim) as u32);
+                        highest_stop_token = Some((self.out_shape_tiled.len() - dim) as u32);
                     }
 
                     // Update tracking for outer dimensions
@@ -196,7 +213,7 @@ where
                     // Add the addresses to the result list
                     if !tile_addrs.is_empty() {
                         if let Some(stop_type) = highest_stop_token {
-                            // If there's a stop token, add all addresses with stop type
+                            // If there's a stop token, add all addresses except the last one
                             addrs.push(HbmAddrEnum::ADDRSTOP(
                                 tile_addrs,
                                 tile_data[tile_idx].clone(),
@@ -211,7 +228,7 @@ where
                 None => {
                     if !tile_addrs.is_empty() {
                         if let Some(stop_type) = highest_stop_token {
-                            // If there's a stop token, add all addresses with stop type
+                            // If there's a stop token, add all addresses except the last one
                             addrs.push(HbmAddrEnum::ADDRSTOP(
                                 tile_addrs,
                                 Tile::new_blank(
@@ -247,7 +264,7 @@ where
                 HbmAddrEnum::ADDRSTOP(addrs, tile, level) => {
                     let final_stop_lev = match ref_stop_lev {
                         Some(ref_stop) => {
-                            if level == 2 {
+                            if level == self.out_shape_tiled.len() as u32 {
                                 // Last tile in the weight matrix
                                 ref_stop + level
                             } else {
@@ -352,7 +369,7 @@ mod tests {
     use dam::{
         simulation::ProgramBuilder,
         utility_contexts::{
-            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext,
+            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext, PrinterContext,
         },
     };
     use frunk::labelled::chars::T;
@@ -391,8 +408,8 @@ mod tests {
         let (snd, rcv) = ctx.unbounded();
 
         let ref_arr = Arc::new(
-            ArcArray::from_vec(vec![MultiHotN::new(vec![true, false], false); 24])
-                .into_shape_with_order((2, 3, 2, 2))
+            ArcArray::from_vec(vec![MultiHotN::new(vec![true, false], false); 2 * 3])
+                .into_shape_with_order((2, 3))
                 .unwrap(),
         );
         let ref_buff = Buffer::new((*ref_arr).clone().into_dyn(), DUMMY_CREATION_TIME);
@@ -419,7 +436,9 @@ mod tests {
             move || ref_buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
             ref_snd,
         ));
-        ctx.add_child(DynOffChipLoad::<SimpleEvent, _, _>::new(
+        ctx.add_child(DynOffChipLoad::<SimpleEvent, VT, _>::new(
+            vec![2, 2],
+            vec![2, 1],
             vec![2, 2],
             None,
             TILE_ROW,
