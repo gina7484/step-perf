@@ -118,10 +118,22 @@ where
         // Tile the actual data
         match &self.underlying {
             Some(arr) => {
-                for tile_i in arr.windows_with_stride(
-                    IxDyn(&[self.tile_row, self.tile_col]),
-                    IxDyn(&[self.tile_row, self.tile_col]),
-                ) {
+                let ndim = arr.ndim();
+
+                // Create window size and stride vectors, starting with all 1s
+                let mut window_size = vec![1; ndim];
+                let mut stride = vec![1; ndim];
+
+                // Set the first two dimensions for tiling
+                window_size[ndim - 2] = self.tile_row;
+                stride[ndim - 2] = self.tile_row;
+
+                window_size[ndim - 1] = self.tile_col;
+                stride[ndim - 1] = self.tile_col;
+
+                // Remaining dimensions keep size/stride of 1 (as you suggested)
+
+                for tile_i in arr.windows_with_stride(IxDyn(&window_size), IxDyn(&stride)) {
                     tile_data.push(Tile::new(
                         tile_i
                             .to_shared()

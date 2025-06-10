@@ -11,13 +11,13 @@ use crate::primitives::{elem::Elem, tile::Tile};
 
 #[context_macro]
 pub struct BroadcastContext<T: Clone> {
-    receiver: Receiver<Elem<Tile<T>>>,
-    targets: Vec<Sender<Elem<Tile<T>>>>,
+    receiver: Receiver<Elem<T>>,
+    targets: Vec<Sender<Elem<T>>>,
 }
 
 impl<T: DAMType> Context for BroadcastContext<T>
 where
-    Elem<Tile<T>>: DAMType,
+    Elem<T>: DAMType,
 {
     fn run(&mut self) {
         loop {
@@ -40,10 +40,10 @@ where
 
 impl<T: DAMType> BroadcastContext<T>
 where
-    Elem<Tile<T>>: DAMType,
+    Elem<T>: DAMType,
 {
     /// Sets up a broadcast context with an empty target list.
-    pub fn new(receiver: Receiver<Elem<Tile<T>>>) -> Self {
+    pub fn new(receiver: Receiver<Elem<T>>) -> Self {
         let x = Self {
             receiver,
             targets: vec![],
@@ -54,7 +54,7 @@ where
     }
 
     /// Registers a target for the broadcast
-    pub fn add_target(&mut self, target: Sender<Elem<Tile<T>>>) {
+    pub fn add_target(&mut self, target: Sender<Elem<T>>) {
         target.attach_sender(self);
         self.targets.push(target);
     }

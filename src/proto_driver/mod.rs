@@ -24,13 +24,75 @@ use crate::memory::offchip_store::OffChipStore;
 use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
 use crate::primitives::tile::Tile;
 use crate::proto_driver::proto_headers::graph_proto::{
-    data_type::Type, elemto_elem_func, operation::OpType, ProgramGraph,
+    buffer, data_type::Type, elemto_elem_func, operation::OpType, ProgramGraph,
 };
 use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
 use crate::utils::{
     cast::{to_u64_vec, to_usize_vec},
     events::SimpleEvent,
 };
+
+macro_rules! make_broadcast {
+    ($collection:expr, $operation: expr, $broadcast: expr, $type:ident, $builder:expr) => {
+        let rcv = $collection.$type.get_receiver(
+            $broadcast.input_id,
+            $broadcast.stream_idx,
+            $builder,
+            Some(1),
+        );
+        let mut broadcast_node = BroadcastContext::new(rcv);
+        for stream_idx in 0..$broadcast.num_consumers {
+            let snd =
+                $collection
+                    .$type
+                    .get_sender($operation.id, Some(stream_idx), $builder, Some(1));
+            broadcast_node.add_target(snd);
+        }
+
+        $builder.add_child(broadcast_node);
+    };
+}
+
+macro_rules! make_dyn_offchip_load {
+    ($collection:expr, $operation: expr, $dyn_offchip_load: expr,$hbm_config: expr,
+     $type_ref:ident, $type:ident, $n_bytes: expr,$mem_context: expr, $builder:expr) => {
+        let ref_rcv = $collection.$type_ref.get_receiver(
+            $dyn_offchip_load.ref_id,
+            $dyn_offchip_load.ref_stream_idx,
+            $builder,
+            Some(1),
+        );
+
+        let snd = $collection
+            .$type
+            .get_sender($operation.id, None, $builder, Some(1));
+
+        let (addr_snd, addr_rcv) = $builder.unbounded();
+        let (resp_snd, resp_rcv) = $builder.unbounded();
+
+        $builder.add_child(DynOffChipLoad::<SimpleEvent, _, _>::new(
+            to_usize_vec($dyn_offchip_load.tensor_shape_tiled),
+            to_usize_vec($dyn_offchip_load.stride),
+            to_usize_vec($dyn_offchip_load.out_shape_tiled),
+            Some($dyn_offchip_load.npy_path),
+            $dyn_offchip_load.tile_row as usize,
+            $dyn_offchip_load.tile_col as usize,
+            $n_bytes,
+            0,
+            $hbm_config.addr_offset,
+            $dyn_offchip_load.par_dispatch as usize,
+            ref_rcv,
+            addr_snd,
+            resp_rcv,
+            snd,
+            $operation.id,
+        ));
+        $mem_context.add_reader(ReadBundle {
+            addr: addr_rcv,
+            resp: resp_snd,
+        });
+    };
+}
 
 fn build_from_proto<'a>(
     step_graph: ProgramGraph,
@@ -273,26 +335,26 @@ fn build_from_proto<'a>(
             OpType::Broadcast(broadcast) => {
                 match broadcast.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::F32(f32) => {
-                        let rcv = channel_map_collection.tile_f32.get_receiver(
-                            broadcast.input_id,
-                            broadcast.stream_idx,
-                            builder,
-                            Some(1),
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            tile_f32,
+                            builder
                         );
-                        let mut broadcast_node = BroadcastContext::new(rcv);
-                        for stream_idx in 0..broadcast.num_consumers {
-                            let snd = channel_map_collection.tile_f32.get_sender(
-                                operation.id,
-                                Some(stream_idx),
-                                builder,
-                                Some(1),
-                            );
-                            broadcast_node.add_target(snd);
-                        }
-
-                        builder.add_child(broadcast_node);
                     }
-                    _ => panic!("Unsupported data type for RepeatStatic operation"),
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_)),
+                    }) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            buff_tile_f32,
+                            builder
+                        );
+                    }
+                    _ => panic!("Unsupported data type for Broadcast operation"),
                 }
             }
             OpType::FlatPartition(flat_partition) => {
@@ -571,42 +633,35 @@ fn build_from_proto<'a>(
                         .unwrap(),
                 ) {
                     (Type::F32(_), Type::F32(_)) => {
-                        let ref_rcv = channel_map_collection.tile_f32.get_receiver(
-                            dyn_offchip_load.ref_id,
-                            dyn_offchip_load.ref_stream_idx,
-                            builder,
-                            Some(1),
-                        );
-                        let snd = channel_map_collection.tile_f32.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            Some(1),
-                        );
-                        let (addr_snd, addr_rcv) = builder.unbounded();
-                        let (resp_snd, resp_rcv) = builder.unbounded();
-
-                        builder.add_child(DynOffChipLoad::<SimpleEvent, _, _>::new(
-                            to_usize_vec(dyn_offchip_load.tensor_shape_tiled),
-                            to_usize_vec(dyn_offchip_load.stride),
-                            to_usize_vec(dyn_offchip_load.out_shape_tiled),
-                            Some(dyn_offchip_load.npy_path),
-                            dyn_offchip_load.tile_row as usize,
-                            dyn_offchip_load.tile_col as usize,
+                        make_dyn_offchip_load!(
+                            channel_map_collection,
+                            operation,
+                            dyn_offchip_load,
+                            hbm_config,
+                            tile_f32,
+                            tile_f32,
                             4,
-                            0,
-                            hbm_config.addr_offset,
-                            dyn_offchip_load.par_dispatch as usize,
-                            ref_rcv,
-                            addr_snd,
-                            resp_rcv,
-                            snd,
-                            operation.id,
-                        ));
-                        mem_context.add_reader(ReadBundle {
-                            addr: addr_rcv,
-                            resp: resp_snd,
-                        });
+                            mem_context,
+                            builder
+                        );
+                    }
+                    (
+                        Type::F32(_),
+                        Type::Buffer(proto_headers::graph_proto::Buffer {
+                            r#type: Some(buffer::Type::F32(_)),
+                        }),
+                    ) => {
+                        make_dyn_offchip_load!(
+                            channel_map_collection,
+                            operation,
+                            dyn_offchip_load,
+                            hbm_config,
+                            buff_tile_f32,
+                            tile_f32,
+                            4,
+                            mem_context,
+                            builder
+                        );
                     }
                     _ => panic!("Unsupported data type for DynOffChipLoad operation"),
                 }
