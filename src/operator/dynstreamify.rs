@@ -17,24 +17,18 @@ use crate::utils::events::LoggableEventSimple;
 use crate::primitives::tile::Tile;
 
 /// `bufferized_rank`: Rank of the buffers in in_stream <br/><br/>
-/// `repeat_rank`: The rank of the substream in ref_stream that corresponds to a single buffer.
-///                If you are only broadcasting a single rank, this is 1. If you want to add N
-///                more dimensions through broadcasting each buffer, this is N.  <br/><br/>
+/// `repeat_rank`: The last (largest) rank that is expanded. <br/><br/>
 ///
-/// `in_stream`: `[D1,D2,...,DN]` <br/>
+/// `in_stream`: The last (`repeat_rank`+1) ranks' shape should all be 1. (i.e., rank 0 ~ rank `repeat_rank`)<br/>
 ///
-/// `ref_stream`:<br/>
-///     `[D1,...,D(repeat_rank), D(repeat_rank+1), ..., D(repeat_rank+N)]` <br/>
-///     `<-----repeated------>`  <br/><br/>
+/// `ref_stream`: The ranks higher than `repeat_rank` should be the same as `in_stream` (i.e., rank `repeat_rank+1`~) <br/>
 ///
-/// `out_stream`: <br/>
-///     `[D1,..,D(buf_rank), D(buf_rank+1),..,D(buf_rank + rep_rank), .., D(buf_rank + rep_rank + N)]` <br/>
-///     `<---- buffer ---->`  `<----repeated based on ref_stream----->`  `<-------in_stream shape------>`
+/// `out_stream`: Same shape as the `ref_stream`
 #[context_macro]
 pub struct DynStreamify<E: LoggableEventSimple, T: Bufferizable + Clone, R: Clone> {
     pub in_stream: Receiver<Elem<Buffer<T>>>,
-    pub bufferized_rank: StopType, // rank of the buffers in in_stream
-    pub repeat_rank: StopType, // rank of the substream in ref_stream that corresponds to a single buffer
+    pub bufferized_rank: StopType,
+    pub repeat_rank: StopType,
     pub ref_stream: Receiver<Elem<R>>,
     pub out_stream: Sender<Elem<T>>,
     pub id: u32,
@@ -93,6 +87,9 @@ where
                     let start_time = self.time.tick().time();
                     match buff_elem {
                         Elem::Val(buff) => {
+                            panic!("The size of the innermost rank of the input stream should always be 1!");
+                        }
+                        Elem::ValStop(buff, outer_stop_lev) => {
                             loop {
                                 match self.ref_stream.dequeue(&self.time) {
                                     Ok(ChannelElement {
@@ -137,11 +134,15 @@ where
                                                             let new_stop_level = if tile_stop_lev
                                                                 == self.bufferized_rank
                                                             {
-                                                                // Add the stop level of the reference stream
-                                                                // if it's the last tile in the buffer
+                                                                // last tile in the buffer
                                                                 tile_stop_lev + ref_stop_lev
-                                                            } else {
+                                                            } else if tile_stop_lev
+                                                                < self.bufferized_rank
+                                                            {
                                                                 tile_stop_lev
+                                                            } else {
+                                                                panic!("Larger stop token than the buffer's rank! \
+                                                                Buffer rank: {}, Tile stop level: {}", self.bufferized_rank, tile_stop_lev);
                                                             };
                                                             self.out_stream
                                                                 .enqueue(
@@ -160,108 +161,14 @@ where
                                                         }
                                                     }
                                                 }
-                                                if ref_stop_lev == self.repeat_rank {
+                                                if ref_stop_lev >= self.repeat_rank + 1 {
                                                     // If the stop level is greater than or equal to the repeat rank,
                                                     // we move on to the next buffer
                                                     break;
-                                                } else if ref_stop_lev > self.repeat_rank {
-                                                    panic!("Unexpected stop level in reference stream: {}", ref_stop_lev);
                                                 }
                                             }
                                         }
                                     }
-                                    Err(_) => {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Elem::ValStop(buff, outer_stop_lev) => {
-                            loop {
-                                match self.ref_stream.dequeue(&self.time) {
-                                    Ok(ChannelElement {
-                                        time: _,
-                                        data: ref_elem,
-                                    }) => match ref_elem {
-                                        Elem::Val(_) => {
-                                            let buff_clone = buff.clone();
-                                            for elem in buff_clone.to_elem_iter() {
-                                                self.out_stream
-                                                    .enqueue(
-                                                        &self.time,
-                                                        ChannelElement {
-                                                            time: self.time.tick(),
-                                                            data: elem,
-                                                        },
-                                                    )
-                                                    .unwrap();
-
-                                                self.time.incr_cycles(1);
-                                            }
-                                        }
-                                        Elem::ValStop(_, ref_stop_lev) => {
-                                            let buff_clone = buff.clone();
-                                            for elem in buff_clone.to_elem_iter() {
-                                                match elem {
-                                                    Elem::Val(tile) => {
-                                                        self.out_stream
-                                                            .enqueue(
-                                                                &self.time,
-                                                                ChannelElement {
-                                                                    time: self.time.tick(),
-                                                                    data: Elem::Val(tile),
-                                                                },
-                                                            )
-                                                            .unwrap();
-
-                                                        self.time.incr_cycles(1);
-                                                    }
-                                                    Elem::ValStop(tile, tile_stop_lev) => {
-                                                        let new_stop_level = if tile_stop_lev
-                                                            == self.bufferized_rank
-                                                        {
-                                                            if ref_stop_lev < self.repeat_rank {
-                                                                tile_stop_lev + ref_stop_lev
-                                                            } else if ref_stop_lev
-                                                                == self.repeat_rank + outer_stop_lev
-                                                            {
-                                                                tile_stop_lev
-                                                                    + ref_stop_lev
-                                                                    + outer_stop_lev
-                                                            } else {
-                                                                panic!(
-                                                                    "Unexpected stop level in reference stream: {} (Expected: {})",
-                                                                    ref_stop_lev,
-                                                                    self.repeat_rank + outer_stop_lev
-                                                                );
-                                                            }
-                                                        } else {
-                                                            tile_stop_lev
-                                                        };
-                                                        self.out_stream
-                                                            .enqueue(
-                                                                &self.time,
-                                                                ChannelElement {
-                                                                    time: self.time.tick(),
-                                                                    data: Elem::ValStop(
-                                                                        tile,
-                                                                        new_stop_level,
-                                                                    ),
-                                                                },
-                                                            )
-                                                            .unwrap();
-
-                                                        self.time.incr_cycles(1);
-                                                    }
-                                                }
-                                            }
-                                            if ref_stop_lev >= self.repeat_rank {
-                                                // If the stop level is greater than or equal to the repeat rank,
-                                                // we move on to the next buffer
-                                                break;
-                                            }
-                                        }
-                                    },
                                     Err(_) => {
                                         break;
                                     }
@@ -307,11 +214,11 @@ mod tests {
     };
 
     #[test]
-    fn round_trip_test_3d() {
-        // [2,|2,2] (in)
-        // [2,3] (ref)
+    fn round_trip_test_repeat_rank_1() {
+        // [2,3,1,1] (in) buffer_shape = [2,2]
+        // [2,3,2,4] (ref)
         // repeat_rank = 1
-        // output = [2,3,2,2]
+        // output = [2,3,2,4,2,2]
         type VT = u32;
 
         const REPEAT_RANK_PER_BUFFER: StopType = 1;
@@ -323,16 +230,11 @@ mod tests {
         let (out_snd, out_rcv) = ctx.unbounded();
 
         const BYTES_PER_ELEM: usize = 2;
-        const READ_FROM_MU: bool = false;
+        const READ_FROM_MU: bool = true;
         const DUMMY_CREATION_TIME: u64 = 0;
-        let tile_vec = vec![
-            Tile::<VT>::new_blank(vec![2, 2], BYTES_PER_ELEM, READ_FROM_MU),
-            Tile::<VT>::new_blank(vec![2, 2], BYTES_PER_ELEM, READ_FROM_MU),
-            Tile::<VT>::new_blank(vec![2, 2], BYTES_PER_ELEM, READ_FROM_MU),
-            Tile::<VT>::new_blank(vec![2, 2], BYTES_PER_ELEM, READ_FROM_MU),
-        ];
+        let tile_vec = vec![Tile::<VT>::new_blank(vec![2, 2], BYTES_PER_ELEM, READ_FROM_MU); 2 * 2];
 
-        // =============== Input [2,|2,2] ================
+        // =============== Input [2,3,1,1] ================
         // Create 2x2 Buffers (each are a buffer of 2x2 tiles)
         let arr = Arc::new(
             ArcArray::from_vec(tile_vec)
@@ -343,32 +245,61 @@ mod tests {
         ctx.add_child(GeneratorContext::new(
             move || {
                 vec![
-                    Elem::Val(Buffer::new(
-                        (*arr_clone).clone().into_dyn(),
-                        DUMMY_CREATION_TIME,
-                    )),
-                    Elem::Val(Buffer::new(
-                        (*arr_clone).clone().into_dyn(),
-                        DUMMY_CREATION_TIME,
-                    )),
+                    Elem::ValStop(
+                        Buffer::new((*arr_clone).clone().into_dyn(), DUMMY_CREATION_TIME),
+                        2,
+                    ),
+                    Elem::ValStop(
+                        Buffer::new((*arr_clone).clone().into_dyn(), DUMMY_CREATION_TIME),
+                        2,
+                    ),
+                    Elem::ValStop(
+                        Buffer::new((*arr_clone).clone().into_dyn(), DUMMY_CREATION_TIME),
+                        3,
+                    ),
+                    Elem::ValStop(
+                        Buffer::new((*arr_clone).clone().into_dyn(), DUMMY_CREATION_TIME),
+                        2,
+                    ),
+                    Elem::ValStop(
+                        Buffer::new((*arr_clone).clone().into_dyn(), DUMMY_CREATION_TIME),
+                        2,
+                    ),
+                    Elem::ValStop(
+                        Buffer::new((*arr_clone).clone().into_dyn(), DUMMY_CREATION_TIME),
+                        3,
+                    ),
                 ]
                 .into_iter()
             },
             snd,
         ));
 
-        // =============== Ref Stream [2,3] ================
+        // =============== Ref Stream [2,3,2,4] ================
+        let ref_arr = Arc::new(
+            ArcArray::from_vec(vec![
+                Tile::<VT>::new_blank(
+                    vec![2, 2],
+                    BYTES_PER_ELEM,
+                    READ_FROM_MU
+                );
+                3 * 2 * 4
+            ])
+            .into_shape_with_order((3, 2, 4))
+            .unwrap(),
+        );
         ctx.add_child(GeneratorContext::new(
             move || {
-                vec![
-                    Elem::Val(0),
-                    Elem::Val(1),
-                    Elem::ValStop(2, 1),
-                    Elem::Val(0),
-                    Elem::Val(1),
-                    Elem::ValStop(2, 1),
-                ]
-                .into_iter()
+                Buffer::new((*ref_arr).clone().into_dyn(), DUMMY_CREATION_TIME)
+                    .to_elem_iter()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .chain(
+                        Buffer::new((*ref_arr).clone().into_dyn(), DUMMY_CREATION_TIME)
+                            .to_elem_iter()
+                            .collect::<Vec<_>>()
+                            .into_iter(),
+                    )
             },
             ref_snd,
         ));
@@ -382,36 +313,31 @@ mod tests {
             DUMMY_ID,
         ));
 
-        // =============== Output Stream [2,3,2,2] ================
+        // =============== Output Stream [2,3,2,4,2,2] ================
+        let out_arr = Arc::new(
+            ArcArray::from_vec(vec![
+                Tile::<VT>::new_blank(
+                    vec![2, 2],
+                    BYTES_PER_ELEM,
+                    READ_FROM_MU
+                );
+                3 * 2 * 4 * 2 * 2
+            ])
+            .into_shape_with_order((3, 2, 4, 2, 2))
+            .unwrap(),
+        );
         ctx.add_child(ApproxCheckerContext::new(
             move || {
-                vec![
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 3),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 2),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 1),
-                    Elem::Val(Tile::<VT>::new_blank(vec![2, 2], 2, false)),
-                    Elem::ValStop(Tile::<VT>::new_blank(vec![2, 2], 2, false), 3),
-                ]
-                .into_iter()
+                Buffer::new((*out_arr).clone().into_dyn(), DUMMY_CREATION_TIME)
+                    .to_elem_iter()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .chain(
+                        Buffer::new((*out_arr).clone().into_dyn(), DUMMY_CREATION_TIME)
+                            .to_elem_iter()
+                            .collect::<Vec<_>>()
+                            .into_iter(),
+                    )
             },
             out_rcv,
             |x, y| x == y,
