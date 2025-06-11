@@ -5,6 +5,7 @@ pub mod map_accum;
 // pub mod mux_demux;
 pub mod broadcast;
 pub mod dynstreamify;
+pub mod flatten;
 pub mod partition;
 pub mod promote;
 pub mod reassemble;
