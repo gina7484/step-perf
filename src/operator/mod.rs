@@ -3,11 +3,13 @@ pub mod bufferize;
 pub mod map;
 pub mod map_accum;
 // pub mod mux_demux;
+pub mod broadcast;
 pub mod dynstreamify;
+pub mod partition;
+pub mod promote;
+pub mod reassemble;
 pub mod repeat;
 pub mod streamify;
-pub mod partition;
-pub mod reassemble;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;

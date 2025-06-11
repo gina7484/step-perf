@@ -6,3 +6,5 @@ data/
 *.html
 *.npy
 __pycache__/
+*.pb
+*.json

@@ -27,6 +27,7 @@ pub struct BinaryMap<E, A: DAMType, B: DAMType> {
     func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
+    id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -46,6 +47,7 @@ where
         func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
         compute_bw: u64, // FLOPs / cycle
         write_back_mu: bool,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in1_stream,
@@ -54,6 +56,7 @@ where
             func,
             compute_bw,
             write_back_mu,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -101,7 +104,9 @@ where
                 },
                 (Ok(_), Err(_)) => panic!("One stream closed earlier"),
                 (Err(_), Ok(_)) => panic!("One stream closed earlier"),
-                (Err(_), Err(_)) => return,
+                (Err(_), Err(_)) => {
+                    return;
+                }
             };
 
             let start_time = self.time.tick().time();
@@ -120,6 +125,7 @@ where
             } else {
                 0_u64
             };
+
             let roofline_cycles = [load_cycle, comp_cycles, store_cycles]
                 .into_iter()
                 .max()
@@ -142,6 +148,7 @@ where
                 .unwrap();
 
             dam::logging::log_event(&E::new(
+                self.id,
                 start_time,
                 self.time.tick().time(),
                 stop_lev != None,

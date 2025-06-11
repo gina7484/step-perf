@@ -2,38 +2,38 @@ use std::marker::PhantomData;
 
 use dam::logging::LogEvent;
 use dam::{context_tools::*, types::StaticallySized};
+use itertools::Itertools;
 use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
 
+use crate::ramulator::hbm_context::ParAddrs;
 use crate::{
     primitives::elem::{Elem, StopType},
     ramulator::access::MemoryData,
 };
 
-use crate::utils::events::LoggableEventSimple;
-
+use crate::memory::HbmAddrEnum;
 use crate::primitives::tile::Tile;
-
-#[derive(Debug)]
-pub enum HbmAddrEnum<T: DAMType> {
-    ADDR(Vec<u64>, Tile<T>),
-    ADDRSTOP(Vec<u64>, Tile<T>, StopType),
-}
+use crate::utils::events::LoggableEventSimple;
 
 #[context_macro]
 pub struct OffChipLoad<E: LoggableEventSimple, T: DAMType> {
+    // Tiling configurations
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
     pub stride: Vec<usize>,             // Express the view information with strides
     pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
     pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     pub tile_row: usize,
     pub tile_col: usize,
-    pub n_byte: usize,       // size of the datatype
+    pub n_byte: usize, // size of the datatype
+    // HBM Configurations & Addresses
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
-    pub addr_snd: Sender<u64>,
+    pub par_dispatch: usize,
+    // Sender & Receiver (DAM details)
+    pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
-    pub rdata_rcv: Receiver<MemoryData>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -54,10 +54,11 @@ where
         n_byte: usize,
         base_addr_byte: u64,
         addr_offset: u64,
-        addr_snd: Sender<u64>,
+        par_dispatch: usize,
+        addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
-        rdata_rcv: Receiver<MemoryData>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
+        id: u32,
     ) -> Self {
         let underlying = match npy_path {
             Some(file_path) => {
@@ -97,16 +98,16 @@ where
             n_byte,
             base_addr_byte,
             addr_offset,
+            par_dispatch,
             addr_snd,
             resp_addr_rcv,
-            rdata_rcv,
             on_chip_snd,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
         ctx.addr_snd.attach_sender(&ctx);
         ctx.resp_addr_rcv.attach_receiver(&ctx);
-        ctx.rdata_rcv.attach_receiver(&ctx);
         ctx.on_chip_snd.attach_sender(&ctx);
 
         ctx
@@ -117,10 +118,22 @@ where
         // Tile the actual data
         match &self.underlying {
             Some(arr) => {
-                for tile_i in arr.windows_with_stride(
-                    IxDyn(&[self.tile_row, self.tile_col]),
-                    IxDyn(&[self.tile_row, self.tile_col]),
-                ) {
+                let ndim = arr.ndim();
+
+                // Create window size and stride vectors, starting with all 1s
+                let mut window_size = vec![1; ndim];
+                let mut stride = vec![1; ndim];
+
+                // Set the first two dimensions for tiling
+                window_size[ndim - 2] = self.tile_row;
+                stride[ndim - 2] = self.tile_row;
+
+                window_size[ndim - 1] = self.tile_col;
+                stride[ndim - 1] = self.tile_col;
+
+                // Remaining dimensions keep size/stride of 1 (as you suggested)
+
+                for tile_i in arr.windows_with_stride(IxDyn(&window_size), IxDyn(&stride)) {
                     tile_data.push(Tile::new(
                         tile_i
                             .to_shared()
@@ -289,6 +302,329 @@ where
 
             // Send read request to HBM
             let send_request_time = self.time.tick();
+            for (idx, addr_chunk) in tile_addrs
+                .iter()
+                .chunks(self.par_dispatch)
+                .into_iter()
+                .enumerate()
+            {
+                let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
+                self.addr_snd
+                    .enqueue(
+                        &self.time,
+                        ChannelElement {
+                            time: send_request_time + idx as u64,
+                            data: ParAddrs::new(chunk_vec),
+                        },
+                    )
+                    .unwrap();
+            }
+
+            for _i in tile_addrs {
+                // Wait until you get back the response
+                self.resp_addr_rcv.dequeue(&self.time).unwrap();
+            }
+
+            let read_finish_time = self.time.tick();
+
+            dam::logging::log_event(&E::new(
+                self.id,
+                send_request_time.time(),
+                read_finish_time.time(),
+                is_stop,
+            ))
+            .unwrap();
+
+            // Send the data to on-chip
+            // To properly the backpressure under the double buffering setting,
+            // this channel should have a depth of 1
+
+            self.on_chip_snd
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: elem_tile,
+                    },
+                )
+                .unwrap();
+        }
+    }
+}
+
+#[context_macro]
+pub struct OffChipLoadRamulator<E: LoggableEventSimple, T: DAMType> {
+    pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
+    pub stride: Vec<usize>,             // Express the view information with strides
+    pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
+    pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
+    pub tile_row: usize,
+    pub tile_col: usize,
+    pub n_byte: usize,       // size of the datatype
+    pub base_addr_byte: u64, // The base address for the given tensor
+    pub addr_offset: u64,    // The data received per request
+    pub addr_snd: Sender<u64>,
+    pub resp_addr_rcv: Receiver<u64>,
+    pub rdata_rcv: Receiver<MemoryData>,
+    pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub id: u32,
+    _phantom: PhantomData<E>, // Needed to use the generic parameter E
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: npyz::Deserialize + DAMType,
+    > OffChipLoadRamulator<E, T>
+where
+    Elem<Tile<T>>: DAMType,
+{
+    pub fn new(
+        tensor_shape_tiled: Vec<usize>,
+        stride: Vec<usize>,
+        out_shape_tiled: Vec<usize>,
+        npy_path: Option<String>,
+        tile_row: usize,
+        tile_col: usize,
+        n_byte: usize,
+        base_addr_byte: u64,
+        addr_offset: u64,
+        addr_snd: Sender<u64>,
+        resp_addr_rcv: Receiver<u64>,
+        rdata_rcv: Receiver<MemoryData>,
+        on_chip_snd: Sender<Elem<Tile<T>>>,
+        id: u32,
+    ) -> Self {
+        let underlying = match npy_path {
+            Some(file_path) => {
+                // Open the file
+                let mut file = std::fs::File::open(file_path).unwrap();
+
+                // Read the data and shape of the `.npy` file
+                let file_data = npyz::NpyFile::new(&mut file).unwrap();
+                let shape_vec = file_data
+                    .shape()
+                    .iter()
+                    .map(|x| *x as usize)
+                    .collect::<Vec<usize>>();
+
+                let total_cols = tile_col * tensor_shape_tiled.last().unwrap();
+                let total_rows = tile_row * tensor_shape_tiled[tensor_shape_tiled.len() - 2];
+                let mut untiled_shape = tensor_shape_tiled[..tensor_shape_tiled.len() - 2].to_vec();
+                untiled_shape.append(&mut vec![total_rows, total_cols]);
+
+                assert_eq!(untiled_shape, shape_vec);
+
+                let shape: ndarray::Dim<IxDynImpl> = shape_vec.into_dimension();
+
+                let vec_data: Vec<T> = file_data.into_vec().unwrap();
+                Some(ndarray::ArcArray::from_shape_vec(shape, vec_data).unwrap())
+            }
+            None => None,
+        };
+
+        let ctx = Self {
+            tensor_shape_tiled,
+            stride,
+            out_shape_tiled,
+            underlying,
+            tile_row,
+            tile_col,
+            n_byte,
+            base_addr_byte,
+            addr_offset,
+            addr_snd,
+            resp_addr_rcv,
+            rdata_rcv,
+            on_chip_snd,
+            id,
+            context_info: Default::default(),
+            _phantom: PhantomData,
+        };
+        ctx.addr_snd.attach_sender(&ctx);
+        ctx.resp_addr_rcv.attach_receiver(&ctx);
+        ctx.rdata_rcv.attach_receiver(&ctx);
+        ctx.on_chip_snd.attach_sender(&ctx);
+
+        ctx
+    }
+
+    fn generate_addr(&self) -> impl Iterator<Item = HbmAddrEnum<T>> {
+        let mut tile_data = vec![];
+        // Tile the actual data
+        match &self.underlying {
+            Some(arr) => {
+                for tile_i in arr.windows_with_stride(
+                    IxDyn(&[self.tile_row, self.tile_col]),
+                    IxDyn(&[self.tile_row, self.tile_col]),
+                ) {
+                    tile_data.push(Tile::new(
+                        tile_i
+                            .to_shared()
+                            .into_shape_with_order((self.tile_row, self.tile_col))
+                            .unwrap(),
+                        self.n_byte,
+                        true,
+                    ))
+                }
+            }
+            None => {}
+        };
+
+        // Calculate total elements in the output tensor
+        let total_tiles: usize = self.out_shape_tiled.iter().product();
+
+        // Create a vector to hold all the addresses
+        let mut addrs: Vec<HbmAddrEnum<T>> = vec![];
+
+        for flat_idx in 0..total_tiles {
+            // Convert flat index to multi-dimensional indices
+            let mut remaining = flat_idx;
+            let mut multi_index = vec![0; self.out_shape_tiled.len()];
+
+            // Calculate multi-dimensional indices
+            for i in (0..self.out_shape_tiled.len()).rev() {
+                multi_index[i] = remaining % self.out_shape_tiled[i];
+                remaining /= self.out_shape_tiled[i];
+            }
+
+            // Calculate the index in the original flat tensor using strides
+            let mut tile_idx = 0;
+            for (dim, &idx_in_dim) in multi_index.iter().enumerate() {
+                tile_idx += idx_in_dim * self.stride[dim];
+            }
+
+            // Ensure we don't go out of bounds of the original tensor
+            let original_size: usize = self.tensor_shape_tiled.iter().product();
+            if original_size > 0 {
+                tile_idx = tile_idx % original_size;
+            } else {
+                tile_idx = 0; // Handle empty tensor case
+            }
+            // println!("tile_idx: {}", tile_idx);
+
+            // Generate addresses to fetch the given tile
+            let tile_offset = self.tile_row * self.tile_col * self.n_byte;
+            let base_addr_i = self.base_addr_byte + (tile_idx * tile_offset) as u64;
+            let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * self.n_byte;
+
+            // Generate all addresses for this tile
+            let mut tile_addrs = vec![];
+            for r in 0..self.tile_row {
+                for c in (0..(self.tile_col * self.n_byte)).step_by(self.addr_offset as usize) {
+                    let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
+                    tile_addrs.push(addr);
+                }
+            }
+
+            // Determine the highest-dimensional stop token needed
+            let mut highest_stop_token: Option<u32> = None;
+            let mut all_inner_dims_at_end = true;
+
+            // Check from innermost to outermost
+            for dim in (0..self.out_shape_tiled.len()).rev() {
+                // If all inner dimensions are at their end, check this dimension
+                if all_inner_dims_at_end {
+                    let is_dim_size_one = self.out_shape_tiled[dim] == 1;
+                    let is_last_elem = multi_index[dim] == self.out_shape_tiled[dim] - 1;
+
+                    // If at end or dim size is 1, update the highest stop token
+                    if is_last_elem || is_dim_size_one {
+                        highest_stop_token = Some((self.out_shape_tiled.len() - dim) as u32);
+                    }
+
+                    // Update tracking for outer dimensions
+                    // Only continue checking outer dimensions if this one is at its last element
+                    all_inner_dims_at_end = is_last_elem;
+                }
+            }
+
+            match self.underlying {
+                Some(_) => {
+                    // Add the addresses to the result list
+                    if !tile_addrs.is_empty() {
+                        if let Some(stop_type) = highest_stop_token {
+                            // If there's a stop token, add all addresses except the last one
+                            addrs.push(HbmAddrEnum::ADDRSTOP(
+                                tile_addrs,
+                                tile_data[tile_idx].clone(),
+                                stop_type,
+                            ));
+                        } else {
+                            // No stop token, add all addresses normally
+                            addrs.push(HbmAddrEnum::ADDR(tile_addrs, tile_data[tile_idx].clone()));
+                        }
+                    }
+                }
+                None => {
+                    if !tile_addrs.is_empty() {
+                        if let Some(stop_type) = highest_stop_token {
+                            // If there's a stop token, add all addresses except the last one
+                            addrs.push(HbmAddrEnum::ADDRSTOP(
+                                tile_addrs,
+                                Tile::new_blank(
+                                    vec![self.tile_row, self.tile_col],
+                                    self.n_byte,
+                                    true,
+                                ),
+                                stop_type,
+                            ));
+                        } else {
+                            // No stop token, add all addresses normally
+                            addrs.push(HbmAddrEnum::ADDR(
+                                tile_addrs,
+                                Tile::new_blank(
+                                    vec![self.tile_row, self.tile_col],
+                                    self.n_byte,
+                                    true,
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        addrs.into_iter()
+    }
+
+    pub fn on_chip_req_elems(&self) -> usize {
+        self.tile_row * self.tile_col
+    }
+
+    pub fn loaded_elems(&self) -> usize {
+        let total_tiles: usize = self.out_shape_tiled.iter().product();
+        total_tiles * self.tile_row * self.tile_col
+    }
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: npyz::Deserialize + DAMType,
+    > Context for OffChipLoadRamulator<E, T>
+where
+    Elem<Tile<T>>: DAMType,
+{
+    fn run(&mut self) {
+        // Ensure stride and out_shape have the same length
+        assert_eq!(
+            self.stride.len(),
+            self.out_shape_tiled.len(),
+            "Stride and output shape must have the same number of dimensions"
+        );
+        assert!(((self.tile_col * self.n_byte) as u64) % self.addr_offset == 0);
+
+        // println!("Started run of OFFHCIP LOAD");
+
+        for addr_enum in self.generate_addr() {
+            let (tile_addrs, elem_tile, is_stop) = match addr_enum {
+                HbmAddrEnum::ADDR(addrs, tile) => (addrs, Elem::Val(tile), false),
+                HbmAddrEnum::ADDRSTOP(addrs, tile, level) => {
+                    (addrs, Elem::ValStop(tile, level), true)
+                }
+            };
+
+            // Send read request to HBM
+            let send_request_time = self.time.tick();
             for (idx, addr) in tile_addrs.iter().enumerate() {
                 self.addr_snd
                     .enqueue(
@@ -304,11 +640,13 @@ where
             for _i in tile_addrs {
                 // Wait until you get back the response
                 self.resp_addr_rcv.dequeue(&self.time).unwrap();
+                self.rdata_rcv.dequeue(&self.time).unwrap();
             }
 
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
                 is_stop,
@@ -337,15 +675,17 @@ where
 mod test {
     use std::default;
 
-    use super::{HbmAddrEnum, OffChipLoad};
+    use super::{HbmAddrEnum, OffChipLoadRamulator};
+    use crate::memory::offchip_load::OffChipLoad;
     use crate::primitives::tile::Tile;
     // use crate::ramulator::ramulator_context::{Memory, RamulatorContext, ReadBundle};
 
     use crate::define_simple_event;
-    use crate::utils::events::LoggableEventSimple;
+    use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle};
+    use crate::utils::events::{LoggableEventSimple, SimpleEvent, DUMMY_ID};
     use dam::dam_macros::event_type;
-    use dam::simulation::RunOptions;
-    use dam::utility_contexts::FunctionContext;
+    use dam::simulation::{InitializationOptions, RunOptions};
+    use dam::utility_contexts::{FunctionContext, PrinterContext};
     use dam::{
         simulation::{
             LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder, RunOptionsBuilder,
@@ -504,177 +844,60 @@ mod test {
         }
     }
     /*
-    define_simple_event!(InputLoad);
-    // define_simple_event!(WeightQLoad);
-    #[test]
-    fn test_with_ramulator() {
-        /*
-        ADDR_OFFSET = (Channel Width) x (Burst Length) = 64 bytes
-        - Channel Width: 16 bytes/channel
-            - HBM2 standard (JEDEC HBM2 specification) defines each pseudo-channel width explicitly as 16 bytes/channel
-        - Burst Length: 4
-            - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
-         */
-        const ADDR_OFFSET: u64 = 64;
+        #[test]
+        fn test_offchipload() {
+            let mut parent = ProgramBuilder::default();
 
-        /*
-        Dataflow: ijk
-        [32, 128] x [128, 64] = [32, 64]
+            let mut mem_context = HBMContext::new(
+                &mut parent,
+                HBMConfig {
+                    addr_offset: 64, // 64 bytes
+                    channel_num: 8,
+                    per_channel_latency: 4,
+                    per_channel_init_interval: 4,
+                    per_channel_outstanding: 1, // For now, this does not have any effect
+                    per_channel_start_up_time: 14, // Time to wait before the first request can be processed
+                },
+            );
 
-        Stream: [ 2,   1] x [  1,  4] = [ 2,  4]
-        Tile:   [16, 128] x [128, 16] = [16, 16]
-         */
+            // ========================== Read Bundle 1 =============================
+            let (raddr_snd, raddr_rcv) = parent.unbounded();
+            let (resp_addr_snd, resp_addr_rcv) = parent.unbounded();
+            let (data_snd, data_rcv) = parent.unbounded();
 
-        let mut ctx: ProgramBuilder<'_> = ProgramBuilder::default();
+            parent.add_child(OffChipLoad::<SimpleEvent, f32>::new(
+                vec![2, 1],
+                vec![1, 1],
+                vec![2, 1],
+                None,
+                16,
+                32,
+                2,
+                0,
+                64,
+                raddr_snd,
+                resp_addr_rcv,
+                data_snd,
+                DUMMY_ID,
+            ));
 
-        // ====================== Two matrix loaders ======================
-        let n_byte = 2;
-        let mat1_base = 0;
+            parent.add_child(PrinterContext::new(data_rcv));
 
-        let (addr_snd1, addr_rcv1) = ctx.unbounded();
-        let (resp_addr_snd1, resp_addr_rcv1) = ctx.unbounded();
-        let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
-        let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
+            mem_context.add_reader(ReadBundle {
+                addr: raddr_rcv,
+                resp: resp_addr_snd,
+            });
 
-        let mat1 = OffChipLoad::<InputLoad, f32>::new(
-            vec![2, 1], // As we don't tile K, the second element is 1
-            vec![1, 0, 1],
-            vec![2, 4, 1],
-            None,
-            16,
-            128,
-            n_byte,
-            mat1_base,
-            ADDR_OFFSET,
-            addr_snd1,
-            resp_addr_rcv1,
-            rdata_rcv1,
-            on_chip_snd1,
-        );
+            parent.add_child(mem_context);
 
-        ctx.add_child(mat1);
+            println!("Finished building");
 
-        // ====================== Ramulator Context ======================
+            let executed = parent
+                .initialize(InitializationOptions::default())
+                .unwrap()
+                .run(RunOptions::default());
 
-        let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
-        let mut mem_context = RamulatorContext::new(config_file, (1u32, 1u32), None);
-        mem_context.add_reader(ReadBundle {
-            addr: Box::new(addr_rcv1),
-            resp: Box::new(rdata_snd1),
-            resp_addr: Box::new(resp_addr_snd1),
-        });
-
-        ctx.add_child(mem_context);
-
-        // ====================== Consumer ======================
-        ctx.add_child(ConsumerContext::new(on_chip_rcv1));
-
-        let initialized = ctx.initialize(Default::default()).unwrap();
-
-        let summary = initialized.run(RunOptions::default());
-        // Check the summary
-        println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
-    }
-
-       #[test]
-       fn test_with_ramulator_logging() {
-           /*
-           ADDR_OFFSET = (Channel Width) x (Burst Length) = 64 bytes
-           - Channel Width: 16 bytes/channel
-               - HBM2 standard (JEDEC HBM2 specification) defines each pseudo-channel width explicitly as 16 bytes/channel
-           - Burst Length: 4
-               - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
-            */
-           const ADDR_OFFSET: u64 = 64;
-
-           /*
-           Dataflow: ijk
-           [32, 128] x [128, 64] = [32, 64]
-
-           Stream: [ 2,   1] x [  1,  4] = [ 2,  4]
-           Tile:   [16, 128] x [128, 16] = [16, 16]
-            */
-
-           let mut ctx: ProgramBuilder<'_> = ProgramBuilder::default();
-
-           // ====================== Two matrix loaders ======================
-           let n_byte = 2;
-           let mat1_base = 0;
-           let mat2_base = mat1_base + 32 * 128 * n_byte;
-
-           let (addr_snd1, addr_rcv1) = ctx.unbounded();
-           let (resp_addr_snd1, resp_addr_rcv1) = ctx.unbounded();
-           let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
-           let (on_chip_snd1, on_chip_rcv1) = ctx.unbounded();
-
-           let mat1 = OffChipLoad::<InputLoad, f32>::new(
-               vec![2, 1], // As we don't tile K, the second element is 1
-               vec![1, 0, 1],
-               vec![2, 4, 1],
-               None,
-               16,
-               128,
-               2,
-               mat1_base,
-               ADDR_OFFSET,
-               addr_snd1,
-               resp_addr_rcv1,
-               rdata_rcv1,
-               on_chip_snd1,
-           );
-
-           ctx.add_child(mat1);
-
-           // let (addr_snd2, addr_rcv2) = ctx.unbounded();
-           // let (resp_addr_snd2, resp_addr_rcv2) = ctx.unbounded();
-           // let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
-           // let (on_chip_snd2, on_chip_rcv2) = ctx.unbounded();
-
-           // let mat2 = OffChipLoad::<WeightQLoad>::new(
-           //     [1, 4], // As we don't tile K, the second element is 1
-           //     vec![0, 4, 1],
-           //     vec![2, 1, 4],
-           //     128,
-           //     16,
-           //     2,
-           //     mat2_base,
-           //     addr_snd2,
-           //     resp_addr_rcv2,
-           //     rdata_rcv2,
-           //     on_chip_snd2,
-           // );
-
-           // ====================== Ramulator Context ======================
-
-           let config_file = "/home/ginasohn/step-perf/external/ramulator2_wrapper/configs/hbm2.yaml";
-           let mut mem_context = RamulatorContext::new(config_file, (1u32, 1u32), None);
-           mem_context.add_reader(ReadBundle {
-               addr: Box::new(addr_rcv1),
-               resp: Box::new(rdata_snd1),
-               resp_addr: Box::new(resp_addr_snd1),
-           });
-
-           ctx.add_child(mem_context);
-
-           // ====================== Consumer ======================
-           ctx.add_child(ConsumerContext::new(on_chip_rcv1));
-
-           let initialized = ctx.initialize(Default::default()).unwrap();
-
-           let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
-               // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
-               dam::logging::LogFilter::AllowAll,
-           ));
-           let run_options = run_options.logging(LoggingOptions::Mongo(
-               MongoOptionsBuilder::default()
-                   .db("off_chip_loader".to_string())
-                   .uri("mongodb://127.0.0.1:27017".to_string())
-                   .build()
-                   .unwrap(),
-           ));
-           let summary = initialized.run(run_options.build().unwrap());
-           // Check the summary
-           println!("{}, {:?}", summary.passed(), summary.elapsed_cycles());
-       }
+            println!("Elapsed: {:?}", executed.elapsed_cycles());
+        }
     */
 }

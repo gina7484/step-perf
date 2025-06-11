@@ -16,6 +16,7 @@ pub struct Streamify<E: LoggableEventSimple, T: Bufferizable + Clone> {
     pub rank: StopType,
     pub in_stream: Receiver<Elem<Buffer<T>>>,
     pub out_stream: Sender<Elem<T>>,
+    pub id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -31,12 +32,14 @@ where
         rank: StopType,
         in_stream: Receiver<Elem<Buffer<T>>>,
         out_stream: Sender<Elem<T>>,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             repeat_factor,
             rank,
             in_stream,
             out_stream,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -224,8 +227,13 @@ where
                     }
                     self.in_stream.dequeue(&self.time).unwrap();
 
-                    dam::logging::log_event(&E::new(start_time, self.time.tick().time(), false))
-                        .unwrap();
+                    dam::logging::log_event(&E::new(
+                        self.id,
+                        start_time,
+                        self.time.tick().time(),
+                        false,
+                    ))
+                    .unwrap();
                 }
                 Err(_) => {
                     return;
@@ -237,12 +245,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::events::LoggableEventSimple;
+    use crate::utils::events::{LoggableEventSimple, DUMMY_ID};
     use crate::{
         define_simple_event,
         operator::bufferize::Bufferize,
         primitives::{elem::Elem, tile::Tile},
-        utils::events::DummyEvent,
+        utils::events::SimpleEvent,
     };
     use dam::dam_macros::event_type;
     use dam::{
@@ -293,6 +301,7 @@ mod tests {
             rcv,
             buff_snd,
             bufferize_rank,
+            DUMMY_ID,
         ));
 
         let (out_snd, out_rcv) = ctx.unbounded();
@@ -301,6 +310,7 @@ mod tests {
             bufferize_rank,
             buff_rcv,
             out_snd,
+            DUMMY_ID,
         ));
 
         // [1,3,2,2,2]
@@ -388,18 +398,20 @@ mod tests {
         ));
 
         let (buff_snd, buff_rcv) = ctx.bounded(1);
-        ctx.add_child(Bufferize::<DummyEvent, _>::new(
+        ctx.add_child(Bufferize::<SimpleEvent, _>::new(
             rcv,
             buff_snd,
             bufferize_rank,
+            DUMMY_ID,
         ));
 
         let (out_snd, out_rcv) = ctx.unbounded();
-        ctx.add_child(super::Streamify::<DummyEvent, _>::new(
+        ctx.add_child(super::Streamify::<SimpleEvent, _>::new(
             vec![],
             bufferize_rank,
             buff_rcv,
             out_snd,
+            DUMMY_ID,
         ));
 
         // [2, 2, 2]

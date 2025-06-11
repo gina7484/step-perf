@@ -43,11 +43,16 @@ pub fn matmul<T: ndarray::LinalgScalar>(
 
     match (&in1.underlying, &in2.underlying) {
         (Some(arr1), Some(arr2)) => {
-            let out_arr = match weight_transposed {
+            let map_arr = match weight_transposed {
                 true => arr1.dot(&arr2.t()),
                 false => arr1.dot(arr2),
             };
-
+            let out_arr = match &accumulator.underlying {
+                Some(arr) => arr + map_arr,
+                None => {
+                    panic!("Accumulator tile must have an underlying array for matmul operation")
+                }
+            };
             (
                 div_ceil((2 * m * k * n) as u64, flop_per_cycle),
                 Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),

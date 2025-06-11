@@ -3,11 +3,11 @@ mod test {
     use std::default;
     use std::sync::Arc;
 
-    use crate::memory::offchip_load::OffChipLoad;
+    use crate::memory::offchip_load::OffChipLoadRamulator;
     use crate::primitives::tile::Tile;
 
     use crate::functions::{map_accum_fn, map_fn};
-    use crate::memory::offchip_store::OffChipStore;
+    use crate::memory::offchip_store::OffChipStoreRamulator;
     use crate::operator::map::BinaryMap;
     use crate::operator::map_accum::BinaryMapAccum;
     use crate::operator::repeat::RepeatStatic;
@@ -113,7 +113,7 @@ mod test {
             let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
             let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-            let mat1 = OffChipLoad::<InputLoad>::new(
+            let mat1 = OffChipLoadRamulator::<InputLoad>::new(
                 [B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
                 vec![H / tile_k_gen_q, 1],
                 vec![B / tile_m_gen_q, H / tile_k_gen_q],
@@ -143,7 +143,7 @@ mod test {
             let (rdata_snd2, rdata_rcv2) = ctx.unbounded();
             let (on_chip_snd2, on_chip_rcv2) = ctx.bounded(1);
 
-            let mat2 = OffChipLoad::<WeightQLoad>::new(
+            let mat2 = OffChipLoadRamulator::<WeightQLoad>::new(
                 [H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
                 vec![0, H / tile_n_gen_q, 1],
                 vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
@@ -284,7 +284,7 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-        let mat1 = OffChipLoad::<InputLoad, f32>::new(
+        let mat1 = OffChipLoadRamulator::<InputLoad, f32>::new(
             vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
@@ -314,7 +314,7 @@ mod test {
         let (on_chip_snd2, on_chip_rcv2) = ctx.bounded(1);
 
         // For the weights, we will assume it's saved in a transposed order
-        let mat2 = OffChipLoad::<WeightQLoad, f32>::new(
+        let mat2 = OffChipLoadRamulator::<WeightQLoad, f32>::new(
             vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             vec![0, 1, H / tile_n_gen_q],
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
@@ -367,7 +367,7 @@ mod test {
         let (waddr_snd, waddr_rcv) = ctx.unbounded();
         let (wdata_snd, wdata_rcv) = ctx.unbounded();
         let (ack_snd, ack_rcv) = ctx.unbounded();
-        let store_ctx = OffChipStore::<StoreOutput, f32>::new(
+        let store_ctx = OffChipStoreRamulator::<StoreOutput, f32>::new(
             vec![B / tile_m_gen_q, H / tile_n_gen_q],
             tile_m_gen_q,
             tile_n_gen_q,
@@ -501,7 +501,7 @@ mod test {
         let (rdata_snd1, rdata_rcv1) = ctx.unbounded();
         let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-        let mat1 = OffChipLoad::<InputLoad, f32>::new(
+        let mat1 = OffChipLoadRamulator::<InputLoad, f32>::new(
             vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
@@ -536,7 +536,7 @@ mod test {
         } else {
             vec![0, 1, H / tile_n_gen_q]
         };
-        let mat2 = OffChipLoad::<WeightQLoad, f32>::new(
+        let mat2 = OffChipLoadRamulator::<WeightQLoad, f32>::new(
             vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             mat2_stride,
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
@@ -589,7 +589,7 @@ mod test {
         let (waddr_snd, waddr_rcv) = ctx.unbounded();
         let (wdata_snd, wdata_rcv) = ctx.unbounded();
         let (ack_snd, ack_rcv) = ctx.unbounded();
-        let store_ctx = OffChipStore::<StoreOutput, f32>::new(
+        let store_ctx = OffChipStoreRamulator::<StoreOutput, f32>::new(
             vec![B / tile_m_gen_q, H / tile_n_gen_q],
             tile_m_gen_q,
             tile_n_gen_q,
