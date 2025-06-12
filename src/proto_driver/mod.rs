@@ -5,6 +5,7 @@ use crate::memory::dyn_offchip_load::DynOffChipLoad;
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
+use crate::operator::flatten::Flatten;
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
@@ -415,16 +416,20 @@ fn build_from_proto<'a>(
                     _ => panic!("Unsupported data type"),
                 }
             }
-            OpType::Reassemble(reassemble) => {
+            OpType::FlatReassemble(reassemble) => {
                 let mut rcv_list = vec![];
                 for (rcv_id, stream_idx) in reassemble
                     .input_id_list
                     .into_iter()
-                    .zip(reassemble.stream_idx_list.into_iter())
+                    .zip(reassemble.input_stream_idx_list.into_iter())
                 {
                     let rcv = channel_map_collection.tile_f32.get_receiver(
                         rcv_id,
-                        Some(stream_idx),
+                        if stream_idx < 0 {
+                            None
+                        } else {
+                            Some(stream_idx as u32)
+                        },
                         builder,
                         Some(1),
                     );
@@ -456,7 +461,7 @@ fn build_from_proto<'a>(
                             rcv_list,
                             control_rcv,
                             snd,
-                            reassemble.in_stream_rank,
+                            reassemble.reassemble_rank,
                             FlatReassembleConfig {
                                 switch_cycles: to_u64_vec(reassemble.switch_cycles),
                                 write_back_mu: reassemble.write_back_mu,
@@ -664,6 +669,31 @@ fn build_from_proto<'a>(
                         );
                     }
                     _ => panic!("Unsupported data type for DynOffChipLoad operation"),
+                }
+            }
+            OpType::Flatten(flatten) => {
+                match flatten.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            flatten.input_id,
+                            flatten.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(Flatten::new(
+                            rcv,
+                            snd,
+                            flatten.min_rank,
+                            flatten.max_rank,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for Flatten operation"),
                 }
             }
             OpType::SelectGen(select_gen) => match select_gen.is_multihot {
