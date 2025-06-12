@@ -256,7 +256,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::primitives::select::{MultiHotN, SelectAdapter};
+    use crate::primitives::select::MultiHotN;
     use crate::{
         operator::reassemble::{FlatReassemble, FlatReassembleConfig},
         primitives::{elem::Elem, tile::Tile},
