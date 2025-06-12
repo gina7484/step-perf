@@ -20,6 +20,7 @@ pub struct FlatReassemble<E, A: DAMType, SELT: DAMType> {
     out_stream: Sender<Elem<Tile<A>>>,
     reassemble_rank: StopType,
     config: FlatReassembleConfig,
+    id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -38,6 +39,7 @@ where
         out_stream: Sender<Elem<Tile<A>>>,
         reassemble_rank: StopType,
         config: FlatReassembleConfig,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in_streams,
@@ -45,6 +47,7 @@ where
             out_stream,
             reassemble_rank,
             config,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -388,6 +391,7 @@ mod tests {
             out_data_snd,
             1,
             config,
+            0,
         )); // [1, 3, 2, 3]
 
         ctx.add_child(ApproxCheckerContext::new(
@@ -505,6 +509,7 @@ mod tests {
             out_data_snd,
             0,
             config,
+            0,
         ));
         ctx.add_child(ApproxCheckerContext::new(
             || ground_truth.into_iter(),

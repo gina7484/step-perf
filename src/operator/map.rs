@@ -5,9 +5,7 @@ use crate::primitives::elem::{Bufferizable, Elem};
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
-use dam::dam_macros::event_type;
 use dam::{context_tools::*, logging::LogEvent};
-use serde::{Deserialize, Serialize};
 
 /// The function will be a binary function that returns the latency in cycles
 /// based on the size of the operands and allocated bandwidth.
@@ -157,6 +155,121 @@ where
 
             self.in1_stream.dequeue(&self.time).unwrap();
             self.in2_stream.dequeue(&self.time).unwrap();
+        }
+    }
+}
+
+pub struct UnaryMapConfig {
+    pub compute_bw: u64,     // FLOPs / cycle
+    pub write_back_mu: bool, // Whether the output is written to a memory unit
+}
+
+#[context_macro]
+pub struct UnaryMap<E, T: DAMType, OT: DAMType> {
+    in_stream: Receiver<Elem<Tile<T>>>,
+    out_stream: Sender<Elem<Tile<OT>>>,
+    func: Arc<dyn Fn(&Tile<T>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, FLOPs per cycle -> cycles
+    config: UnaryMapConfig,
+    id: u32,
+    _phantom: PhantomData<E>,
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: DAMType,
+        OT: DAMType,
+    > UnaryMap<E, T, OT>
+where
+    Elem<Tile<T>>: DAMType,
+    Elem<Tile<OT>>: DAMType,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<Tile<T>>>,
+        out_stream: Sender<Elem<Tile<OT>>>,
+        func: Arc<dyn Fn(&Tile<T>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, FLOPs per cycle -> cycles
+        config: UnaryMapConfig,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            func,
+            config,
+            id,
+            context_info: Default::default(),
+            _phantom: PhantomData,
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: DAMType,
+        OT: DAMType,
+    > Context for UnaryMap<E, T, OT>
+where
+    Elem<Tile<T>>: DAMType,
+    Elem<Tile<OT>>: DAMType,
+{
+    fn run(&mut self) {
+        loop {
+            let in_elem = self.in_stream.peek_next(&self.time);
+            let (in_tile, stop_lev) = match in_elem {
+                Ok(ChannelElement {
+                    time: _,
+                    data: data_enum,
+                }) => match data_enum {
+                    Elem::Val(data) => (data, None),
+                    Elem::ValStop(data, lev) => (data, Some(lev)),
+                },
+                Err(_) => {
+                    return; // Stream closed
+                }
+            };
+
+            let start_time = self.time.tick().time();
+            let load_cycles = if in_tile.read_from_mu {
+                div_ceil(in_tile.size_in_bytes() as u64, PMU_BW)
+            } else {
+                0
+            };
+
+            let (comp_cycles, out_tile) = (self.func)(&in_tile, self.config.compute_bw, self.config.write_back_mu);
+            let store_cycles = if self.config.write_back_mu {
+                div_ceil(out_tile.size_in_bytes() as u64, PMU_BW)
+            } else {
+                0
+            };
+
+            let roofline_cycles = [load_cycles, comp_cycles, store_cycles]
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            self.time.incr_cycles(roofline_cycles);
+            let data = match stop_lev {
+                Some(level) => Elem::ValStop(out_tile, level),
+                None => Elem::Val(out_tile),
+            };
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: data,
+                    },
+                )
+                .unwrap();
+            dam::logging::log_event(&E::new(
+                self.id,
+                start_time,
+                self.time.tick().time(),
+                stop_lev != None,
+            )).unwrap();
+            self.in_stream.dequeue(&self.time).unwrap();
         }
     }
 }

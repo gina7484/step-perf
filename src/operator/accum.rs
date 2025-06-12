@@ -8,6 +8,11 @@ use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
 
+pub struct AccumConfig {
+    pub compute_bw: u64,
+    pub write_back_mu: bool,
+}
+
 #[context_macro]
 pub struct Accum<E, T: DAMType, OT: DAMType> {
     in_stream: Receiver<Elem<Tile<T>>>,
@@ -15,8 +20,8 @@ pub struct Accum<E, T: DAMType, OT: DAMType> {
     func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
     rank: StopType,
-    compute_bw: u64,     // FLOPs / cycle
-    write_back_mu: bool, // Whether the output is written to a memory unit
+    config: AccumConfig,
+    id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -35,8 +40,8 @@ where
         func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
         init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
         rank: StopType,
-        compute_bw: u64, // FLOPs / cycle
-        write_back_mu: bool,
+        config: AccumConfig,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in_stream,
@@ -44,8 +49,8 @@ where
             func,
             init_accum,
             rank,
-            compute_bw,
-            write_back_mu,
+            config,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -64,8 +69,8 @@ where
         let (comp_cycles, out_tile) = (self.func)(
             &data,
             &accumulator,
-            self.compute_bw,
-            self.write_back_mu,
+            self.config.compute_bw,
+            self.config.write_back_mu,
         );
         *accumulator = out_tile;
 
@@ -88,12 +93,12 @@ where
         let (comp_cycles, out_tile) = (self.func)(
             &data,
             &accumulator,
-            self.compute_bw,
-            self.write_back_mu,
+            self.config.compute_bw,
+            self.config.write_back_mu,
         );
         *accumulator = (self.init_accum)();
 
-        let store_cycles = if self.write_back_mu {
+        let store_cycles = if self.config.write_back_mu {
             div_ceil(accumulator.size_in_bytes() as u64, PMU_BW)
         } else {
             0
