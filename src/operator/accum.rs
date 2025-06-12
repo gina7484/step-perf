@@ -189,4 +189,9 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_retile_col() {
+        
+    }
+
 }
