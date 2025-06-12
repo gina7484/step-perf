@@ -19,6 +19,7 @@ pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
     out_streams: Vec<Sender<Elem<Tile<A>>>>,
     partition_rank: StopType,
     config: FlatPartitionConfig,
+    id: u32,
     _phantom: PhantomData<E>,
 }
 
@@ -37,6 +38,7 @@ where
         out_streams: Vec<Sender<Elem<Tile<A>>>>,
         partition_rank: StopType,
         config: FlatPartitionConfig,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in_stream,
@@ -44,6 +46,7 @@ where
             out_streams,
             partition_rank,
             config,
+            id,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -328,6 +331,7 @@ mod tests {
             vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
             1, // partition_rank
             config,
+            0, // id
         ));
 
         // Step 9: Create CheckerContexts for each output stream to verify the results
@@ -443,6 +447,7 @@ mod tests {
             vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
             0, // partition_rank
             config,
+            0, // id
         ));
         ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[0].clone().into_iter(),
