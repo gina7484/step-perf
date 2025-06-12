@@ -138,7 +138,7 @@ where
     fn run(&mut self) {
         let mut accumulator = (self.init_accum)();
         loop {
-            match self.in_stream.dequeue(&self.time) {
+            match self.in_stream.peek_next(&self.time) {
                 Ok(ChannelElement {time: _, data}) => match data {
                     Elem::Val(x) => {
                         self.process_accum(x, &mut accumulator);
@@ -270,7 +270,7 @@ mod tests {
             in_data_rcv,
             out_data_snd,
             Arc::new(map_fn::retile_col),
-            Arc::new(move || Tile::new_empty([2, 2], read_from_mu)),
+            Arc::new(move || Tile::new_empty([2, 0], read_from_mu)),
             1, // rank
             AccumConfig {
                 compute_bw: 1000, // FLOPs per cycle

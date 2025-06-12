@@ -68,15 +68,11 @@ pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
     let in_arr = in_data.underlying.clone().unwrap();
     let cur_arr = accumulator.underlying.clone().unwrap();
 
-    if cur_arr.is_empty() {
-        // If accumulator is empty, we just return the input data
-        return (0, Tile::new(in_arr.to_shared(), in_data.bytes_per_elem, in_data.read_from_mu));
-    } else {
-        return (0, ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
-            .map(|arr| Tile::new(arr.to_shared(), in_data.bytes_per_elem, in_data.read_from_mu))
-            .unwrap_or_else(|_| {
-                panic!("Failed to concatenate input data and accumulator data")
-            }));
-    }
+    (0, 
+    ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
+        .map(|arr| Tile::new(arr.to_shared(), in_data.bytes_per_elem, in_data.read_from_mu))
+        .unwrap_or_else(|_| {
+            panic!("Failed to concatenate input data and accumulator data")
+        }))
 
 }
