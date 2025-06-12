@@ -18,7 +18,7 @@ pub struct FlatReassemble<E, A: DAMType, SELT: DAMType> {
     in_streams: Vec<Receiver<Elem<Tile<A>>>>,
     sel_stream: Receiver<Elem<SELT>>,
     out_stream: Sender<Elem<Tile<A>>>,
-    in_stream_rank: StopType,
+    reassemble_rank: StopType,
     config: FlatReassembleConfig,
     _phantom: PhantomData<E>,
 }
@@ -36,14 +36,14 @@ where
         in_streams: Vec<Receiver<Elem<Tile<A>>>>,
         sel_stream: Receiver<Elem<SELT>>,
         out_stream: Sender<Elem<Tile<A>>>,
-        in_stream_rank: StopType,
+        reassemble_rank: StopType,
         config: FlatReassembleConfig,
     ) -> Self {
         let ctx = Self {
             in_streams,
             sel_stream,
             out_stream,
-            in_stream_rank,
+            reassemble_rank,
             config,
             context_info: Default::default(),
             _phantom: PhantomData,
@@ -56,30 +56,18 @@ where
     }
 
     /// Helper function to calculate and increment load cycles for memory operations
-    fn handle_load_cycles<T: Bufferizable>(&mut self, data: &T) {
+    fn handle_load_cycles<T: Bufferizable>(&mut self, data: &T, constant: Option<u64>) {
+        let constant = constant.unwrap_or(0);
         if data.read_from_mu() {
-            let load_cycle = div_ceil(data.size_in_bytes() as u64, PMU_BW);
+            let load_cycle = div_ceil(data.size_in_bytes() as u64, PMU_BW) + constant;
             self.time.incr_cycles(load_cycle);
         }
     }
-
-    fn process_input_stream(&mut self, select_vec: &[usize], index_level: Option<StopType>) {
-        'expert: loop {
-            let peek_results = self.peek_all_streams(select_vec);
-
-            if peek_results.is_empty() {
-                return; // All streams closed
-            }
-
-            self.validate_peek_results(&peek_results);
-            let data_ready_times = self.calculate_data_ready_times(&peek_results, select_vec);
-
-            self.dequeue_streams_in_order(&data_ready_times, select_vec);
-            self.advance_time_to_max_ready(&peek_results);
-
-            if self.process_and_enqueue_outputs(&peek_results, select_vec, index_level) {
-                break 'expert;
-            }
+    
+    fn handle_memory_writeback(&mut self, x: &Tile<A>) {
+        if self.config.write_back_mu {
+            self.time
+                .incr_cycles(div_ceil(x.size_in_bytes() as u64, PMU_BW));
         }
     }
 
@@ -112,234 +100,123 @@ where
         peek_results
     }
 
-    fn validate_peek_results(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) {
-        let (data_arrive_times, all_data) = self.check_all_data(peek_results);
-        let (stop_values, stop_arrive_times, all_stop) = self.check_all_stop(peek_results);
-
-        if !all_data && !all_stop {
-            panic!("Not all selected streams have data or stop tokens available");
-        }
-    }
-
-    fn check_all_data(
+    fn get_arrive_times(
         &self,
         peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
-    ) -> (Vec<u64>, bool) {
-        let mut data_arrive_times = vec![];
-        let all_data = peek_results.iter().all(|t| match t {
-            Some(ChannelElement {
-                time: arrive,
-                data: Elem::Val(_),
-            }) => {
-                data_arrive_times.push(arrive.time());
-                true
-            }
-            _ => false,
-        });
-        (data_arrive_times, all_data)
-    }
-
-    fn check_all_stop(
-        &self,
-        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
-    ) -> (Vec<StopType>, Vec<u64>, bool) {
-        let mut stop_values = vec![];
-        let mut stop_arrive_times = vec![];
-        let all_stop = peek_results.iter().all(|t| match t {
-            Some(ChannelElement {
-                time: arrive,
-                data: Elem::ValStop(_, level),
-            }) => {
-                stop_arrive_times.push(arrive.time());
-                stop_values.push(*level);
-                true
-            }
-            _ => false,
-        });
-
-        let uniform_stop = all_stop && stop_values.iter().all(|s| s == &stop_values[0]);
-        (stop_values, stop_arrive_times, uniform_stop)
-    }
-
-    fn calculate_data_ready_times(
-        &self,
-        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
-        select_vec: &[usize],
     ) -> Vec<u64> {
-        let mut data_ready_times = vec![];
-
-        for (i, peek_elem) in peek_results.iter().enumerate() {
-            if let Some(elem) = peek_elem {
-                let stream_id = select_vec[i];
-                let base_time = elem.time.time() + self.config.switch_cycles[stream_id];
-
-                let ready_time = match &elem.data {
-                    Elem::Val(x) | Elem::ValStop(x, _) => {
-                        if x.read_from_mu() {
-                            base_time + div_ceil(x.size_in_bytes() as u64, PMU_BW)
-                        } else {
-                            base_time
-                        }
+        let mut data_arrive_times = vec![];
+        peek_results.iter().for_each(|elem| {
+            if let Some(ChannelElement { time: arrive, data }) = elem {
+                match data {
+                    Elem::Val(_) => {
+                        data_arrive_times.push(arrive.time());
                     }
-                };
-                data_ready_times.push(ready_time);
+                    Elem::ValStop(_, level) => {
+                        data_arrive_times.push(arrive.time() + *level as u64);
+                    }
+                }
             }
-        }
-
-        data_ready_times
+        });
+        data_arrive_times
     }
 
-    fn dequeue_streams_in_order(&mut self, data_ready_times: &[u64], select_vec: &[usize]) {
-        // Dequeue in ascending order of data ready times (FIFO scheduling)
-        let mut sorted_indices: Vec<usize> = (0..data_ready_times.len()).collect();
-        sorted_indices.sort_by_key(|&i| data_ready_times[i]);
+    fn process_input_stream(&mut self, select_vec: &[usize], select_level: Option<u32>) {
+        let addtional_rank = select_level.unwrap_or(0);
+        let num_selected_streams = select_vec.len();
+        // Peek the next wave of input elements
+        let peek_results = self.peek_all_streams(select_vec);
+        if peek_results.is_empty() {
+            panic!("All input streams are closed or empty");
+        }
+
+        // Get the arrive time of each element in the peek_results
+        let data_arrive_times = self.get_arrive_times(&peek_results);
+
+        // Create idx vector based on the data_arrive_times
+        let mut sorted_indices: Vec<usize> = (0..num_selected_streams).collect();
+        sorted_indices.sort_by_key(|&i| data_arrive_times[i]);
 
         for &i in sorted_indices.iter() {
-            self.in_streams[select_vec[i]].dequeue(&self.time).unwrap();
-        }
-    }
+            let is_last_selected = sorted_indices.last() == Some(&i);
+            let stream_idx = select_vec[i];
+            loop {
+                // Peek next to the current stream
+                match self.in_streams[stream_idx].peek_next(&self.time) {
+                    Ok(ChannelElement{
+                        time: _,
+                        data: val_data
+                    }) => {
+                        // Handle load cycles for the current element
+                        match &val_data {
+                            Elem::Val(x) => {
+                                self.handle_load_cycles(x, Some(self.config.switch_cycles[stream_idx]));
+                            }
+                            Elem::ValStop(x, _) => {
+                                self.handle_load_cycles(x, Some(self.config.switch_cycles[stream_idx]));
+                            }
+                        };
+                        
+                        // Dequeue the current element
+                        self.in_streams[stream_idx].dequeue(&self.time).unwrap();
 
-    fn advance_time_to_max_ready(
-        &mut self,
-        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
-    ) {
-        let max_ready_time = peek_results
-            .iter()
-            .filter_map(|opt| opt.as_ref())
-            .map(|elem| elem.time.time())
-            .max()
-            .unwrap_or(0);
-
-        self.time.advance(max_ready_time.into());
-    }
-
-    fn process_and_enqueue_outputs(
-        &mut self,
-        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
-        select_vec: &[usize],
-        index_level: Option<StopType>,
-    ) -> bool {
-        let additional_rank = index_level.unwrap_or(0);
-
-        for i in 0..select_vec.len() {
-            if let Some(elem) = &peek_results[i] {
-                if self.process_single_element(elem, i, select_vec.len(), additional_rank) {
-                    return true; // Break outer loop
+                        // Enqueue the current element to the output stream
+                        match &val_data {
+                            Elem::Val(x) => {
+                                let data = if self.reassemble_rank == 0 {
+                                    if is_last_selected {
+                                        Elem::ValStop(x.clone(), 1 + addtional_rank)
+                                    } else {
+                                        Elem::Val(x.clone())
+                                    }
+                                } else {
+                                    Elem::Val(x.clone())
+                                };
+                                self.handle_memory_writeback(x);
+                                self.out_stream.enqueue(&self.time, ChannelElement { time: self.time.tick(), data }).unwrap();
+                            }
+                            Elem::ValStop(x, level) => {
+                                let data = if self.reassemble_rank == 0 {
+                                    if is_last_selected {
+                                        Elem::ValStop(x.clone(), *level + addtional_rank + 1)
+                                    } else {
+                                        Elem::Val(x.clone())
+                                    }
+                                } else {
+                                    if is_last_selected {
+                                        Elem::ValStop(x.clone(), *level + addtional_rank + 1)
+                                    } else {
+                                        Elem::ValStop(x.clone(), *level)
+                                    }
+                                };
+                                self.handle_memory_writeback(x);
+                                self.out_stream.enqueue(&self.time, ChannelElement { time: self.time.tick(), data }).unwrap();
+                            }
+                        }
+                        
+                        // Finally, break the current expert based on the rank
+                        match val_data {
+                            Elem::Val(_) => {
+                                if self.reassemble_rank == 0 {
+                                    break;
+                                }
+                            }
+                            Elem::ValStop(_, level) => {
+                                if level >= self.reassemble_rank {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        panic!("Stream {} is closed or empty", stream_idx);
+                    }
                 }
             }
         }
-        false
+
+
     }
 
-    fn process_single_element(
-        &mut self,
-        elem: &ChannelElement<Elem<Tile<A>>>,
-        index: usize,
-        total_streams: usize,
-        additional_rank: StopType,
-    ) -> bool {
-        match &elem.data {
-            Elem::Val(x) => {
-                self.handle_memory_writeback(x);
-                self.enqueue_val_element(x, index, total_streams, 0)
-            }
-            Elem::ValStop(x, level) => {
-                if *level > self.in_stream_rank {
-                    panic!("The in_stream_rank does not match the stop token level!");
-                }
-                self.handle_memory_writeback(x);
-                self.enqueue_val_stop_element(x, *level, index, total_streams, additional_rank)
-            }
-        }
-    }
-
-    fn handle_memory_writeback(&mut self, x: &Tile<A>) {
-        if self.config.write_back_mu {
-            self.time
-                .incr_cycles(div_ceil(x.size_in_bytes() as u64, PMU_BW));
-        }
-    }
-
-    fn enqueue_val_element(
-        &mut self,
-        x: &Tile<A>,
-        index: usize,
-        total_streams: usize,
-        additional_rank: StopType,
-    ) -> bool {
-        if index == total_streams - 1 {
-            // Last stream - always enqueue as ValStop
-            self.out_stream
-                .enqueue(
-                    &self.time,
-                    ChannelElement {
-                        time: self.time.tick(),
-                        data: Elem::ValStop(x.clone(), additional_rank + 1),
-                    },
-                )
-                .unwrap();
-
-            self.in_stream_rank == 0
-        } else {
-            // Not last stream
-            let data = if self.in_stream_rank == 0 {
-                Elem::ValStop(x.clone(), additional_rank + 1)
-            } else {
-                Elem::Val(x.clone())
-            };
-
-            self.out_stream
-                .enqueue(
-                    &self.time,
-                    ChannelElement {
-                        time: self.time.tick(),
-                        data,
-                    },
-                )
-                .unwrap();
-
-            false
-        }
-    }
-
-    fn enqueue_val_stop_element(
-        &mut self,
-        x: &Tile<A>,
-        level: StopType,
-        index: usize,
-        total_streams: usize,
-        additional_rank: StopType,
-    ) -> bool {
-        let base_rank = additional_rank + level;
-
-        if index == total_streams - 1 {
-            // Last stream
-            self.out_stream
-                .enqueue(
-                    &self.time,
-                    ChannelElement {
-                        time: self.time.tick(),
-                        data: Elem::ValStop(x.clone(), base_rank + 1),
-                    },
-                )
-                .unwrap();
-
-            level == self.in_stream_rank
-        } else {
-            // Not last stream
-            self.out_stream
-                .enqueue(
-                    &self.time,
-                    ChannelElement {
-                        time: self.time.tick(),
-                        data: Elem::Val(x.clone()),
-                    },
-                )
-                .unwrap();
-
-            false
-        }
-    }
 }
 
 impl<
@@ -359,13 +236,13 @@ where
                     data: sel_data,
                 }) => match sel_data {
                     Elem::Val(sel) => {
-                        self.handle_load_cycles(&sel);
+                        self.handle_load_cycles(&sel, None);
                         self.sel_stream.dequeue(&self.time).unwrap();
                         let select_vec = sel.to_sel_vec();
                         self.process_input_stream(&select_vec, None);
                     }
                     Elem::ValStop(sel, sel_level) => {
-                        self.handle_load_cycles(&sel);
+                        self.handle_load_cycles(&sel, None);
                         self.sel_stream.dequeue(&self.time).unwrap();
                         let select_vec = sel.to_sel_vec();
                         self.process_input_stream(&select_vec, Some(sel_level));
@@ -410,10 +287,10 @@ mod tests {
 
             // Define the mapping of which arrays go to which output streams
             let stream_mappings = [
-                vec![0, 1, 2],          // Stream 0: arrays 0, 1, 2S1
-                vec![0, 1, 2, 3, 4, 5], // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1
-                vec![3, 4, 5, 6, 7, 8], // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1
-                vec![6, 7, 8],          // Stream 3: arrays 6, 7, 8S1
+                vec![0, 1, 2],          // Stream 0: arrays 0, 1, 2S1 [1, 3]
+                vec![0, 1, 2, 3, 4, 5], // Stream 1: arrays 0, 1, 2S1, 3, 4, 5S1 [2, 3]
+                vec![3, 4, 5, 6, 7, 8], // Stream 2: arrays 3, 4, 5S1, 6, 7, 8S1 [2, 3]
+                vec![6, 7, 8],          // Stream 3: arrays 6, 7, 8S1 [1, 3]
             ];
 
             for (stream_idx, array_indices) in stream_mappings.iter().enumerate() {
@@ -434,16 +311,19 @@ mod tests {
 
         fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
             let mut ground_truth = Vec::new();
-            for (i, array) in arrays.iter().enumerate() {
-                let tile = Tile::new(array.clone().into(), 4, read_from_mu);
-                ground_truth.push(Elem::Val(tile.clone()));
-                if i == arrays.len() - 1 {
-                    ground_truth.push(Elem::ValStop(tile, 3));
-                } else {
-                    if (i + 1) % 3 == 0 {
-                        ground_truth.push(Elem::ValStop(tile, 2));
-                    } else {
-                        ground_truth.push(Elem::ValStop(tile, 1));
+            for i in 0..3 {
+                for t in 0..2 {
+                    for j in 0..3 {
+                        let tile = Tile::new(arrays[i * 3 + j].clone().into(), 4, read_from_mu);
+                        if i == 2 && t == 1 && j == 2 {
+                            ground_truth.push(Elem::ValStop(tile, 3));
+                        } else if i < 2 && t == 1 && j == 2 {
+                            ground_truth.push(Elem::ValStop(tile, 2));
+                        } else if t < 1 && j == 2 {
+                            ground_truth.push(Elem::ValStop(tile, 1));
+                        } else {
+                            ground_truth.push(Elem::Val(tile));
+                        }
                     }
                 }
             }
@@ -459,7 +339,7 @@ mod tests {
                     1,
                 ),
             ]
-        }
+        } // [1, 3]
 
         let arrays: Vec<Array2<i32>> = (0..9)
             .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
@@ -508,7 +388,7 @@ mod tests {
             out_data_snd,
             1,
             config,
-        ));
+        )); // [1, 3, 2, 3]
 
         ctx.add_child(ApproxCheckerContext::new(
             || ground_truth.into_iter(),
@@ -540,7 +420,7 @@ mod tests {
                 multi_hot_arrays.push(MultiHotN::new(selection, read_from_mu));
             }
             multi_hot_arrays
-        }
+        } // [9]
 
         fn create_input_streams<const N: usize>(
             arrays: &[Array2<i32>],
@@ -558,7 +438,7 @@ mod tests {
                 }
             }
             input_streams
-        }
+        } // [Dyn]
 
         // If the tiles are different, then the ground truth should consider the timing.
         fn create_ground_truth(
@@ -568,9 +448,13 @@ mod tests {
         ) -> Vec<Elem<Tile<i32>>> {
             let mut ground_truth = Vec::new();
             for elem in arrays.iter() {
-                for _ in 0..sel {
+                for i in 0..sel {
                     let tile = Tile::new(elem.clone().into(), 4, read_from_mu);
-                    ground_truth.push(Elem::ValStop(tile, 1));
+                    if i == sel - 1 {
+                        ground_truth.push(Elem::ValStop(tile, 1));
+                    } else {
+                        ground_truth.push(Elem::Val(tile));
+                    }
                 }
             }
             ground_truth
