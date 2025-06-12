@@ -14,9 +14,9 @@ pub struct FlatPartitionConfig {
 
 #[context_macro]
 pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
-    in_stream: Receiver<Elem<Tile<A>>>,
+    in_stream: Receiver<Elem<A>>,
     sel_stream: Receiver<Elem<SELT>>,
-    out_streams: Vec<Sender<Elem<Tile<A>>>>,
+    out_streams: Vec<Sender<Elem<A>>>,
     partition_rank: StopType,
     config: FlatPartitionConfig,
     id: u32,
@@ -25,17 +25,17 @@ pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
 
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        A: DAMType,
+        A: Bufferizable + DAMType,
         SELT: DAMType + SelectAdapter + Bufferizable,
     > FlatPartition<E, A, SELT>
 where
-    Elem<Tile<A>>: DAMType,
+    Elem<A>: DAMType,
     Elem<SELT>: DAMType,
 {
     pub fn new(
-        in_stream: Receiver<Elem<Tile<A>>>,
+        in_stream: Receiver<Elem<A>>,
         sel_stream: Receiver<Elem<SELT>>,
-        out_streams: Vec<Sender<Elem<Tile<A>>>>,
+        out_streams: Vec<Sender<Elem<A>>>,
         partition_rank: StopType,
         config: FlatPartitionConfig,
         id: u32,
@@ -88,7 +88,7 @@ where
     }
 
     /// Helper function to enqueue data to all selected expert output streams
-    fn enqueue_to_experts(&mut self, select_vec: &[usize], elem: Elem<Tile<A>>) {
+    fn enqueue_to_experts(&mut self, select_vec: &[usize], elem: Elem<A>) {
         for expert_idx in select_vec.iter() {
             self.out_streams[*expert_idx]
                 .enqueue(
@@ -171,11 +171,11 @@ where
 
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        A: DAMType,
+        A: Bufferizable + DAMType,
         SELT: DAMType + SelectAdapter + Bufferizable,
     > Context for FlatPartition<E, A, SELT>
 where
-    Elem<Tile<A>>: DAMType,
+    Elem<A>: DAMType,
     Elem<SELT>: DAMType,
 {
     fn run(&mut self) {
