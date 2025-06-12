@@ -55,3 +55,24 @@ pub fn matmul<T: Debug + ndarray::LinalgScalar>(
         ),
     }
 }
+
+
+pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
+    in_data: &Tile<T>,
+    accumulator: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    assert_eq!(accumulator.shape.len(), 2);
+    let in_arr = in_data.underlying.clone().unwrap();
+    let cur_arr = accumulator.underlying.clone().unwrap();
+
+    (0, 
+    ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
+        .map(|arr| Tile::new(arr.to_shared(), in_data.bytes_per_elem, in_data.read_from_mu))
+        .unwrap_or_else(|_| {
+            panic!("Failed to concatenate input data and accumulator data")
+        }))
+
+}
