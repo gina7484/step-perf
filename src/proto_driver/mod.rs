@@ -408,6 +408,7 @@ fn build_from_proto<'a>(
                                         switch_cycles: to_u64_vec(flat_partition.switch_cycles),
                                         write_back_mu: flat_partition.write_back_mu,
                                     },
+                                    operation.id,
                                 ))
                             }
                             _ => panic!("Unsupported data type"),
@@ -466,6 +467,7 @@ fn build_from_proto<'a>(
                                 switch_cycles: to_u64_vec(reassemble.switch_cycles),
                                 write_back_mu: reassemble.write_back_mu,
                             },
+                            operation.id,
                         ))
                     }
                     _ => panic!("Unsupported data type"),
