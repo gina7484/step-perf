@@ -5,6 +5,7 @@ use crate::memory::dyn_offchip_load::DynOffChipLoad;
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
+use crate::operator::flatten::Flatten;
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
@@ -664,6 +665,31 @@ fn build_from_proto<'a>(
                         );
                     }
                     _ => panic!("Unsupported data type for DynOffChipLoad operation"),
+                }
+            }
+            OpType::Flatten(flatten) => {
+                match flatten.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            flatten.input_id,
+                            flatten.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(Flatten::new(
+                            rcv,
+                            snd,
+                            flatten.min_rank,
+                            flatten.max_rank,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for Flatten operation"),
                 }
             }
             OpType::SelectGen(select_gen) => match select_gen.is_multihot {
