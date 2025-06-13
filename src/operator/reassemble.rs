@@ -59,12 +59,12 @@ where
     }
 
     /// Helper function to calculate and increment load cycles for memory operations
-    fn handle_load_cycles<T: Bufferizable>(&mut self, data: &T, constant: Option<u64>) {
-        let constant = constant.unwrap_or(0);
+    fn handle_load_cycles<T: Bufferizable>(&mut self, data_arrive_time: u64,data: &T, constant: Option<u64>) {
+        let mut load_cycle = constant.unwrap_or(0);
         if data.read_from_mu() {
-            let load_cycle = div_ceil(data.size_in_bytes() as u64, PMU_BW) + constant;
-            self.time.incr_cycles(load_cycle);
+            load_cycle += div_ceil(data.size_in_bytes() as u64, PMU_BW);
         }
+        self.time.advance((data_arrive_time + load_cycle).into());
     }
 
     fn handle_memory_writeback(&mut self, x: &Tile<A>) {
@@ -109,15 +109,8 @@ where
     fn get_arrive_times(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) -> Vec<u64> {
         let mut data_arrive_times = vec![];
         peek_results.iter().for_each(|elem| {
-            if let Some(ChannelElement { time: arrive, data }) = elem {
-                match data {
-                    Elem::Val(_) => {
-                        data_arrive_times.push(arrive.time());
-                    }
-                    Elem::ValStop(_, level) => {
-                        data_arrive_times.push(arrive.time() + *level as u64);
-                    }
-                }
+            if let Some(ChannelElement { time: arrive, .. }) = elem {
+                data_arrive_times.push(arrive.time());
             }
         });
         data_arrive_times
@@ -153,12 +146,14 @@ where
                         match &val_data {
                             Elem::Val(x) => {
                                 self.handle_load_cycles(
+                                    data_arrive_times[i],
                                     x,
                                     Some(self.config.switch_cycles[stream_idx]),
                                 );
                             }
                             Elem::ValStop(x, _) => {
                                 self.handle_load_cycles(
+                                    data_arrive_times[i],
                                     x,
                                     Some(self.config.switch_cycles[stream_idx]),
                                 );
@@ -258,13 +253,13 @@ where
                     data: sel_data,
                 }) => match sel_data {
                     Elem::Val(sel) => {
-                        self.handle_load_cycles(&sel, None);
+                        self.handle_load_cycles(self.time.tick().time(), &sel, None);
                         self.sel_stream.dequeue(&self.time).unwrap();
                         let select_vec = sel.to_sel_vec();
                         self.process_input_stream(&select_vec, None);
                     }
                     Elem::ValStop(sel, sel_level) => {
-                        self.handle_load_cycles(&sel, None);
+                        self.handle_load_cycles(self.time.tick().time(), &sel, None);
                         self.sel_stream.dequeue(&self.time).unwrap();
                         let select_vec = sel.to_sel_vec();
                         self.process_input_stream(&select_vec, Some(sel_level));
