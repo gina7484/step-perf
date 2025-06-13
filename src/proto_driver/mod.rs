@@ -16,7 +16,7 @@ use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
     RunOptionsBuilder,
 };
-use dam::utility_contexts::{GeneratorContext, PrinterContext};
+use dam::utility_contexts::{ConsumerContext, GeneratorContext, PrinterContext};
 use std::sync::Arc;
 
 use crate::build_sim::channel::ChannelMapCollection;
@@ -560,19 +560,19 @@ fn build_from_proto<'a>(
                 {
                     Type::F32(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
-                            printer_context.input_id,
-                            printer_context.stream_idx,
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
                             builder,
-                            Some(1),
+                            None,
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
-                            printer_context.input_id,
-                            printer_context.stream_idx,
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
                             builder,
-                            Some(1),
+                            None,
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
@@ -593,7 +593,7 @@ fn build_from_proto<'a>(
                             printer_context.input_id,
                             printer_context.stream_idx,
                             builder,
-                            Some(1),
+                            None,
                         );
                         builder.add_child(PrinterContext::new(rcv));
                     }
@@ -602,7 +602,7 @@ fn build_from_proto<'a>(
                             printer_context.input_id,
                             printer_context.stream_idx,
                             builder,
-                            Some(1),
+                            None,
                         );
                         builder.add_child(PrinterContext::new(rcv));
                     }
