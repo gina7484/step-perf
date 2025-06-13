@@ -2,7 +2,6 @@ use std::{fs::File, marker::PhantomData};
 
 use dam::context_tools::*;
 use dam::logging::LogEvent;
-use graphviz_rust::attributes::id;
 use half::f16;
 use itertools::Itertools;
 use ndarray::{concatenate, Array2, Axis};
