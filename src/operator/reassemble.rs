@@ -194,7 +194,7 @@ where
                                         Elem::Val(x.clone())
                                     }
                                 } else {
-                                    if is_last_selected {
+                                    if is_last_selected && level >= &self.reassemble_rank {
                                         Elem::ValStop(x.clone(), *level + addtional_rank + 1)
                                     } else {
                                         Elem::ValStop(x.clone(), *level)
