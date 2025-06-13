@@ -14,8 +14,6 @@ dam = { git = "https://github.com/stanford-ppl/DAM-RS.git", branch = "master", d
     "log-mongo",
     "dot",
 ] }
-# ramulator_wrapper = { git = "https://github.com/lrubens/ramulator2_wrapper.git", branch = "main"}
-# ramulator_wrapper = { path = "external/ramulator2_wrapper" }
 frunk = "0.4.2"
 graphviz-rust = { version = "0.6.6", optional = true }
 csv = "1.2"
@@ -38,7 +36,6 @@ itertools = "0.14.0"
 num-traits = "0.2.19"
 
 [build-dependencies]
-cmake = "0.1"
 prost-build = "0.11"
 
 [features]
