@@ -36,7 +36,6 @@ itertools = "0.14.0"
 num-traits = "0.2.19"
 
 [build-dependencies]
-cmake = "0.1"
 prost-build = "0.11"
 
 [features]
