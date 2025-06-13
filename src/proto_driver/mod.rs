@@ -344,6 +344,15 @@ fn build_from_proto<'a>(
                             builder
                         );
                     }
+                    Type::MultiHot(_) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            multihot,
+                            builder
+                        );
+                    }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
                         r#type: Some(buffer::Type::F32(_)),
                     }) => {
@@ -377,6 +386,53 @@ fn build_from_proto<'a>(
                         let mut snd_list = vec![];
                         for i in 0..flat_partition.num_consumers {
                             snd_list.push(channel_map_collection.tile_f32.get_sender(
+                                operation.id,
+                                Some(i),
+                                builder,
+                                Some(1),
+                            ));
+                        }
+
+                        match flat_partition
+                            .control_dtype
+                            .clone()
+                            .unwrap()
+                            .r#type
+                            .clone()
+                            .unwrap()
+                        {
+                            Type::MultiHot(multi_hot) => {
+                                let control_rcv = channel_map_collection.multihot.get_receiver(
+                                    flat_partition.control_id,
+                                    flat_partition.control_stream_idx,
+                                    builder,
+                                    Some(1),
+                                );
+                                builder.add_child(FlatPartition::<SimpleEvent, _, _>::new(
+                                    input_rcv,
+                                    control_rcv,
+                                    snd_list,
+                                    flat_partition.partition_rank,
+                                    FlatPartitionConfig {
+                                        switch_cycles: to_u64_vec(flat_partition.switch_cycles),
+                                        write_back_mu: flat_partition.write_back_mu,
+                                    },
+                                    operation.id,
+                                ))
+                            }
+                            _ => panic!("Unsupported data type"),
+                        }
+                    }
+                    Type::MultiHot(_) => {
+                        let input_rcv = channel_map_collection.multihot.get_receiver(
+                            flat_partition.input_id,
+                            flat_partition.input_stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let mut snd_list = vec![];
+                        for i in 0..flat_partition.num_consumers {
+                            snd_list.push(channel_map_collection.multihot.get_sender(
                                 operation.id,
                                 Some(i),
                                 builder,
@@ -491,6 +547,36 @@ fn build_from_proto<'a>(
                         builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
                     }
                     _ => panic!("Unsupported data type"),
+                }
+            }
+            OpType::ConsumerContext(consumer_context) => {
+                match consumer_context
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
+                    _ => panic!("Unsupported data type for ConsumerContext operation"),
                 }
             }
             OpType::PrinterContext(printer_context) => {
@@ -664,6 +750,19 @@ fn build_from_proto<'a>(
                             dyn_offchip_load,
                             hbm_config,
                             buff_tile_f32,
+                            tile_f32,
+                            4,
+                            mem_context,
+                            builder
+                        );
+                    }
+                    (Type::F32(_), Type::MultiHot(_)) => {
+                        make_dyn_offchip_load!(
+                            channel_map_collection,
+                            operation,
+                            dyn_offchip_load,
+                            hbm_config,
+                            multihot,
                             tile_f32,
                             4,
                             mem_context,
