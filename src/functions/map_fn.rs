@@ -77,7 +77,7 @@ pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
 
 }
 
-pub fn mul<T: Debug + ndarray::LinalgScalar>(
+pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
     in1: &Tile<T>,
     in2: &Tile<T>,
     flop_per_cycle: u64,
@@ -98,11 +98,11 @@ pub fn mul<T: Debug + ndarray::LinalgScalar>(
     let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
     for i in 0..out_shape_0 {
         for j in 0..out_shape_1 {
-            let i0 = i.max(in1_shape_0 - 1);
-            let j0 = j.max(in1_shape_1 - 1);
+            let i0 = i.min(in1_shape_0 - 1);
+            let j0 = j.min(in1_shape_1 - 1);
             let val1 = in1.underlying.as_ref().unwrap().get((i0, j0)).unwrap();
-            let i1 = i.max(in2_shape_0 - 1);
-            let j1 = j.max(in2_shape_1 - 1);
+            let i1 = i.min(in2_shape_0 - 1);
+            let j1 = j.min(in2_shape_1 - 1);
             let val2 = in2.underlying.as_ref().unwrap().get((i1, j1)).unwrap();
             let out_val = val1.mul(*val2);
             out_arr[[i, j]] = out_val;

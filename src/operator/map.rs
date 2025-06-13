@@ -273,3 +273,94 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        functions::map_fn, primitives::{elem::Elem, tile::Tile},
+        operator::map::BinaryMap,
+        utils::events::SimpleEvent
+    };
+    use dam::{simulation::ProgramBuilder, utility_contexts::{ApproxCheckerContext, GeneratorContext}};
+    use ndarray::Array2;
+    use std::sync::Arc;
+
+    fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
+        match (a, b) {
+            (Elem::Val(a_tile), Elem::Val(b_tile)) => a_tile == b_tile,
+            (Elem::ValStop(a_tile, a_level), Elem::ValStop(b_tile, b_level)) => {
+                a_tile == b_tile && a_level == b_level
+            }
+            _ => false,
+        }
+    }
+    #[test]
+    fn binary_map_mul() {
+
+        // Step 1: Create 9 different ndarray::ArcArray2<T> with shape 2x2
+        let in1_arrays: Vec<Array2<i32>> = (0..9)
+            .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
+            .collect();
+        let in2_arrays: Vec<Array2<i32>> = (0..9)
+            .map(|i| Array2::from_shape_vec((1, 1), vec![i as i32; 1]).unwrap())
+            .collect();
+        let read_from_mu = true;
+
+        // Step 2: Create input data for the in1 and in2 streams
+        let in1_stream_data: Vec<Elem<Tile<i32>>> = in1_arrays
+            .iter()
+            .map(|arr| Elem::Val(Tile::new(arr.clone().into(), 4, read_from_mu)))
+            .collect();
+        let in2_stream_data: Vec<Elem<Tile<i32>>> = in2_arrays
+            .iter()
+            .map(|arr| Elem::Val(Tile::new(arr.clone().into(), 4, read_from_mu)))
+            .collect();
+
+        // Step 3: Create ground truth data for the expected output
+        let expected_out_stream_data: Vec<Elem<Tile<i32>>> = in1_arrays
+            .iter()
+            .zip(in2_arrays.iter())
+            .map(|(arr1, arr2)| Elem::Val(
+                map_fn::mul(
+                &Tile::new(arr1.clone().into(), 4, read_from_mu), 
+                &Tile::new(arr2.clone().into(), 4, read_from_mu), 
+                1024, 
+                true).1)
+            )
+            .collect();
+
+        // Step 4: Create the STeP program
+        let mut ctx = ProgramBuilder::default();
+        let (in1_data_snd, in1_data_rcv) = ctx.unbounded();
+        let (in2_data_snd, in2_data_rcv) = ctx.unbounded();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(
+            || in1_stream_data.into_iter(),
+            in1_data_snd,
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || in2_stream_data.into_iter(),
+            in2_data_snd,
+        ));
+        ctx.add_child(BinaryMap::<SimpleEvent, _, _>::new(
+            in1_data_rcv,
+            in2_data_rcv,
+            out_data_snd,
+            Arc::new(map_fn::mul),
+            1024, // FLOPs per cycle
+            true, // write_back_mu
+            0,    // id
+        ));
+
+        ctx.add_child(ApproxCheckerContext::new(
+            || expected_out_stream_data.into_iter(),
+            out_data_rcv,
+            tolerance_fn,
+        ));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+
+
+    }
+}
