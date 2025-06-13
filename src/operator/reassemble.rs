@@ -66,7 +66,7 @@ where
             self.time.incr_cycles(load_cycle);
         }
     }
-    
+
     fn handle_memory_writeback(&mut self, x: &Tile<A>) {
         if self.config.write_back_mu {
             self.time
@@ -98,15 +98,15 @@ where
                     PeekResult::Closed => return vec![], // Signal that streams are closed
                 }
             }
+            if num_peeked < select_vec.len() {
+                self.time.incr_cycles(1);
+            }
         }
 
         peek_results
     }
 
-    fn get_arrive_times(
-        &self,
-        peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>],
-    ) -> Vec<u64> {
+    fn get_arrive_times(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) -> Vec<u64> {
         let mut data_arrive_times = vec![];
         peek_results.iter().for_each(|elem| {
             if let Some(ChannelElement { time: arrive, data }) = elem {
@@ -145,20 +145,26 @@ where
             loop {
                 // Peek next to the current stream
                 match self.in_streams[stream_idx].peek_next(&self.time) {
-                    Ok(ChannelElement{
+                    Ok(ChannelElement {
                         time: _,
-                        data: val_data
+                        data: val_data,
                     }) => {
                         // Handle load cycles for the current element
                         match &val_data {
                             Elem::Val(x) => {
-                                self.handle_load_cycles(x, Some(self.config.switch_cycles[stream_idx]));
+                                self.handle_load_cycles(
+                                    x,
+                                    Some(self.config.switch_cycles[stream_idx]),
+                                );
                             }
                             Elem::ValStop(x, _) => {
-                                self.handle_load_cycles(x, Some(self.config.switch_cycles[stream_idx]));
+                                self.handle_load_cycles(
+                                    x,
+                                    Some(self.config.switch_cycles[stream_idx]),
+                                );
                             }
                         };
-                        
+
                         // Dequeue the current element
                         self.in_streams[stream_idx].dequeue(&self.time).unwrap();
 
@@ -175,7 +181,15 @@ where
                                     Elem::Val(x.clone())
                                 };
                                 self.handle_memory_writeback(x);
-                                self.out_stream.enqueue(&self.time, ChannelElement { time: self.time.tick(), data }).unwrap();
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data,
+                                        },
+                                    )
+                                    .unwrap();
                             }
                             Elem::ValStop(x, level) => {
                                 let data = if self.reassemble_rank == 0 {
@@ -192,10 +206,18 @@ where
                                     }
                                 };
                                 self.handle_memory_writeback(x);
-                                self.out_stream.enqueue(&self.time, ChannelElement { time: self.time.tick(), data }).unwrap();
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data,
+                                        },
+                                    )
+                                    .unwrap();
                             }
                         }
-                        
+
                         // Finally, break the current expert based on the rank
                         match val_data {
                             Elem::Val(_) => {
@@ -216,10 +238,7 @@ where
                 }
             }
         }
-
-
     }
-
 }
 
 impl<
