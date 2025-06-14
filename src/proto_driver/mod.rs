@@ -6,6 +6,7 @@ use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
 use crate::operator::flatten::Flatten;
+use crate::operator::map::{UnaryMap, UnaryMapConfig};
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
@@ -106,6 +107,49 @@ fn build_from_proto<'a>(
     for operation in step_graph.operators {
         println!("processing {:?}\n", operation);
         match operation.op_type.clone().unwrap() {
+            OpType::Unarymap(unarymap) => match (
+                unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
+                unarymap.dtype_b.clone().unwrap().r#type.clone().unwrap(),
+            ) {
+                (Type::F32(_), Type::F32(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        Some(1),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        Some(1),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Silu(silu) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::silu(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    builder.add_child(UnaryMap::<SimpleEvent, _, _>::new(
+                        rcv,
+                        snd,
+                        map_fn,
+                        UnaryMapConfig {
+                            compute_bw: unarymap.compute_bw as u64,
+                            write_back_mu: unarymap.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
+                (_, _) => panic!("Unsupported data types for UnaryMap operation yet"),
+            },
             OpType::Binarymap(binary_map) => match (
                 binary_map.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 binary_map.dtype_b.clone().unwrap().r#type.clone().unwrap(),
@@ -144,6 +188,14 @@ fn build_from_proto<'a>(
                                     weight_transposed,
                                 )
                             })
+                        }
+                        elemto_elem_func::ElemElemFn::Mul(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::mul(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported binary map function type")
                         }
                     };
                     builder.add_child(BinaryMap::<SimpleEvent, _, _>::new(
@@ -211,6 +263,9 @@ fn build_from_proto<'a>(
                                     weight_transposed,
                                 )
                             })
+                        }
+                        _ => {
+                            panic!("Unsupported binary map accumulation function type",)
                         }
                     };
 

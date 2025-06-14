@@ -56,7 +56,6 @@ pub fn matmul<T: Debug + ndarray::LinalgScalar>(
     }
 }
 
-
 pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
     in_data: &Tile<T>,
     accumulator: &Tile<T>,
@@ -68,13 +67,18 @@ pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
     let in_arr = in_data.underlying.clone().unwrap();
     let cur_arr = accumulator.underlying.clone().unwrap();
 
-    (0, 
-    ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
-        .map(|arr| Tile::new(arr.to_shared(), in_data.bytes_per_elem, in_data.read_from_mu))
-        .unwrap_or_else(|_| {
-            panic!("Failed to concatenate input data and accumulator data")
-        }))
-
+    (
+        0,
+        ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
+            .map(|arr| {
+                Tile::new(
+                    arr.to_shared(),
+                    in_data.bytes_per_elem,
+                    in_data.read_from_mu,
+                )
+            })
+            .unwrap_or_else(|_| panic!("Failed to concatenate input data and accumulator data")),
+    )
 }
 
 pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
@@ -112,7 +116,6 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
         div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
         Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
     )
-
 }
 
 pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
@@ -150,35 +153,28 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
         div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
         Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
     )
-
 }
 
 // SiLU(x)= x / (1 + e^-x)
-pub fn silu<T: Debug + ndarray::LinalgScalar + From<f64> + Into<f64> + Copy>(
+pub fn silu<T: Debug + ndarray::LinalgScalar + num_traits::Float + Copy>(
     in_data: &Tile<T>,
     flop_per_cycle: u64,
     write_back_mu: bool,
 ) -> (u64, Tile<T>) {
     assert_eq!(in_data.shape.len(), 2);
-    
+
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    
+
     match &in_data.underlying {
-        Some(arr) => {
-            let mut out_arr = ndarray::Array2::zeros((shape_0, shape_1));
-            for i in 0..shape_0 {
-                for j in 0..shape_1 {
-                    let x: f64 = arr[[i, j]].into();
-                    let silu_val = x / (1.0 + (-x).exp());
-                    out_arr[[i, j]] = T::from(silu_val);
-                }
-            }
-            (
-                div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-                Tile::new(out_arr.to_shared(), in_data.bytes_per_elem, write_back_mu),
-            )
-        }
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new(
+                arr.mapv(|x| x / (T::one() + (-x).exp())).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
         None => panic!("Input tile does not contain underlying data"),
     }
 }
