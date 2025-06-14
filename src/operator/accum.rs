@@ -1,4 +1,3 @@
-
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::PMU_BW;
@@ -80,7 +79,6 @@ where
         self.time.incr_cycles(roofline_cycles);
 
         self.in_stream.dequeue(&self.time).unwrap();
-
     }
 
     fn process_accum_init(&mut self, data: Tile<T>, accumulator: &mut Tile<OT>) -> Tile<OT> {
@@ -111,9 +109,10 @@ where
 
         self.time.incr_cycles(roofline_cycles);
         self.in_stream.dequeue(&self.time).unwrap();
-        
+
         // Logging
         dam::logging::log_event(&E::new(
+            "Accum".to_string(),
             self.id,
             self.time.tick().time() - roofline_cycles,
             self.time.tick().time(),
@@ -123,7 +122,6 @@ where
 
         out_tile
     }
-    
 }
 
 impl<
@@ -139,7 +137,7 @@ where
         let mut accumulator = (self.init_accum)();
         loop {
             match self.in_stream.peek_next(&self.time) {
-                Ok(ChannelElement {time: _, data}) => match data {
+                Ok(ChannelElement { time: _, data }) => match data {
                     Elem::Val(x) => {
                         self.process_accum(x, &mut accumulator);
                     }
@@ -170,7 +168,7 @@ where
                                 .unwrap();
                         }
                     }
-                }
+                },
                 Err(_) => return,
             }
         }
@@ -180,8 +178,10 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        functions::map_fn, operator::accum::{Accum, AccumConfig}, primitives::{elem::Elem, tile::Tile},
-        utils::events::SimpleEvent
+        functions::map_fn,
+        operator::accum::{Accum, AccumConfig},
+        primitives::{elem::Elem, tile::Tile},
+        utils::events::SimpleEvent,
     };
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
@@ -200,11 +200,7 @@ mod tests {
 
     #[test]
     fn test_retile_col() {
-
-        fn create_input_data(
-            arrays: &[Array2<i32>],
-            read_from_mu: bool,
-        ) -> Vec<Elem<Tile<i32>>> {
+        fn create_input_data(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
             let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
             for (i, arr) in arrays.iter().enumerate() {
                 let tile = Tile::new(arr.clone().into(), 4, read_from_mu);
@@ -223,21 +219,26 @@ mod tests {
             in_stream_data
         }
 
-        fn create_ground_truth(
-            arrays: &[Array2<i32>],
-            read_from_mu: bool,
-        ) -> Vec<Elem<Tile<i32>>> {
+        fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
             let mut ground_truth_data: Vec<Elem<Tile<i32>>> = Vec::new();
             for i in 0..3 {
                 let concatenated_array = ndarray::concatenate(
-                    ndarray::Axis(1), 
-                    &[arrays[i * 3].view(), arrays[i * 3 + 1].view(), arrays[i * 3 + 2].view()]
-                ).unwrap_or_else(|_| {
+                    ndarray::Axis(1),
+                    &[
+                        arrays[i * 3].view(),
+                        arrays[i * 3 + 1].view(),
+                        arrays[i * 3 + 2].view(),
+                    ],
+                )
+                .unwrap_or_else(|_| {
                     panic!("Failed to concatenate input data and accumulator data")
                 });
 
                 let elem = if i == 2 {
-                    Elem::ValStop(Tile::new(concatenated_array.to_shared(), 4, read_from_mu), 1)
+                    Elem::ValStop(
+                        Tile::new(concatenated_array.to_shared(), 4, read_from_mu),
+                        1,
+                    )
                 } else {
                     Elem::Val(Tile::new(concatenated_array.to_shared(), 4, read_from_mu))
                 };
@@ -264,7 +265,7 @@ mod tests {
         let (out_data_snd, out_data_rcv) = ctx.unbounded();
         ctx.add_child(GeneratorContext::new(
             || in_stream_data.into_iter(),
-            in_data_snd
+            in_data_snd,
         ));
         ctx.add_child(Accum::<SimpleEvent, _, _>::new(
             in_data_rcv,
@@ -286,7 +287,5 @@ mod tests {
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
-
     }
-
 }

@@ -95,6 +95,7 @@ where
 
         // Logging
         dam::logging::log_event(&E::new(
+            "BinaryMapAccum".to_string(),
             self.id,
             self.time.tick().time() - roofline_cycles,
             self.time.tick().time(),
@@ -148,6 +149,7 @@ where
 
         // Logging
         dam::logging::log_event(&E::new(
+            "BinaryMapAccum".to_string(),
             self.id,
             self.time.tick().time() - roofline_cycles,
             self.time.tick().time(),

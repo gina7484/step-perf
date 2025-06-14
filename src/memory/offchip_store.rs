@@ -254,6 +254,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                "OffChipStore".to_string(),
                 self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
@@ -503,6 +504,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
+                "OffChipStore".to_string(),
                 self.id,
                 send_request_time.time(),
                 read_finish_time.time(),

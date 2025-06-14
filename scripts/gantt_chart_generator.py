@@ -6,11 +6,11 @@ from collections import defaultdict
 
 
 def parse_csv(csv_file):
-    """Parse a CSV file and extract the necessary data grouped by id."""
-    data_by_id = defaultdict(list)
+    """Parse a CSV file and extract the necessary data grouped by name_id combination."""
+    data_by_name_id = defaultdict(list)
     global_min_time = float("inf")
     global_max_time = 0
-    unique_ids = set()
+    unique_name_ids = set()
 
     with open(csv_file, "r") as f:
         reader = csv.DictReader(f)
@@ -18,18 +18,26 @@ def parse_csv(csv_file):
         if not rows:
             return {}, [], 0, 0  # Empty file
 
-        # Process each row and group by id
+        # Process each row and group by name_id combination
         for row_idx, row in enumerate(rows, 1):
             # Check if required columns exist
-            if "start_ns" not in row or "end_ns" not in row or "id" not in row:
+            if (
+                "start_ns" not in row
+                or "end_ns" not in row
+                or "id" not in row
+                or "name" not in row
+            ):
                 print(
-                    f"Warning: Row {row_idx} missing required columns (id, start_ns, end_ns)."
+                    f"Warning: Row {row_idx} missing required columns (id, name, start_ns, end_ns)."
                 )
                 continue
 
             # Parse values
             try:
                 event_id = str(row["id"])  # Convert to string for consistency
+                event_name = str(
+                    row["name"]
+                ).strip()  # Convert to string and strip whitespace
                 start_time = float(row["start_ns"])
                 end_time = float(row["end_ns"])
                 is_stop = row.get("is_stop", "").lower() == "true"
@@ -37,22 +45,26 @@ def parse_csv(csv_file):
                 print(f"Warning: Row {row_idx} has invalid numeric values: {e}")
                 continue
 
-            unique_ids.add(event_id)
+            # Create composite key using name and id
+            name_id_key = f"{event_name}_{event_id}"
+            unique_name_ids.add(name_id_key)
 
             # Create identifier for this specific event
-            event_count = len(data_by_id[event_id]) + 1
-            identifier = f"event_{event_id}_{event_count}"
+            event_count = len(data_by_name_id[name_id_key]) + 1
+            identifier = f"event_{event_name}_{event_id}_{event_count}"
 
             # Store data
             item = {
-                "file_id": event_id,  # Using id as file_id for compatibility with existing HTML
+                "file_id": name_id_key,  # Using name_id combination as file_id for compatibility with existing HTML
+                "name": event_name,
+                "id": event_id,
                 "prefix": "event",
                 "identifier": identifier,
                 "start": start_time,
                 "end": end_time,
                 "is_stop": is_stop,
             }
-            data_by_id[event_id].append(item)
+            data_by_name_id[name_id_key].append(item)
 
             # Track min and max times for the timeline
             global_min_time = min(global_min_time, start_time)
@@ -60,38 +72,47 @@ def parse_csv(csv_file):
 
     # Convert to list format expected by the HTML generator
     all_data = []
-    for event_id in sorted(unique_ids, key=lambda x: int(x) if x.isdigit() else x):
-        all_data.extend(data_by_id[event_id])
+    # Sort by id in ascending order
+    sorted_name_ids = sorted(
+        unique_name_ids,
+        key=lambda x: (
+            int(x.rsplit("_", 1)[1])
+            if x.rsplit("_", 1)[1].isdigit()
+            else x.rsplit("_", 1)[1]
+        ),
+    )
+
+    for name_id_key in sorted_name_ids:
+        all_data.extend(data_by_name_id[name_id_key])
 
     # Check if we actually added any data
     if not all_data:
         print(f"Warning: No valid data extracted from {csv_file}")
         return {}, [], 0, 0
 
-    # Sort unique_ids for consistent ordering
-    sorted_ids = sorted(unique_ids, key=lambda x: int(x) if x.isdigit() else x)
-
-    return all_data, sorted_ids, global_min_time, global_max_time
+    return all_data, sorted_name_ids, global_min_time, global_max_time
 
 
-def generate_html(data, file_ids, min_time, max_time):
+def generate_html(data, name_id_list, min_time, max_time):
     """Generate HTML for the Gantt chart visualization."""
-    # Group data by file_id (which is now the id field)
+    # Group data by file_id (which is now the name_id combination)
     file_data = defaultdict(list)
     for item in data:
         file_data[item["file_id"]].append(item)
 
     # Generate JSON data for the visualization
     visualization_data = []
-    for file_id in file_ids:
-        items = file_data[file_id]
+    for name_id_key in name_id_list:
+        items = file_data[name_id_key]
         # Sort by start time
         items.sort(key=lambda x: x["start"])
 
         for item in items:
             visualization_data.append(
                 {
-                    "file_id": file_id,
+                    "file_id": name_id_key,
+                    "name": item["name"],
+                    "id": item["id"],
                     "prefix": item["prefix"],
                     "identifier": item["identifier"],
                     "start": item["start"],
@@ -134,17 +155,17 @@ def generate_html(data, file_ids, min_time, max_time):
         .file-label {
             position: absolute;
             left: 0;
-            top: 15px;
-            width: 150px;
+            top: 10px;
+            width: 300px;
             font-weight: bold;
             text-align: right;
             padding-right: 10px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow: visible;
+            word-wrap: break-word;
+            line-height: 1.2;
         }
         .timeline-container {
-            margin-left: 170px;
+            margin-left: 320px;
             position: relative;
             height: 100%;
         }
@@ -261,8 +282,8 @@ def generate_html(data, file_ids, min_time, max_time):
         const data = """
         + json.dumps(visualization_data)
         + """;
-        const fileIds = """
-        + json.dumps(file_ids)
+        const nameIdList = """
+        + json.dumps(name_id_list)
         + """;
         const minTime = """
         + str(min_time)
@@ -284,15 +305,15 @@ def generate_html(data, file_ids, min_time, max_time):
             timelineEl.innerHTML = '';
             const timelineWidth = (maxTime - minTime) * scale;
             
-            // Create a row for each ID
-            fileIds.forEach(fileId => {
+            // Create a row for each name_id combination
+            nameIdList.forEach(nameId => {
                 const fileRow = document.createElement('div');
                 fileRow.className = 'file-row';
                 
                 const fileLabel = document.createElement('div');
                 fileLabel.className = 'file-label';
-                fileLabel.textContent = `ID: ${fileId}`;
-                fileLabel.title = `ID: ${fileId}`; // Add tooltip for long IDs
+                fileLabel.textContent = nameId;  // Display as name_id
+                fileLabel.title = nameId; // Add tooltip for long labels
                 
                 const timelineContainer = document.createElement('div');
                 timelineContainer.className = 'timeline-container';
@@ -302,8 +323,8 @@ def generate_html(data, file_ids, min_time, max_time):
                 fileRow.appendChild(timelineContainer);
                 timelineEl.appendChild(fileRow);
                 
-                // Add blocks for this ID
-                const fileDataItems = data.filter(item => item.file_id === fileId);
+                // Add blocks for this name_id combination
+                const fileDataItems = data.filter(item => item.file_id === nameId);
                 fileDataItems.forEach(item => {
                     const block = document.createElement('div');
                     
@@ -324,6 +345,8 @@ def generate_html(data, file_ids, min_time, max_time):
                     
                     // Add tooltip data
                     block.dataset.identifier = item.identifier;
+                    block.dataset.name = item.name;
+                    block.dataset.id = item.id;
                     block.dataset.start = item.start;
                     block.dataset.end = item.end;
                     block.dataset.isStop = item.is_stop;
@@ -342,7 +365,7 @@ def generate_html(data, file_ids, min_time, max_time):
             for (let t = minTime; t <= maxTime; t += stepSize) {
                 const marker = document.createElement('div');
                 marker.className = 'timeline-marker';
-                marker.style.left = `${(t - minTime) * scale + 170}px`;
+                marker.style.left = `${(t - minTime) * scale + 320}px`;
                 
                 const label = document.createElement('div');
                 label.className = 'timeline-label';
@@ -372,6 +395,8 @@ def generate_html(data, file_ids, min_time, max_time):
         function showTooltip(e) {
             const block = e.target;
             tooltipEl.innerHTML = `
+                Name: ${block.dataset.name}<br>
+                ID: ${block.dataset.id}<br>
                 Identifier: ${block.dataset.identifier}<br>
                 Start: ${parseFloat(block.dataset.start).toFixed(2)} ns<br>
                 End: ${parseFloat(block.dataset.end).toFixed(2)} ns<br>
@@ -436,7 +461,7 @@ def generate_html(data, file_ids, min_time, max_time):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate Gantt chart HTML from a single CSV file with id grouping."
+        description="Generate Gantt chart HTML from a single CSV file with name_id grouping, sorted by ID."
     )
     parser.add_argument("--csv_file", required=True, help="Path to the input CSV file.")
     parser.add_argument(
@@ -452,19 +477,21 @@ def main():
 
     # Process the CSV file
     print(f"Processing {args.csv_file}...")
-    data, id_list, min_time, max_time = parse_csv(args.csv_file)
+    data, name_id_list, min_time, max_time = parse_csv(args.csv_file)
 
     # Check if we have data
     if not data:
         print("Error: No valid data found in the CSV file.")
         return
 
-    print(f"Found {len(id_list)} unique IDs: {id_list}")
+    print(
+        f"Found {len(name_id_list)} unique name_id combinations (sorted by ID): {name_id_list}"
+    )
     print(f"Time range: {min_time} - {max_time} ns")
     print(f"Total events: {len(data)}")
 
     # Generate HTML content
-    html_content = generate_html(data, id_list, min_time, max_time)
+    html_content = generate_html(data, name_id_list, min_time, max_time)
 
     # Write to output file
     with open(args.output_file, "w") as f:

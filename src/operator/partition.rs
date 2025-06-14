@@ -108,6 +108,7 @@ where
         select_vec: &[usize],
         expected_stop_level: Option<StopType>,
     ) {
+        let mut start_time: Option<u64> = None;
         loop {
             match self.in_stream.peek_next(&self.time) {
                 Ok(ChannelElement {
@@ -115,16 +116,33 @@ where
                     data: val_data,
                 }) => match val_data {
                     Elem::Val(x) => {
+                        if start_time.is_none() {
+                            start_time = Some(self.time.tick().time());
+                        }
                         self.handle_load_cycles(&x);
                         self.in_stream.dequeue(&self.time).unwrap();
                         self.handle_write_cycles(select_vec, &x);
                         self.enqueue_to_experts(select_vec, Elem::Val(x.clone()));
 
                         if self.partition_rank == 0 {
+                            dam::logging::log_event(&E::new(
+                                "FlatPartition".to_string(),
+                                self.id,
+                                start_time.unwrap(),
+                                self.time.tick().time(),
+                                true,
+                            ))
+                            .unwrap();
+
+                            start_time = None;
+
                             break;
                         }
                     }
                     Elem::ValStop(x, stop_lev) => {
+                        if start_time.is_none() {
+                            start_time = Some(self.time.tick().time());
+                        }
                         // Validate stop level based on context
                         if let Some(expected) = expected_stop_level {
                             if expected != stop_lev {
@@ -152,6 +170,17 @@ where
                         // Break if we've reached the partition rank
                         if stop_lev == self.partition_rank || expected_stop_level == Some(stop_lev)
                         {
+                            dam::logging::log_event(&E::new(
+                                "FlatPartition".to_string(),
+                                self.id,
+                                start_time.unwrap(),
+                                self.time.tick().time(),
+                                true,
+                            ))
+                            .unwrap();
+
+                            start_time = None;
+
                             break;
                         }
                     }

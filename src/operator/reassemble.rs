@@ -59,7 +59,12 @@ where
     }
 
     /// Helper function to calculate and increment load cycles for memory operations
-    fn handle_load_cycles<T: Bufferizable>(&mut self, data_arrive_time: u64,data: &T, constant: Option<u64>) {
+    fn handle_load_cycles<T: Bufferizable>(
+        &mut self,
+        data_arrive_time: u64,
+        data: &T,
+        constant: Option<u64>,
+    ) {
         let mut load_cycle = constant.unwrap_or(0);
         if data.read_from_mu() {
             load_cycle += div_ceil(data.size_in_bytes() as u64, PMU_BW);
@@ -135,6 +140,7 @@ where
         for &i in sorted_indices.iter() {
             let is_last_selected = sorted_indices.last() == Some(&i);
             let stream_idx = select_vec[i];
+            let start_time = data_arrive_times[i];
             loop {
                 // Peek next to the current stream
                 match self.in_streams[stream_idx].peek_next(&self.time) {
@@ -217,11 +223,30 @@ where
                         match val_data {
                             Elem::Val(_) => {
                                 if self.reassemble_rank == 0 {
+                                    // Logging
+                                    dam::logging::log_event(&E::new(
+                                        "FlatReassemble".to_string(),
+                                        self.id,
+                                        start_time,
+                                        self.time.tick().time(),
+                                        true,
+                                    ))
+                                    .unwrap();
+
                                     break;
                                 }
                             }
                             Elem::ValStop(_, level) => {
                                 if level >= self.reassemble_rank {
+                                    // Logging
+                                    dam::logging::log_event(&E::new(
+                                        "FlatReassemble".to_string(),
+                                        self.id,
+                                        start_time,
+                                        self.time.tick().time(),
+                                        true,
+                                    ))
+                                    .unwrap();
                                     break;
                                 }
                             }

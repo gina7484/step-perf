@@ -31,6 +31,8 @@ mod test {
     #[test]
     fn run_graph() {
         let proto = "graph.pb";
+        let logging: bool = false;
+        let db_name = None;
         let step_graph: ProgramGraph = {
             let file_contents = fs::read(proto).unwrap();
             ProgramGraph::decode(file_contents.as_slice()).unwrap()
@@ -40,7 +42,7 @@ mod test {
 
         let (passed, cycles) = parse_proto(
             step_graph,
-            false,
+            logging,
             HBMConfig {
                 addr_offset: 64, // 32 elements in this test case
                 channel_num: 8,
@@ -49,6 +51,7 @@ mod test {
                 per_channel_outstanding: 1,
                 per_channel_start_up_time: 14,
             },
+            db_name,
         );
 
         println!("Passed: {}, Elapsed Cycles: {}", passed, cycles);

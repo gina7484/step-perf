@@ -21,7 +21,13 @@ use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
 use crate::ramulator::hbm_context::HBMConfig;
 
 #[pyfunction]
-fn run_graph(py: Python, proto: String, logging: bool, hbm_config: HBMConfig) -> (bool, u64) {
+fn run_graph(
+    py: Python,
+    proto: String,
+    logging: bool,
+    hbm_config: HBMConfig,
+    db_name: Option<String>,
+) -> (bool, u64) {
     let step_graph: ProgramGraph = {
         let file_contents = fs::read(proto).unwrap();
         ProgramGraph::decode(file_contents.as_slice()).unwrap()
@@ -29,12 +35,18 @@ fn run_graph(py: Python, proto: String, logging: bool, hbm_config: HBMConfig) ->
 
     println!("Successfully read proto file");
 
-    let (passed, cycles) = parse_proto(step_graph, logging, hbm_config);
+    let (passed, cycles) = parse_proto(step_graph, logging, hbm_config, db_name.clone());
 
     println!("Passed: {}, Elapsed Cycles: {}", passed, cycles);
 
+    if logging {
+        println!(
+            "Log saved to {}",
+            db_name.unwrap_or("sim_default_name".to_string())
+        );
+    }
+
     return (passed, cycles);
-    // (true, 0)
 }
 
 #[pymodule]

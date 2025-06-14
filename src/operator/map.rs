@@ -146,6 +146,7 @@ where
                 .unwrap();
 
             dam::logging::log_event(&E::new(
+                "BinaryMap".to_string(),
                 self.id,
                 start_time,
                 self.time.tick().time(),
@@ -238,7 +239,8 @@ where
                 0
             };
 
-            let (comp_cycles, out_tile) = (self.func)(&in_tile, self.config.compute_bw, self.config.write_back_mu);
+            let (comp_cycles, out_tile) =
+                (self.func)(&in_tile, self.config.compute_bw, self.config.write_back_mu);
             let store_cycles = if self.config.write_back_mu {
                 div_ceil(out_tile.size_in_bytes() as u64, PMU_BW)
             } else {
@@ -264,11 +266,13 @@ where
                 )
                 .unwrap();
             dam::logging::log_event(&E::new(
+                "UnaryMap".to_string(),
                 self.id,
                 start_time,
                 self.time.tick().time(),
                 stop_lev != None,
-            )).unwrap();
+            ))
+            .unwrap();
             self.in_stream.dequeue(&self.time).unwrap();
         }
     }
@@ -277,11 +281,15 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        functions::map_fn, primitives::{elem::Elem, tile::Tile},
+        functions::map_fn,
         operator::map::BinaryMap,
-        utils::events::SimpleEvent
+        primitives::{elem::Elem, tile::Tile},
+        utils::events::SimpleEvent,
     };
-    use dam::{simulation::ProgramBuilder, utility_contexts::{ApproxCheckerContext, GeneratorContext}};
+    use dam::{
+        simulation::ProgramBuilder,
+        utility_contexts::{ApproxCheckerContext, GeneratorContext},
+    };
     use ndarray::Array2;
     use std::sync::Arc;
 
@@ -296,7 +304,6 @@ mod tests {
     }
     #[test]
     fn binary_map_mul() {
-
         // Step 1: Create 9 different ndarray::ArcArray2<T> with shape 2x2
         let in1_arrays: Vec<Array2<i32>> = (0..9)
             .map(|i| Array2::from_shape_vec((2, 2), vec![i as i32; 4]).unwrap())
@@ -320,13 +327,17 @@ mod tests {
         let expected_out_stream_data: Vec<Elem<Tile<i32>>> = in1_arrays
             .iter()
             .zip(in2_arrays.iter())
-            .map(|(arr1, arr2)| Elem::Val(
-                map_fn::mul(
-                &Tile::new(arr1.clone().into(), 4, read_from_mu), 
-                &Tile::new(arr2.clone().into(), 4, read_from_mu), 
-                1024, 
-                true).1)
-            )
+            .map(|(arr1, arr2)| {
+                Elem::Val(
+                    map_fn::mul(
+                        &Tile::new(arr1.clone().into(), 4, read_from_mu),
+                        &Tile::new(arr2.clone().into(), 4, read_from_mu),
+                        1024,
+                        true,
+                    )
+                    .1,
+                )
+            })
             .collect();
 
         // Step 4: Create the STeP program
@@ -360,7 +371,5 @@ mod tests {
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
-
-
     }
 }

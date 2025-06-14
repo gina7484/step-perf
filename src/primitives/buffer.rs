@@ -141,6 +141,7 @@ where
 
         // At this point, we have a full "tensor"
         dam::logging::log_event(&E::new(
+            "Bufferize".to_string(),
             id,
             creation_time.unwrap(),
             manager.tick().time(),

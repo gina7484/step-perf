@@ -6,12 +6,13 @@ use serde::{Deserialize, Serialize};
 pub const DUMMY_ID: u32 = 0;
 
 pub trait LoggableEventSimple {
-    fn new(id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self;
+    fn new(name: String, id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self;
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[event_type]
 pub struct SimpleEvent {
+    name: String,
     id: u32,
     start_ns: u64,
     end_ns: u64,
@@ -19,8 +20,9 @@ pub struct SimpleEvent {
 }
 
 impl LoggableEventSimple for SimpleEvent {
-    fn new(id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
+    fn new(name: String, id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
         SimpleEvent {
+            name,
             id,
             start_ns,
             end_ns,
@@ -39,6 +41,7 @@ macro_rules! define_simple_event {
         #[derive(Serialize, Deserialize, Debug)]
         #[event_type]
         struct $event_name {
+            name: String,
             id: u32,
             start_ns: u64,
             end_ns: u64,
@@ -47,8 +50,9 @@ macro_rules! define_simple_event {
 
         // Implement the trait for $event_name
         impl LoggableEventSimple for $event_name {
-            fn new(id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
+            fn new(name: String, id: u32, start_ns: u64, end_ns: u64, is_stop: bool) -> Self {
                 $event_name {
+                    name: stringify!($event_name).to_string(),
                     id,
                     start_ns,
                     end_ns,

@@ -228,6 +228,7 @@ where
                     self.in_stream.dequeue(&self.time).unwrap();
 
                     dam::logging::log_event(&E::new(
+                        "Streamify".to_string(),
                         self.id,
                         start_time,
                         self.time.tick().time(),
