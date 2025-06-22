@@ -95,6 +95,7 @@ pub fn read_multihot_elem_from_npy_iter<T>(
 where
     T: npyz::Deserialize + num_traits::Zero,
 {
+    println!("Reading multi-hot elements from: {}", file_path);
     let vectors = read_multihot_elem_from_npy::<T>(file_path)?;
     Ok(vectors.into_iter())
 }

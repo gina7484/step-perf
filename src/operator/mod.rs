@@ -11,6 +11,7 @@ pub mod promote;
 pub mod reassemble;
 pub mod repeat;
 pub mod streamify;
+pub mod reshape;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;
