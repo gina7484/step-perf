@@ -860,10 +860,6 @@ fn build_from_proto<'a>(
                         builder,
                         Some(1),
                     );
-                    println!(
-                        "Adding SelectGen with path: {}",
-                        select_gen.npy_path
-                    );
                     builder.add_child(GeneratorContext::new(
                         move || {
                             read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path).unwrap()
