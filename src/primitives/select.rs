@@ -61,6 +61,12 @@ impl Bufferizable for MultiHotN {
     fn read_from_mu(&self) -> bool {
         self.read_from_mu
     }
+    fn clone_with_updated_read_from_mu(&self, read_from_mu: bool) -> Self {
+        Self {
+            underlying: self.underlying.clone(),
+            read_from_mu,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -111,6 +117,12 @@ impl Bufferizable for IndexN {
     }
     fn read_from_mu(&self) -> bool {
         self.read_from_mu
+    }
+    fn clone_with_updated_read_from_mu(&self, read_from_mu: bool) -> Self {
+        Self {
+            underlying: self.underlying.clone(),
+            read_from_mu,
+        }
     }
 }
 

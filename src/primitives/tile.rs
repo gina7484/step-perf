@@ -23,6 +23,15 @@ impl<T> Bufferizable for Tile<T> {
     fn read_from_mu(&self) -> bool {
         self.read_from_mu
     }
+
+    fn clone_with_updated_read_from_mu(&self, read_from_mu: bool) -> Self {
+        Self {
+            shape: self.shape.clone(),
+            bytes_per_elem: self.bytes_per_elem,
+            read_from_mu: read_from_mu,
+            underlying: self.underlying.clone(),
+        }
+    }
 }
 impl<T> Tile<T> {
     pub fn new_blank(shape: Vec<usize>, bytes_per_elem: usize, read_from_mu: bool) -> Self {
@@ -53,12 +62,16 @@ impl<T: Clone + num::Zero> Tile<T> {
         }
     }
 
-    pub fn new_empty(arr_shape: [usize; 2],read_from_mu: bool)-> Self {
+    pub fn new_empty(arr_shape: [usize; 2], read_from_mu: bool) -> Self {
         Self {
             shape: arr_shape.to_vec(),
             bytes_per_elem: std::mem::size_of::<T>(),
             read_from_mu: read_from_mu,
-            underlying: Some(Array2::from_shape_vec((arr_shape[0], arr_shape[1]), vec![],).unwrap().to_shared()),
+            underlying: Some(
+                Array2::from_shape_vec((arr_shape[0], arr_shape[1]), vec![])
+                    .unwrap()
+                    .to_shared(),
+            ),
         }
     }
 }
