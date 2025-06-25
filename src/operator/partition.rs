@@ -122,7 +122,11 @@ where
                         self.handle_load_cycles(&x);
                         self.in_stream.dequeue(&self.time).unwrap();
                         self.handle_write_cycles(select_vec, &x);
-                        self.enqueue_to_experts(select_vec, Elem::Val(x.clone()));
+
+                        self.enqueue_to_experts(
+                            select_vec,
+                            Elem::Val(x.clone_with_updated_read_from_mu(self.config.write_back_mu)),
+                        );
 
                         if self.partition_rank == 0 {
                             dam::logging::log_event(&E::new(
@@ -160,11 +164,19 @@ where
                         self.in_stream.dequeue(&self.time).unwrap();
                         self.handle_write_cycles(select_vec, &x);
                         if output_stop_level == 0 {
-                            self.enqueue_to_experts(select_vec, Elem::Val(x.clone()));
+                            self.enqueue_to_experts(
+                                select_vec,
+                                Elem::Val(
+                                    x.clone_with_updated_read_from_mu(self.config.write_back_mu),
+                                ),
+                            );
                         } else {
                             self.enqueue_to_experts(
                                 select_vec,
-                                Elem::ValStop(x.clone(), output_stop_level),
+                                Elem::ValStop(
+                                    x.clone_with_updated_read_from_mu(self.config.write_back_mu),
+                                    output_stop_level,
+                                ),
                             );
                         }
                         // Break if we've reached the partition rank

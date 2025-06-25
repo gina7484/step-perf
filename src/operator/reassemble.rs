@@ -172,11 +172,9 @@ where
                         // Enqueue the current element to the output stream
                         match &val_data {
                             Elem::Val(x) => {
-                                let updated_x: Tile<A> = if self.config.write_back_mu {
-                                    x.clone_with_updated_read_from_mu(self.config.write_back_mu)
-                                } else {
-                                    x.clone()
-                                };
+                                self.handle_memory_writeback(x);
+                                let updated_x: Tile<A> =
+                                    x.clone_with_updated_read_from_mu(self.config.write_back_mu);
                                 let data = if self.reassemble_rank == 0 {
                                     if is_last_selected {
                                         Elem::ValStop(updated_x.clone(), 1 + addtional_rank)
@@ -186,7 +184,6 @@ where
                                 } else {
                                     Elem::Val(updated_x.clone())
                                 };
-                                self.handle_memory_writeback(&updated_x);
                                 self.out_stream
                                     .enqueue(
                                         &self.time,
@@ -198,11 +195,9 @@ where
                                     .unwrap();
                             }
                             Elem::ValStop(x, level) => {
-                                let updated_x: Tile<A> = if self.config.write_back_mu {
-                                    x.clone_with_updated_read_from_mu(self.config.write_back_mu)
-                                } else {
-                                    x.clone()
-                                };
+                                self.handle_memory_writeback(x);
+                                let updated_x: Tile<A> =
+                                    x.clone_with_updated_read_from_mu(self.config.write_back_mu);
                                 let data = if self.reassemble_rank == 0 {
                                     if is_last_selected {
                                         Elem::ValStop(
@@ -222,7 +217,6 @@ where
                                         Elem::ValStop(updated_x.clone(), *level)
                                     }
                                 };
-                                self.handle_memory_writeback(&updated_x);
                                 self.out_stream
                                     .enqueue(
                                         &self.time,
