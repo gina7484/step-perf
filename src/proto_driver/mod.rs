@@ -2,6 +2,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
+use crate::operator::accum::{Accum, AccumConfig};
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
@@ -26,7 +27,7 @@ use crate::memory::offchip_store::OffChipStore;
 use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
 use crate::primitives::tile::Tile;
 use crate::proto_driver::proto_headers::graph_proto::{
-    buffer, data_type::Type, elemto_elem_func, operation::OpType, ProgramGraph,
+    buffer, data_type::Type, elemto_elem_func, init_func, operation::OpType, ProgramGraph,
 };
 use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
 use crate::utils::{
@@ -868,6 +869,61 @@ fn build_from_proto<'a>(
                     ));
                 }
                 false => todo!("Add the same version for IndexN"),
+            },
+            OpType::Accum(accum) => match (
+                accum.dtype_a.clone().unwrap().r#type.clone().unwrap(),
+                accum.dtype_b.clone().unwrap().r#type.clone().unwrap(),
+            ) {
+                (Type::F32(_), Type::F32(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        accum.input_id,
+                        accum.stream_idx,
+                        builder,
+                        Some(1),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        Some(1),
+                    );
+                    let func: Arc<
+                        dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match accum.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Add(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        _ => todo!(),
+                    };
+
+                    let tile_row = accum.tile_row as usize;
+                    let tile_col = accum.tile_col as usize;
+
+                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_zero) => {
+                                Arc::new(move || Tile::new_zero([tile_row, tile_col]))
+                            }
+                            _ => todo!(),
+                            // init_func::InitFn::Empty(empty) => Arc::new(|| Tile::new_empty([accum.tile_row, 1])),
+                        };
+
+                    builder.add_child(Accum::<SimpleEvent, _, _>::new(
+                        rcv,
+                        snd,
+                        func,
+                        init_accum,
+                        accum.rank,
+                        AccumConfig {
+                            compute_bw: accum.compute_bw as u64,
+                            write_back_mu: accum.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
+                _ => todo!(),
             },
             _ => todo!(),
         }

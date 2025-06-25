@@ -46,8 +46,8 @@ mod test {
             HBMConfig {
                 addr_offset: 64, // 32 elements in this test case
                 channel_num: 8,
-                per_channel_latency: 4,
-                per_channel_init_interval: 4,
+                per_channel_latency: 2,
+                per_channel_init_interval: 2,
                 per_channel_outstanding: 1,
                 per_channel_start_up_time: 14,
             },

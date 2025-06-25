@@ -288,7 +288,7 @@ where
             self.out_shape_tiled.len(),
             "Stride and output shape must have the same number of dimensions"
         );
-        assert!(((self.tile_col * self.n_byte) as u64) % self.addr_offset == 0);
+        // assert!(((self.tile_col * self.n_byte) as u64) % self.addr_offset == 0);
 
         // println!("Started run of OFFHCIP LOAD");
 

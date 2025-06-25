@@ -1,0 +1,1 @@
+cargo test --package step_perf --lib -- test::protobuf_test::test::run_graph --exact --show-output
