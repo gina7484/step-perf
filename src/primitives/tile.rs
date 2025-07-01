@@ -92,21 +92,21 @@ impl<T> Tile<T> {
 }
 
 impl<T: Clone + num::Zero> Tile<T> {
-    pub fn new_zero(arr_shape: [usize; 2]) -> Self {
+    pub fn new_zero(arr_shape: [usize; 2], read_from_mu: bool) -> Self {
         Self {
             shape: arr_shape.to_vec(),
             bytes_per_elem: std::mem::size_of::<T>(),
-            read_from_mu: false,
+            read_from_mu: read_from_mu,
             underlying: Some(ndarray::ArcArray2::zeros(arr_shape)),
             offset: arr_shape[0],
         }
     }
 
-    pub fn new_zero_padded(arr_shape: [usize; 2], offset: usize) -> Self {
+    pub fn new_zero_padded(arr_shape: [usize; 2], read_from_mu: bool, offset: usize) -> Self {
         Self {
             shape: arr_shape.to_vec(),
             bytes_per_elem: std::mem::size_of::<T>(),
-            read_from_mu: false,
+            read_from_mu: read_from_mu,
             underlying: Some(ndarray::ArcArray2::zeros(arr_shape)),
             offset: offset,
         }

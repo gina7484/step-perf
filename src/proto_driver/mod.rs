@@ -39,20 +39,24 @@ use crate::utils::{
     events::SimpleEvent,
 };
 
+const CHANNEL_DEPTH: Option<usize> = Some(1024);
+
 macro_rules! make_broadcast {
     ($collection:expr, $operation: expr, $broadcast: expr, $type:ident, $builder:expr) => {
         let rcv = $collection.$type.get_receiver(
             $broadcast.input_id,
             $broadcast.stream_idx,
             $builder,
-            Some(1),
+            CHANNEL_DEPTH,
         );
         let mut broadcast_node = BroadcastContext::new(rcv);
         for stream_idx in 0..$broadcast.num_consumers {
-            let snd =
-                $collection
-                    .$type
-                    .get_sender($operation.id, Some(stream_idx), $builder, Some(1));
+            let snd = $collection.$type.get_sender(
+                $operation.id,
+                Some(stream_idx),
+                $builder,
+                CHANNEL_DEPTH,
+            );
             broadcast_node.add_target(snd);
         }
 
@@ -67,12 +71,12 @@ macro_rules! make_dyn_offchip_load {
             $dyn_offchip_load.ref_id,
             $dyn_offchip_load.ref_stream_idx,
             $builder,
-            Some(1),
+            CHANNEL_DEPTH,
         );
 
         let snd = $collection
             .$type
-            .get_sender($operation.id, None, $builder, Some(1));
+            .get_sender($operation.id, None, $builder, CHANNEL_DEPTH);
 
         let (addr_snd, addr_rcv) = $builder.unbounded();
         let (resp_snd, resp_rcv) = $builder.unbounded();
@@ -121,13 +125,13 @@ fn build_from_proto<'a>(
                         unarymap.input_id,
                         unarymap.stream_idx,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let snd = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
@@ -165,19 +169,19 @@ fn build_from_proto<'a>(
                         binary_map.input_id1,
                         binary_map.stream_idx1,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let rcv2 = channel_map_collection.tile_f32.get_receiver(
                         binary_map.input_id2,
                         binary_map.stream_idx2,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let snd = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
@@ -237,19 +241,19 @@ fn build_from_proto<'a>(
                         binary_map_accum.input_id1,
                         binary_map_accum.stream_idx1,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let in2_stream = channel_map_collection.tile_f32.get_receiver(
                         binary_map_accum.input_id2,
                         binary_map_accum.stream_idx2,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let out_stream = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>)
@@ -282,7 +286,9 @@ fn build_from_proto<'a>(
                         in2_stream,
                         out_stream,
                         map_fn,
-                        Arc::new(move || Tile::new_zero([tile_row, tile_col])),
+                        Arc::new(move || {
+                            Tile::new_zero([tile_row, tile_col], binary_map_accum.write_back_mu)
+                        }),
                         binary_map_accum.rank,
                         binary_map_accum.compute_bw as u64,
                         binary_map_accum.write_back_mu,
@@ -298,7 +304,7 @@ fn build_from_proto<'a>(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
@@ -342,7 +348,7 @@ fn build_from_proto<'a>(
                             off_chip_store.input_id,
                             off_chip_store.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
@@ -376,13 +382,13 @@ fn build_from_proto<'a>(
                             repeat_static.input_id,
                             repeat_static.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(RepeatStatic::<_>::new(
                             rcv,
@@ -441,7 +447,7 @@ fn build_from_proto<'a>(
                             flat_partition.input_id,
                             flat_partition.input_stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let mut snd_list = vec![];
                         for i in 0..flat_partition.num_consumers {
@@ -449,7 +455,7 @@ fn build_from_proto<'a>(
                                 operation.id,
                                 Some(i),
                                 builder,
-                                Some(1),
+                                CHANNEL_DEPTH,
                             ));
                         }
 
@@ -466,7 +472,7 @@ fn build_from_proto<'a>(
                                     flat_partition.control_id,
                                     flat_partition.control_stream_idx,
                                     builder,
-                                    Some(1),
+                                    CHANNEL_DEPTH,
                                 );
                                 builder.add_child(FlatPartition::<SimpleEvent, _, _>::new(
                                     input_rcv,
@@ -488,7 +494,7 @@ fn build_from_proto<'a>(
                             flat_partition.input_id,
                             flat_partition.input_stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let mut snd_list = vec![];
                         for i in 0..flat_partition.num_consumers {
@@ -496,7 +502,7 @@ fn build_from_proto<'a>(
                                 operation.id,
                                 Some(i),
                                 builder,
-                                Some(1),
+                                CHANNEL_DEPTH,
                             ));
                         }
 
@@ -513,7 +519,7 @@ fn build_from_proto<'a>(
                                     flat_partition.control_id,
                                     flat_partition.control_stream_idx,
                                     builder,
-                                    Some(1),
+                                    CHANNEL_DEPTH,
                                 );
                                 builder.add_child(FlatPartition::<SimpleEvent, _, _>::new(
                                     input_rcv,
@@ -548,7 +554,7 @@ fn build_from_proto<'a>(
                             Some(stream_idx as u32)
                         },
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     rcv_list.push(rcv);
                 }
@@ -557,7 +563,7 @@ fn build_from_proto<'a>(
                     operation.id,
                     None,
                     builder,
-                    Some(1),
+                    CHANNEL_DEPTH,
                 );
                 match reassemble
                     .control_dtype
@@ -572,7 +578,7 @@ fn build_from_proto<'a>(
                             reassemble.control_id,
                             reassemble.control_stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
                             rcv_list,
@@ -596,13 +602,13 @@ fn build_from_proto<'a>(
                             promote.input_id,
                             promote.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
                     }
@@ -676,13 +682,13 @@ fn build_from_proto<'a>(
                             bufferize.input_id,
                             bufferize.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.buff_tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(Bufferize::<SimpleEvent, _>::new(
                             rcv,
@@ -701,13 +707,13 @@ fn build_from_proto<'a>(
                             streamify.input_id,
                             streamify.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(Streamify::<SimpleEvent, _>::new(
                             to_usize_vec(streamify.repeat_factor),
@@ -742,19 +748,19 @@ fn build_from_proto<'a>(
                             dyn_streamify.input_id,
                             dyn_streamify.input_stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let ref_rcv = channel_map_collection.tile_f32.get_receiver(
                             dyn_streamify.ref_id,
                             dyn_streamify.ref_stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(DynStreamify::<SimpleEvent, _, _>::new(
                             rcv,
@@ -839,13 +845,13 @@ fn build_from_proto<'a>(
                             flatten.input_id,
                             flatten.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(Flatten::new(
                             rcv,
@@ -863,7 +869,7 @@ fn build_from_proto<'a>(
                         operation.id,
                         None,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     builder.add_child(GeneratorContext::new(
                         move || {
@@ -883,13 +889,13 @@ fn build_from_proto<'a>(
                         accum.input_id,
                         accum.stream_idx,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let snd = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        Some(1),
+                        CHANNEL_DEPTH,
                     );
                     let func: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
@@ -924,11 +930,13 @@ fn build_from_proto<'a>(
 
                     let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
                         match accum.init_func.unwrap().init_fn.unwrap() {
-                            init_func::InitFn::Zero(_zero) => {
-                                Arc::new(move || Tile::new_zero([tile_row, tile_col]))
-                            }
+                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                Tile::new_zero([tile_row, tile_col], accum.write_back_mu)
+                            }),
+                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                Tile::new_empty([tile_row, tile_col], accum.write_back_mu)
+                            }),
                             _ => todo!(),
-                            // init_func::InitFn::Empty(empty) => Arc::new(|| Tile::new_empty([accum.tile_row, 1])),
                         };
 
                     builder.add_child(Accum::<SimpleEvent, _, _>::new(
@@ -960,13 +968,13 @@ fn build_from_proto<'a>(
                             retile_streamify.input_id,
                             retile_streamify.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         builder.add_child(RetileStreamify::<_>::new(
                             rcv,
@@ -986,13 +994,13 @@ fn build_from_proto<'a>(
                             reshape.input_id,
                             reshape.stream_idx,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            Some(1),
+                            CHANNEL_DEPTH,
                         );
 
                         match reshape.pad_func {
@@ -1001,9 +1009,11 @@ fn build_from_proto<'a>(
                                 let tile_col = reshape.tile_col.unwrap() as usize;
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => {
-                                        Tile::new_zero_padded([tile_row, tile_col], 0)
-                                    }
+                                    init_func::InitFn::Zero(_zero) => Tile::new_zero_padded(
+                                        [tile_row, tile_col],
+                                        reshape.write_back_mu,
+                                        0,
+                                    ),
                                     _ => todo!(),
                                 };
                                 builder.add_child(Reshape::new(
