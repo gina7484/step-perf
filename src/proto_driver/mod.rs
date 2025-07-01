@@ -12,7 +12,10 @@ use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
+use crate::operator::reshape::Reshape;
+use crate::operator::retile_streamify::RetileStreamify;
 use crate::operator::streamify::Streamify;
+use crate::proto_driver::proto_headers::graph_proto::accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
@@ -20,6 +23,7 @@ use dam::simulation::{
 };
 use dam::utility_contexts::{ConsumerContext, GeneratorContext, PrinterContext};
 use std::sync::Arc;
+use std::usize;
 
 use crate::build_sim::channel::ChannelMapCollection;
 use crate::memory::offchip_load::OffChipLoad;
@@ -251,8 +255,8 @@ fn build_from_proto<'a>(
                         dyn Fn(&Tile<f32>, &Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>)
                             + Send
                             + Sync,
-                    > = match binary_map_accum.func.unwrap().elem_elem_fn.unwrap() {
-                        elemto_elem_func::ElemElemFn::Matmul(matmul) => {
+                    > = match binary_map_accum.func.unwrap().accum_fn.unwrap() {
+                        accum_func::AccumFn::Matmul(matmul) => {
                             let weight_transposed = matmul.weight_transposed;
                             Arc::new(move |tile1, tile2, accumulator, comp_bw, write_back_mu| {
                                 functions::map_accum_fn::matmul(
@@ -889,10 +893,27 @@ fn build_from_proto<'a>(
                     );
                     let func: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
-                    > = match accum.func.unwrap().elem_elem_fn.unwrap() {
-                        elemto_elem_func::ElemElemFn::Add(_) => {
+                    > = match accum.func.unwrap().accum_fn.unwrap() {
+                        accum_func::AccumFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        accum_func::AccumFn::Matmul(matmul) => {
+                            let weight_transposed = matmul.weight_transposed;
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::matmul(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    weight_transposed,
+                                )
+                            })
+                        }
+                        accum_func::AccumFn::RetileRow(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::retile_row(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         _ => todo!(),
@@ -925,6 +946,88 @@ fn build_from_proto<'a>(
                 }
                 _ => todo!(),
             },
+            OpType::RetileStreamify(retile_streamify) => {
+                match retile_streamify
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            retile_streamify.input_id,
+                            retile_streamify.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+                        builder.add_child(RetileStreamify::<_>::new(
+                            rcv,
+                            snd,
+                            retile_streamify.split_row,
+                            retile_streamify.filter_mask,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for RetileStreamify operation"),
+                }
+            }
+            OpType::Reshape(reshape) => {
+                match reshape.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            reshape.input_id,
+                            reshape.stream_idx,
+                            builder,
+                            Some(1),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            Some(1),
+                        );
+
+                        match reshape.pad_func {
+                            Some(pad_func) => {
+                                let tile_row = reshape.tile_row.unwrap() as usize;
+                                let tile_col = reshape.tile_col.unwrap() as usize;
+
+                                let pad_val = match pad_func.init_fn.unwrap() {
+                                    init_func::InitFn::Zero(_zero) => {
+                                        Tile::new_zero_padded([tile_row, tile_col], 0)
+                                    }
+                                    _ => todo!(),
+                                };
+                                builder.add_child(Reshape::new(
+                                    rcv,
+                                    snd,
+                                    reshape.split_dim as usize,
+                                    reshape.chunk_size as usize,
+                                    Some(pad_val),
+                                ));
+                            }
+                            None => {
+                                builder.add_child(Reshape::new(
+                                    rcv,
+                                    snd,
+                                    reshape.split_dim as usize,
+                                    reshape.chunk_size as usize,
+                                    None,
+                                ));
+                            }
+                        }
+                    }
+                    _ => panic!("Unsupported data type for Reshape operation"),
+                }
+            }
             _ => todo!(),
         }
     }
