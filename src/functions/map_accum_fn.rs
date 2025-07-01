@@ -29,6 +29,9 @@ pub fn matmul<T: ndarray::LinalgScalar>(
     }
     assert_eq!(in1.bytes_per_elem, in2.bytes_per_elem); // has to be represented in the same data type
 
+    // offset is propagated from the input tile
+    let offset = in1.offset;
+
     let m = in1.shape[0];
     let k = in1.shape[1];
     let n = if !weight_transposed {
@@ -51,12 +54,17 @@ pub fn matmul<T: ndarray::LinalgScalar>(
             };
             (
                 div_ceil((2 * m * k * n) as u64, flop_per_cycle),
-                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
             )
         }
         (_, _) => (
             div_ceil((2 * m * k * n) as u64, flop_per_cycle),
-            Tile::new_blank(vec![m, n], in1.bytes_per_elem, write_back_mu),
+            Tile::new_blank_padded(vec![m, n], in1.bytes_per_elem, write_back_mu, offset),
         ),
     }
 }

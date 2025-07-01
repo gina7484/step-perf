@@ -8,6 +8,7 @@ pub struct Reshape<InputType: Clone> {
     split_dim: usize,
     chunk_size: usize,
     pad_val: Option<InputType>,
+    id: u32,
 }
 
 impl<InputType: DAMType> Reshape<InputType>
@@ -20,6 +21,7 @@ where
         split_dim: usize,
         chunk_size: usize,
         pad_val: Option<InputType>,
+        id: u32,
     ) -> Self {
         let ctx = Self {
             in_stream,
@@ -27,6 +29,7 @@ where
             split_dim,
             chunk_size,
             pad_val,
+            id,
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
@@ -45,7 +48,7 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                         Elem::Val(x) => {
                             counter += 1;
 
-                            let output_elem = if counter % self.chunk_size == 0 {
+                            let output_elem = if counter == self.chunk_size {
                                 counter = 0;
                                 Elem::ValStop(x.clone(), 1)
                             } else {
@@ -114,7 +117,35 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                             };
                         }
                     },
-                    Err(_) => return,
+                    Err(_) => {
+                        // use this as if we got a done token
+                        assert!(
+                            self.pad_val.is_some(),
+                            "When splitting the innermost dimension, \
+                            we pad if the dimension is not exactly divisible by the chunk size. \
+                            Therefore, the pad_val must be provided."
+                        );
+
+                        // pad so that the dimension is divisible by the chunk size
+                        for i in 0..self.chunk_size - counter {
+                            let padded_val = if i == self.chunk_size - counter - 1 {
+                                Elem::ValStop(self.pad_val.clone().unwrap(), 1)
+                            } else {
+                                Elem::Val(self.pad_val.clone().unwrap())
+                            };
+
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: padded_val,
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        return;
+                    }
                 }
             }
         } else {
@@ -139,6 +170,7 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                             }
                             if counter == self.chunk_size {
                                 counter = 0;
+
                                 self.out_stream
                                     .enqueue(
                                         &self.time,
@@ -186,7 +218,7 @@ mod tests {
 
     #[test]
     fn reshape_0d_with_pad() {
-        // (3, 9) => (3, 3, 4)
+        // (1, 3, 9) => (1, 3, 3, 4)
         // the last three vector tiles will be padded values
         type VT = u32;
         const BYTES_PER_ELEM: usize = 2;
@@ -233,36 +265,129 @@ mod tests {
                 READ_FROM_MU,
                 0,
             )),
+            0,
         ));
 
-        let mut output_tile_vec =
-            vec![Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU); 3 * 9];
-        output_tile_vec.extend(vec![
-            Tile::<VT>::new_blank_padded(
-                tile_shape.clone(),
-                BYTES_PER_ELEM,
-                READ_FROM_MU,
-                0
-            );
-            3 * 3 * 4 - 3 * 9
-        ]);
+        let mut output_tile_vec = vec![];
+        for _ in 0..3 {
+            output_tile_vec.extend(vec![
+                Tile::<VT>::new_blank(
+                    tile_shape.clone(),
+                    BYTES_PER_ELEM,
+                    READ_FROM_MU
+                );
+                9
+            ]);
+            output_tile_vec.extend(vec![
+                Tile::<VT>::new_blank_padded(
+                    tile_shape.clone(),
+                    BYTES_PER_ELEM,
+                    READ_FROM_MU,
+                    0
+                );
+                3
+            ]);
+        }
 
         let out_arr = Arc::new(
             ArcArray::from_vec(output_tile_vec)
                 .into_shape_with_order((3, 3, 4))
                 .unwrap(),
         );
-        // ctx.add_child(ApproxCheckerContext::new(
-        //     move || {
-        //         Buffer::new((*out_arr).clone().into_dyn(), DUMMY_CREATION_TIME)
-        //             .to_elem_iter()
-        //             .collect::<Vec<_>>()
-        //             .into_iter()
-        //     },
-        //     out_rcv,
-        //     |x, y| x == y,
-        // ));
-        ctx.add_child(PrinterContext::new(out_rcv));
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                Buffer::new((*out_arr).clone().into_dyn(), DUMMY_CREATION_TIME)
+                    .to_elem_iter()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+        // ctx.add_child(PrinterContext::new(out_rcv));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn reshape_0d_with_pad_0d_stream() {
+        // (9) => (3, 4)
+        // the last three vector tiles will be padded values
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 2;
+        const READ_FROM_MU: bool = true;
+
+        let tile_shape: Vec<usize> = vec![1, 4];
+
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        let in_arr =
+            vec![Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU); 9]
+                .into_iter()
+                .collect::<Vec<_>>();
+        ctx.add_child(GeneratorContext::new(
+            move || in_arr.into_iter().map(|x| Elem::Val(x.clone())).into_iter(),
+            in_snd,
+        ));
+
+        ctx.add_child(Reshape::new(
+            in_rcv,
+            out_snd,
+            0,
+            4,
+            Some(Tile::new_blank_padded(
+                tile_shape.clone(),
+                BYTES_PER_ELEM,
+                READ_FROM_MU,
+                0,
+            )),
+            0,
+        ));
+
+        let val_tile = Elem::Val(Tile::<VT>::new_blank(
+            tile_shape.clone(),
+            BYTES_PER_ELEM,
+            READ_FROM_MU,
+        ));
+        let val_stop_tile = Elem::ValStop(
+            Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
+            1,
+        );
+        let val_tile_pad = Elem::Val(Tile::<VT>::new_blank_padded(
+            tile_shape.clone(),
+            BYTES_PER_ELEM,
+            READ_FROM_MU,
+            0,
+        ));
+        let val_stop_tile_pad = Elem::ValStop(
+            Tile::<VT>::new_blank_padded(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU, 0),
+            1,
+        );
+        let output_tile_vec = vec![
+            val_tile.clone(),
+            val_tile.clone(),
+            val_tile.clone(),
+            val_stop_tile.clone(),
+            val_tile.clone(),
+            val_tile.clone(),
+            val_tile.clone(),
+            val_stop_tile.clone(),
+            val_tile.clone(),
+            val_tile_pad.clone(),
+            val_tile_pad.clone(),
+            val_stop_tile_pad.clone(),
+        ];
+        ctx.add_child(ApproxCheckerContext::new(
+            move || output_tile_vec.into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+        // ctx.add_child(PrinterContext::new(out_rcv));
 
         ctx.initialize(Default::default())
             .unwrap()
@@ -271,7 +396,7 @@ mod tests {
 
     #[test]
     fn reshape_as_promote() {
-        // (3, 2 * 1) => (3, 2, 1)
+        // (1,3, 2 * 1) => (1,3, 2, 1)
         type VT = u32;
         const BYTES_PER_ELEM: usize = 2;
         const READ_FROM_MU: bool = true;
@@ -304,7 +429,7 @@ mod tests {
             in_snd,
         ));
 
-        ctx.add_child(Reshape::new(in_rcv, out_snd, 0, 1, None));
+        ctx.add_child(Reshape::new(in_rcv, out_snd, 0, 1, None, 0));
 
         let out_arr = Arc::new(
             ArcArray::from_vec(vec![
@@ -369,7 +494,7 @@ mod tests {
             in_snd,
         ));
 
-        ctx.add_child(Reshape::new(in_rcv, out_snd, 1, 3, None));
+        ctx.add_child(Reshape::new(in_rcv, out_snd, 1, 3, None, 0));
 
         let out_arr = Arc::new(
             ArcArray::from_vec(vec![

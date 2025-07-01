@@ -178,7 +178,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        functions::map_fn,
+        functions::accum_fn,
         operator::accum::{Accum, AccumConfig},
         primitives::{elem::Elem, tile::Tile},
         utils::events::SimpleEvent,
@@ -270,7 +270,7 @@ mod tests {
         ctx.add_child(Accum::<SimpleEvent, _, _>::new(
             in_data_rcv,
             out_data_snd,
-            Arc::new(map_fn::retile_col),
+            Arc::new(accum_fn::retile_col),
             Arc::new(move || Tile::new_empty([2, 0], read_from_mu)),
             1, // rank
             AccumConfig {
@@ -363,7 +363,7 @@ mod tests {
         ctx.add_child(Accum::<SimpleEvent, _, _>::new(
             in_data_rcv,
             out_data_snd,
-            Arc::new(map_fn::retile_row),
+            Arc::new(accum_fn::retile_row),
             Arc::new(move || Tile::new_empty([0, 4], read_from_mu)),
             1, // rank
             AccumConfig {

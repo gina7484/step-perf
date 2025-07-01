@@ -2,6 +2,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
+
 use crate::operator::accum::{Accum, AccumConfig};
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
@@ -15,7 +16,6 @@ use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::Reshape;
 use crate::operator::retile_streamify::RetileStreamify;
 use crate::operator::streamify::Streamify;
-use crate::proto_driver::proto_headers::graph_proto::accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
 use dam::simulation::{
     DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
@@ -31,7 +31,8 @@ use crate::memory::offchip_store::OffChipStore;
 use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
 use crate::primitives::tile::Tile;
 use crate::proto_driver::proto_headers::graph_proto::{
-    buffer, data_type::Type, elemto_elem_func, init_func, operation::OpType, ProgramGraph,
+    accum_func, buffer, data_type::Type, elemto_elem_func, init_func, operation::OpType,
+    ProgramGraph,
 };
 use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
 use crate::utils::{
@@ -902,24 +903,17 @@ fn build_from_proto<'a>(
                     > = match accum.func.unwrap().accum_fn.unwrap() {
                         accum_func::AccumFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
-                            })
-                        }
-                        accum_func::AccumFn::Matmul(matmul) => {
-                            let weight_transposed = matmul.weight_transposed;
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::matmul(
-                                    tile1,
-                                    tile2,
-                                    comp_bw,
-                                    write_back_mu,
-                                    weight_transposed,
-                                )
+                                functions::accum_fn::add(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         accum_func::AccumFn::RetileRow(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::retile_row(tile1, tile2, comp_bw, write_back_mu)
+                                functions::accum_fn::retile_row(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
                             })
                         }
                         _ => todo!(),
@@ -1022,6 +1016,7 @@ fn build_from_proto<'a>(
                                     reshape.split_dim as usize,
                                     reshape.chunk_size as usize,
                                     Some(pad_val),
+                                    operation.id,
                                 ));
                             }
                             None => {
@@ -1031,6 +1026,7 @@ fn build_from_proto<'a>(
                                     reshape.split_dim as usize,
                                     reshape.chunk_size as usize,
                                     None,
+                                    operation.id,
                                 ));
                             }
                         }
