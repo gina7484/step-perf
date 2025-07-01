@@ -90,7 +90,8 @@ pub fn retile_row<T: Debug + ndarray::LinalgScalar>(
     assert_eq!(in_data.shape.len(), 2);
     assert_eq!(accumulator.shape.len(), 2);
 
-    let offset = accumulator.offset;
+    let accum_offset = accumulator.offset;
+    let in_offset = in_data.offset;
 
     let in_arr = in_data.underlying.clone().unwrap();
     let cur_arr = accumulator.underlying.clone().unwrap();
@@ -103,7 +104,7 @@ pub fn retile_row<T: Debug + ndarray::LinalgScalar>(
                     arr.to_shared(),
                     in_data.bytes_per_elem,
                     in_data.read_from_mu,
-                    offset + 1,
+                    accum_offset + in_offset,
                 )
             })
             .unwrap_or_else(|_| panic!("Failed to concatenate input data and accumulator data")),

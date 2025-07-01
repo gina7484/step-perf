@@ -11,6 +11,7 @@ pub mod promote;
 pub mod reassemble;
 pub mod repeat;
 pub mod reshape;
+pub mod retile_streamify;
 pub mod streamify;
 
 use dam::types::StaticallySized;
