@@ -227,6 +227,7 @@ mod tests {
 
     #[test]
     fn flatten_1_3() {
+        // (5, 2, 3, 2, 4) => (5, 2 * 3 * 2, 4)
         type VT = u32;
         const BYTES_PER_ELEM: usize = 2;
         const READ_FROM_MU: bool = true;
