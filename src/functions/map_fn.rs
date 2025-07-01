@@ -81,6 +81,35 @@ pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
     )
 }
 
+pub fn retile_row<T: Debug + ndarray::LinalgScalar>(
+    in_data: &Tile<T>,
+    accumulator: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    assert_eq!(accumulator.shape.len(), 2);
+
+    let offset = accumulator.offset;
+
+    let in_arr = in_data.underlying.clone().unwrap();
+    let cur_arr = accumulator.underlying.clone().unwrap();
+
+    (
+        0, // TODO: Add cycles it took for grouping smaller tiles into larger tiles
+        ndarray::concatenate(ndarray::Axis(0), &[cur_arr.view(), in_arr.view()])
+            .map(|arr| {
+                Tile::new_padded(
+                    arr.to_shared(),
+                    in_data.bytes_per_elem,
+                    in_data.read_from_mu,
+                    offset + 1,
+                )
+            })
+            .unwrap_or_else(|_| panic!("Failed to concatenate input data and accumulator data")),
+    )
+}
+
 pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
     in1: &Tile<T>,
     in2: &Tile<T>,
