@@ -126,23 +126,25 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                             Therefore, the pad_val must be provided."
                         );
 
-                        // pad so that the dimension is divisible by the chunk size
-                        for i in 0..self.chunk_size - counter {
-                            let padded_val = if i == self.chunk_size - counter - 1 {
-                                Elem::ValStop(self.pad_val.clone().unwrap(), 1)
-                            } else {
-                                Elem::Val(self.pad_val.clone().unwrap())
-                            };
+                        if 0 < counter && counter < self.chunk_size {
+                            // pad so that the dimension is divisible by the chunk size
+                            for i in 0..self.chunk_size - counter {
+                                let padded_val = if i == self.chunk_size - counter - 1 {
+                                    Elem::ValStop(self.pad_val.clone().unwrap(), 1)
+                                } else {
+                                    Elem::Val(self.pad_val.clone().unwrap())
+                                };
 
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: padded_val,
-                                    },
-                                )
-                                .unwrap();
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: padded_val,
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         }
                         return;
                     }
