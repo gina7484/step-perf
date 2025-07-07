@@ -16,6 +16,7 @@ use prost::Message;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 
+use crate::proto_driver::configs::SimConfig;
 use crate::proto_driver::parse_proto;
 use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
 use crate::ramulator::hbm_context::HBMConfig;
@@ -26,6 +27,7 @@ fn run_graph(
     proto: String,
     logging: bool,
     hbm_config: HBMConfig,
+    sim_config: SimConfig,
     db_name: Option<String>,
 ) -> (bool, u64) {
     let step_graph: ProgramGraph = {
@@ -35,7 +37,8 @@ fn run_graph(
 
     println!("Successfully read proto file");
 
-    let (passed, cycles) = parse_proto(step_graph, logging, hbm_config, db_name.clone());
+    let (passed, cycles) =
+        parse_proto(step_graph, logging, hbm_config, sim_config, db_name.clone());
 
     println!("Passed: {}, Elapsed Cycles: {}", passed, cycles);
 

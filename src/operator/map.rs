@@ -94,14 +94,24 @@ where
                     (Elem::Val(data1), Elem::Val(data2)) => (data1, data2, None),
                     (Elem::ValStop(data1, lev1), Elem::ValStop(data2, lev2)) => {
                         if lev1 != lev2 {
-                            panic!("The two input streams' shape don't match!");
+                            panic!(
+                                "node id ({}): The two input streams' shape don't match!",
+                                self.id
+                            );
                         }
                         (data1, data2, Some(lev1))
                     }
-                    (_, _) => panic!("The two input streams' shape don't match!"),
+                    (_, _) => panic!(
+                        "node id ({}): The two input streams' shape don't match!",
+                        self.id
+                    ),
                 },
-                (Ok(_), Err(_)) => panic!("One stream closed earlier"),
-                (Err(_), Ok(_)) => panic!("One stream closed earlier"),
+                (Ok(_), Err(e)) => {
+                    panic!("node id ({}): One stream closed earlier: {}", self.id, e)
+                }
+                (Err(e), Ok(_)) => {
+                    panic!("node id ({}): One stream closed earlier: {}", self.id, e)
+                }
                 (Err(_), Err(_)) => {
                     return;
                 }

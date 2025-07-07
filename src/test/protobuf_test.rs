@@ -5,6 +5,7 @@ mod test {
     use std::sync::Arc;
 
     use crate::functions;
+    use crate::proto_driver::configs::SimConfig;
     use crate::proto_driver::parse_proto;
     use dam::dam_macros::event_type;
     use dam::simulation::{
@@ -50,6 +51,9 @@ mod test {
                 per_channel_init_interval: 2,
                 per_channel_outstanding: 1,
                 per_channel_start_up_time: 14,
+            },
+            SimConfig {
+                channel_depth: Some(1024),
             },
             db_name,
         );
