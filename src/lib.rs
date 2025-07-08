@@ -29,7 +29,7 @@ fn run_graph(
     hbm_config: HBMConfig,
     sim_config: SimConfig,
     db_name: Option<String>,
-) -> (bool, u64, u128) {
+) -> (bool, u64, u128, u64) {
     let step_graph: ProgramGraph = {
         let file_contents = fs::read(proto).unwrap();
         ProgramGraph::decode(file_contents.as_slice()).unwrap()
@@ -54,7 +54,8 @@ fn run_graph(
 
     // Convert duration to milliseconds as f64 for Python (better precision for short durations)
     let duration_milliseconds = duration.as_millis();
-    return (passed, cycles, duration_milliseconds);
+    let duration_seconds = duration.as_secs();
+    return (passed, cycles, duration_milliseconds, duration_seconds);
 }
 
 #[pymodule]
