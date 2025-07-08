@@ -29,7 +29,7 @@ fn run_graph(
     hbm_config: HBMConfig,
     sim_config: SimConfig,
     db_name: Option<String>,
-) -> (bool, u64) {
+) -> (bool, u64, u128) {
     let step_graph: ProgramGraph = {
         let file_contents = fs::read(proto).unwrap();
         ProgramGraph::decode(file_contents.as_slice()).unwrap()
@@ -37,10 +37,13 @@ fn run_graph(
 
     println!("Successfully read proto file");
 
-    let (passed, cycles) =
+    let (passed, cycles, duration) =
         parse_proto(step_graph, logging, hbm_config, sim_config, db_name.clone());
 
-    println!("Passed: {}, Elapsed Cycles: {}", passed, cycles);
+    println!(
+        "Passed: {}, Elapsed Cycles: {}, Duration: {:?}",
+        passed, cycles, duration
+    );
 
     if logging {
         println!(
@@ -49,7 +52,9 @@ fn run_graph(
         );
     }
 
-    return (passed, cycles);
+    // Convert duration to milliseconds as f64 for Python (better precision for short durations)
+    let duration_milliseconds = duration.as_millis();
+    return (passed, cycles, duration_milliseconds);
 }
 
 #[pymodule]

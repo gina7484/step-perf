@@ -3,6 +3,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
+use std::time::Instant;
 
 use crate::operator::accum::{Accum, AccumConfig};
 use crate::operator::broadcast::BroadcastContext;
@@ -1058,7 +1059,7 @@ pub fn parse_proto<'a>(
     hbm_config: HBMConfig,
     sim_config: SimConfig,
     db_name: Option<String>,
-) -> (bool, u64) {
+) -> (bool, u64, std::time::Duration) {
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
     build_from_proto(
@@ -1089,9 +1090,14 @@ pub fn parse_proto<'a>(
     };
 
     println!("{}", initialized.to_dot_string());
+
+    let start = Instant::now();
     let executed = initialized.run(run_options);
+    let duration = start.elapsed();
+
+    println!("Duration: {:?}", duration);
 
     let cycles = executed.elapsed_cycles().unwrap();
     let passed = executed.passed();
-    (passed, cycles)
+    (passed, cycles, duration)
 }

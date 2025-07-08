@@ -41,7 +41,7 @@ mod test {
 
         println!("Successfully read proto file");
 
-        let (passed, cycles) = parse_proto(
+        let (passed, cycles, duration) = parse_proto(
             step_graph,
             logging,
             HBMConfig {
@@ -58,6 +58,9 @@ mod test {
             db_name,
         );
 
-        println!("Passed: {}, Elapsed Cycles: {}", passed, cycles);
+        println!(
+            "Passed: {}, Elapsed Cycles: {}, Duration: {:?}",
+            passed, cycles, duration
+        );
     }
 }
