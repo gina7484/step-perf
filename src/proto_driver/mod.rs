@@ -3,6 +3,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
+use crate::operator::eager_merge::EagerMerge;
 use std::time::Instant;
 
 use crate::operator::accum::{Accum, AccumConfig};
@@ -1044,6 +1045,51 @@ fn build_from_proto<'a>(
                         }
                     }
                     _ => panic!("Unsupported data type for Reshape operation"),
+                }
+            }
+            OpType::EagerMerge(eager_merge) => {
+                match eager_merge.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in eager_merge
+                            .input_id_list
+                            .into_iter()
+                            .zip(eager_merge.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_f32.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                channel_depth,
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let sel_snd = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            channel_depth,
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            channel_depth,
+                        );
+                        builder.add_child(EagerMerge::new(
+                            rcv_list,
+                            sel_snd,
+                            snd,
+                            eager_merge.input_rank,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for EagerMerge operation"),
                 }
             }
             _ => todo!(),
