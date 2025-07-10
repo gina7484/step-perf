@@ -4,6 +4,7 @@ use super::elem::Bufferizable;
 
 pub trait SelectAdapter {
     fn to_sel_vec(&self) -> Vec<usize>;
+    fn from_sel_vec(sel_vec: Vec<usize>, size: usize, read_from_mu: bool) -> Self;
 }
 
 // Two options for the select type
@@ -51,6 +52,17 @@ impl SelectAdapter for MultiHotN {
             }
         }
         res_vec
+    }
+
+    fn from_sel_vec(sel_vec: Vec<usize>, size: usize, read_from_mu: bool) -> Self {
+        let mut underlying = vec![false; size];
+        for idx in sel_vec {
+            underlying[idx] = true;
+        }
+        Self {
+            underlying,
+            read_from_mu,
+        }
     }
 }
 
@@ -108,6 +120,17 @@ impl SelectAdapter for IndexN {
             }
         }
         res_vec
+    }
+
+    fn from_sel_vec(sel_vec: Vec<usize>, size: usize, read_from_mu: bool) -> Self {
+        let mut underlying = vec![None; sel_vec.len()];
+        for (i, &idx) in sel_vec.iter().enumerate() {
+            underlying[i] = Some(idx);
+        }
+        Self {
+            underlying,
+            read_from_mu,
+        }
     }
 }
 
@@ -181,5 +204,38 @@ mod tests {
         dbg!(index_b);
         dbg!(index_c);
         dbg!(index_d);
+    }
+
+    #[test]
+    fn test_from_sel_vec() {
+        // Test MultiHotN from_sel_vec
+        let sel_vec = vec![1, 3, 5];
+        let multi_hot = MultiHotN::from_sel_vec(sel_vec.clone(), 8, false);
+        assert_eq!(multi_hot.to_sel_vec(), sel_vec);
+        assert_eq!(multi_hot.len(), 8);
+        assert_eq!(multi_hot[1], true);
+        assert_eq!(multi_hot[3], true);
+        assert_eq!(multi_hot[5], true);
+        assert_eq!(multi_hot[0], false);
+        assert_eq!(multi_hot[2], false);
+        assert_eq!(multi_hot[4], false);
+
+        // Test IndexN from_sel_vec
+        let index_n = IndexN::from_sel_vec(sel_vec.clone(), 8, false);
+        assert_eq!(index_n.to_sel_vec(), sel_vec);
+        assert_eq!(index_n.len(), 3);
+        assert_eq!(index_n[0], Some(1));
+        assert_eq!(index_n[1], Some(3));
+        assert_eq!(index_n[2], Some(5));
+
+        // Test empty selection
+        let empty_sel = vec![];
+        let empty_multi_hot = MultiHotN::from_sel_vec(empty_sel.clone(), 4, true);
+        let empty_index = IndexN::from_sel_vec(empty_sel.clone(), 4, true);
+
+        assert_eq!(empty_multi_hot.to_sel_vec(), empty_sel);
+        assert_eq!(empty_index.to_sel_vec(), empty_sel);
+        assert_eq!(empty_multi_hot.read_from_mu, true);
+        assert_eq!(empty_index.read_from_mu, true);
     }
 }
