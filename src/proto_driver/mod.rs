@@ -1071,13 +1071,13 @@ fn build_from_proto<'a>(
 
                         let sel_snd = channel_map_collection.multihot.get_sender(
                             operation.id,
-                            None,
+                            Some(1),
                             builder,
                             channel_depth,
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
-                            None,
+                            Some(0),
                             builder,
                             channel_depth,
                         );
