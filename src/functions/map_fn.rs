@@ -91,28 +91,41 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
         in1.offset
     };
 
-    let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
-    for i in 0..out_shape_0 {
-        for j in 0..out_shape_1 {
-            let i0 = i.min(in1_shape_0 - 1);
-            let j0 = j.min(in1_shape_1 - 1);
-            let val1 = in1.underlying.as_ref().unwrap().get((i0, j0)).unwrap();
-            let i1 = i.min(in2_shape_0 - 1);
-            let j1 = j.min(in2_shape_1 - 1);
-            let val2 = in2.underlying.as_ref().unwrap().get((i1, j1)).unwrap();
-            let out_val = val1.mul(*val2);
-            out_arr[[i, j]] = out_val;
+    match (&in1.underlying, &in2.underlying) {
+        (Some(arr1), Some(arr2)) => {
+            let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
+            for i in 0..out_shape_0 {
+                for j in 0..out_shape_1 {
+                    let i0 = i.min(in1_shape_0 - 1);
+                    let j0 = j.min(in1_shape_1 - 1);
+                    let val1 = arr1.get((i0, j0)).unwrap();
+                    let i1 = i.min(in2_shape_0 - 1);
+                    let j1 = j.min(in2_shape_1 - 1);
+                    let val2 = arr2.get((i1, j1)).unwrap();
+                    let out_val = val1.mul(*val2);
+                    out_arr[[i, j]] = out_val;
+                }
+            }
+            (
+                div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
         }
-    }
-    (
-        div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-        Tile::new_padded(
-            out_arr.to_shared(),
-            in1.bytes_per_elem,
-            write_back_mu,
-            offset,
+        (_, _) => (
+            div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![out_shape_0, out_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
         ),
-    )
+    }
 }
 
 pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
@@ -141,28 +154,42 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
         // in2_shape_0 == 1
         in1.offset
     };
-    let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
-    for i in 0..out_shape_0 {
-        for j in 0..out_shape_1 {
-            let i0 = i.min(in1_shape_0 - 1);
-            let j0 = j.min(in1_shape_1 - 1);
-            let val1 = in1.underlying.as_ref().unwrap().get((i0, j0)).unwrap();
-            let i1 = i.min(in2_shape_0 - 1);
-            let j1 = j.min(in2_shape_1 - 1);
-            let val2 = in2.underlying.as_ref().unwrap().get((i1, j1)).unwrap();
-            let out_val = val1.add(*val2);
-            out_arr[[i, j]] = out_val;
+
+    match (&in1.underlying, &in2.underlying) {
+        (Some(arr1), Some(arr2)) => {
+            let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
+            for i in 0..out_shape_0 {
+                for j in 0..out_shape_1 {
+                    let i0 = i.min(in1_shape_0 - 1);
+                    let j0 = j.min(in1_shape_1 - 1);
+                    let val1 = arr1.get((i0, j0)).unwrap();
+                    let i1 = i.min(in2_shape_0 - 1);
+                    let j1 = j.min(in2_shape_1 - 1);
+                    let val2 = arr2.get((i1, j1)).unwrap();
+                    let out_val = val1.add(*val2);
+                    out_arr[[i, j]] = out_val;
+                }
+            }
+            (
+                div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
         }
-    }
-    (
-        div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-        Tile::new_padded(
-            out_arr.to_shared(),
-            in1.bytes_per_elem,
-            write_back_mu,
-            offset,
+        (_, _) => (
+            div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![out_shape_0, out_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
         ),
-    )
+    }
 }
 
 // SiLU(x)= x / (1 + e^-x)
@@ -188,6 +215,14 @@ pub fn silu<T: Debug + ndarray::LinalgScalar + num_traits::Float + Copy>(
                 offset,
             ),
         ),
-        None => panic!("Input tile does not contain underlying data"),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
     }
 }

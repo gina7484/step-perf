@@ -121,20 +121,46 @@ pub fn retile_row<T: Debug + ndarray::LinalgScalar>(
     let accum_offset = accumulator.offset;
     let in_offset = in_data.offset;
 
-    let in_arr = in_data.underlying.clone().unwrap();
-    let cur_arr = accumulator.underlying.clone().unwrap();
+    match &in_data.underlying {
+        Some(in_arr) => {
+            let cur_arr = accumulator.underlying.clone().unwrap();
 
-    (
-        0, // TODO: Add cycles it took for grouping smaller tiles into larger tiles
-        ndarray::concatenate(ndarray::Axis(0), &[cur_arr.view(), in_arr.view()])
-            .map(|arr| {
-                Tile::new_padded(
-                    arr.to_shared(),
+            (
+                0, // TODO: Add cycles it took for grouping smaller tiles into larger tiles
+                ndarray::concatenate(ndarray::Axis(0), &[cur_arr.view(), in_arr.view()])
+                    .map(|arr| {
+                        Tile::new_padded(
+                            arr.to_shared(),
+                            in_data.bytes_per_elem,
+                            in_data.read_from_mu,
+                            accum_offset + in_offset,
+                        )
+                    })
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to concatenate input data and accumulator data")
+                    }),
+            )
+        }
+        None => {
+            assert_eq!(in_data.shape[1], accumulator.shape[1]);
+            let new_rows = if (in_data.shape[0] == in_offset) || (in_offset == 0) {
+                in_offset
+            } else {
+                panic!("Invalid offset for input data");
+            };
+
+            (
+                0,
+                Tile::new_blank_padded(
+                    vec![
+                        in_data.shape[0] + accumulator.shape[0],
+                        accumulator.shape[1],
+                    ],
                     in_data.bytes_per_elem,
                     in_data.read_from_mu,
-                    accum_offset + in_offset,
-                )
-            })
-            .unwrap_or_else(|_| panic!("Failed to concatenate input data and accumulator data")),
-    )
+                    accum_offset + new_rows,
+                ),
+            )
+        }
+    }
 }
