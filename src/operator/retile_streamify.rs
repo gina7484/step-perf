@@ -39,46 +39,97 @@ where
         ctx
     }
     fn retile(&mut self, data: &Tile<T>, stop_level: Option<StopType>) {
-        let arr = data.underlying.clone().unwrap();
-        let offset = data.offset;
+        match &data.underlying {
+            Some(arr) => {
+                let offset = data.offset;
 
-        let vec_iter = if self.split_row {
-            arr.rows().into_iter()
-        } else {
-            arr.columns().into_iter()
-        };
-
-        let vec_iter_len = vec_iter.len();
-        for (idx, row) in vec_iter.enumerate() {
-            let out_data = Tile::<T>::new_padded(
-                row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
-                data.bytes_per_elem,
-                data.read_from_mu,
-                if idx + 1 <= offset { 1 } else { 0 },
-            );
-
-            // check whether this is the last value and set the stop level if needed
-            let elem = if stop_level.is_some() {
-                if (self.filter_mask && idx + 1 == offset) || (idx + 1 == vec_iter_len) {
-                    Elem::ValStop(out_data, stop_level.unwrap())
+                let vec_iter = if self.split_row {
+                    arr.rows().into_iter()
                 } else {
-                    Elem::Val(out_data)
-                }
-            } else {
-                Elem::Val(out_data)
-            };
+                    arr.columns().into_iter()
+                };
 
-            self.out_stream
-                .enqueue(
-                    &self.time,
-                    ChannelElement {
-                        time: self.time.tick(),
-                        data: elem,
-                    },
-                )
-                .unwrap();
-            if self.filter_mask && idx + 1 == offset {
-                break;
+                let vec_iter_len = vec_iter.len();
+                for (idx, row) in vec_iter.enumerate() {
+                    let out_data = Tile::<T>::new_padded(
+                        row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
+                        data.bytes_per_elem,
+                        data.read_from_mu,
+                        if idx + 1 <= offset { 1 } else { 0 },
+                    );
+
+                    // check whether this is the last value and set the stop level if needed
+                    let elem = if stop_level.is_some() {
+                        if (self.filter_mask && idx + 1 == offset) || (idx + 1 == vec_iter_len) {
+                            Elem::ValStop(out_data, stop_level.unwrap())
+                        } else {
+                            Elem::Val(out_data)
+                        }
+                    } else {
+                        Elem::Val(out_data)
+                    };
+
+                    self.out_stream
+                        .enqueue(
+                            &self.time,
+                            ChannelElement {
+                                time: self.time.tick(),
+                                data: elem,
+                            },
+                        )
+                        .unwrap();
+                    if self.filter_mask && idx + 1 == offset {
+                        break;
+                    }
+                }
+            }
+            None => {
+                let offset = data.offset;
+
+                let num_tiles = if self.split_row {
+                    data.shape[0]
+                } else {
+                    data.shape[1]
+                };
+
+                let row_size = if self.split_row {
+                    data.shape[1]
+                } else {
+                    data.shape[0]
+                };
+
+                for idx in 0..num_tiles {
+                    let out_data = Tile::<T>::new_blank_padded(
+                        vec![1, row_size],
+                        data.bytes_per_elem,
+                        data.read_from_mu,
+                        if idx + 1 <= offset { 1 } else { 0 },
+                    );
+
+                    // check whether this is the last value and set the stop level if needed
+                    let elem = if stop_level.is_some() {
+                        if (self.filter_mask && idx + 1 == offset) || (idx + 1 == num_tiles) {
+                            Elem::ValStop(out_data, stop_level.unwrap())
+                        } else {
+                            Elem::Val(out_data)
+                        }
+                    } else {
+                        Elem::Val(out_data)
+                    };
+
+                    self.out_stream
+                        .enqueue(
+                            &self.time,
+                            ChannelElement {
+                                time: self.time.tick(),
+                                data: elem,
+                            },
+                        )
+                        .unwrap();
+                    if self.filter_mask && idx + 1 == offset {
+                        break;
+                    }
+                }
             }
         }
     }

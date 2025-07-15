@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 #[derive(Debug, Clone)]
 pub struct SimConfig {
     pub channel_depth: Option<usize>,
+    pub functional_sim: bool,
 }
 
 impl<'py> FromPyObject<'py> for SimConfig {
@@ -23,6 +24,19 @@ impl<'py> FromPyObject<'py> for SimConfig {
             Some(value)
         };
 
-        Ok(SimConfig { channel_depth })
+        // Retrieve the functional_sim attribute from the object
+        let functional_sim_obj = obj.getattr("functional_sim").map_err(|_| {
+            PyTypeError::new_err("Expected 'functional_sim' attribute in SimConfig object")
+        })?;
+
+        // Extract the functional_sim field
+        let functional_sim: bool = functional_sim_obj
+            .extract()
+            .map_err(|_| PyTypeError::new_err("Expected 'functional_sim' to be a boolean"))?;
+
+        Ok(SimConfig {
+            channel_depth,
+            functional_sim,
+        })
     }
 }

@@ -936,14 +936,20 @@ fn build_from_proto<'a>(
                     let tile_col = accum.tile_col as usize;
 
                     let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
-                        match accum.init_func.unwrap().init_fn.unwrap() {
-                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                                Tile::new_zero([tile_row, tile_col], accum.write_back_mu)
-                            }),
-                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                                Tile::new_empty([tile_row, tile_col], accum.write_back_mu)
-                            }),
-                            _ => todo!(),
+                        if sim_config.functional_sim {
+                            match accum.init_func.unwrap().init_fn.unwrap() {
+                                init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                    Tile::new_zero([tile_row, tile_col], accum.write_back_mu)
+                                }),
+                                init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                    Tile::new_empty([tile_row, tile_col], accum.write_back_mu)
+                                }),
+                                _ => todo!(),
+                            }
+                        } else {
+                            Arc::new(move || {
+                                Tile::new_blank(vec![tile_row, tile_col], 4, accum.write_back_mu)
+                            })
                         };
 
                     builder.add_child(Accum::<SimpleEvent, _, _>::new(
@@ -1016,11 +1022,22 @@ fn build_from_proto<'a>(
                                 let tile_col = reshape.tile_col.unwrap() as usize;
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => Tile::new_zero_padded(
-                                        [tile_row, tile_col],
-                                        reshape.write_back_mu,
-                                        0,
-                                    ),
+                                    init_func::InitFn::Zero(_zero) => {
+                                        if sim_config.functional_sim {
+                                            Tile::new_zero_padded(
+                                                [tile_row, tile_col],
+                                                reshape.write_back_mu,
+                                                0,
+                                            )
+                                        } else {
+                                            Tile::new_blank_padded(
+                                                vec![tile_row, tile_col],
+                                                4,
+                                                reshape.write_back_mu,
+                                                0,
+                                            )
+                                        }
+                                    }
                                     _ => todo!(),
                                 };
                                 builder.add_child(Reshape::new(

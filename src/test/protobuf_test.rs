@@ -54,6 +54,7 @@ mod test {
             },
             SimConfig {
                 channel_depth: Some(1024),
+                functional_sim: false,
             },
             db_name,
         );

@@ -91,7 +91,12 @@ impl<T> Tile<T> {
     }
 }
 
+// Functions to initialize tiles
 impl<T: Clone + num::Zero> Tile<T> {
+    /// Returns a zero tile (All rows are active. No padding.)
+    /// * Tile Shape: arr_shape
+    /// * Tile content: all zeros
+    /// * Offset: arr_shape[0]
     pub fn new_zero(arr_shape: [usize; 2], read_from_mu: bool) -> Self {
         Self {
             shape: arr_shape.to_vec(),
@@ -102,6 +107,10 @@ impl<T: Clone + num::Zero> Tile<T> {
         }
     }
 
+    /// Returns a zero tile specifying that this is tile added due to padding
+    /// * Tile Shape: arr_shape
+    /// * Tile content: all zeros
+    /// * Offset: offset
     pub fn new_zero_padded(arr_shape: [usize; 2], read_from_mu: bool, offset: usize) -> Self {
         Self {
             shape: arr_shape.to_vec(),
@@ -114,6 +123,9 @@ impl<T: Clone + num::Zero> Tile<T> {
 
     /// This is used for the accumulator in the retile_col or retile_row function.
     /// It contains an 0-sized dimension.
+    /// * Tile Shape: arr_shape (should contain 0-sized dimension)
+    /// * Tile content: [] (empty array)
+    /// * Offset: arr_shape[0]
     pub fn new_empty(arr_shape: [usize; 2], read_from_mu: bool) -> Self {
         Self {
             shape: arr_shape.to_vec(),
