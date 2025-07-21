@@ -5,6 +5,7 @@ use pyo3::prelude::*;
 pub struct SimConfig {
     pub channel_depth: Option<usize>,
     pub functional_sim: bool,
+    pub mock_bf16: bool,
 }
 
 impl<'py> FromPyObject<'py> for SimConfig {
@@ -34,9 +35,20 @@ impl<'py> FromPyObject<'py> for SimConfig {
             .extract()
             .map_err(|_| PyTypeError::new_err("Expected 'functional_sim' to be a boolean"))?;
 
+        // Retrieve the mock_bf16 attribute from the object
+        let mock_bf16_obj = obj.getattr("mock_bf16").map_err(|_| {
+            PyTypeError::new_err("Expected 'mock_bf16' attribute in SimConfig object")
+        })?;
+
+        // Extract the mock_bf16 field
+        let mock_bf16: bool = mock_bf16_obj
+            .extract()
+            .map_err(|_| PyTypeError::new_err("Expected 'mock_bf16' to be a boolean"))?;
+
         Ok(SimConfig {
             channel_depth,
             functional_sim,
+            mock_bf16,
         })
     }
 }

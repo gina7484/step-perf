@@ -53,8 +53,9 @@ mod test {
                 per_channel_start_up_time: 14,
             },
             SimConfig {
-                channel_depth: Some(1024),
-                functional_sim: false,
+                channel_depth: Some(16),
+                functional_sim: true,
+                mock_bf16: true,
             },
             db_name,
         );

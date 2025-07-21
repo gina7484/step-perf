@@ -271,7 +271,7 @@ mod tests {
             in_data_rcv,
             out_data_snd,
             Arc::new(accum_fn::retile_col),
-            Arc::new(move || Tile::new_empty([2, 0], read_from_mu)),
+            Arc::new(move || Tile::new_empty([2, 0], 4, read_from_mu)),
             1, // rank
             AccumConfig {
                 compute_bw: 1000, // FLOPs per cycle
@@ -364,7 +364,7 @@ mod tests {
             in_data_rcv,
             out_data_snd,
             Arc::new(accum_fn::retile_row),
-            Arc::new(move || Tile::new_empty([0, 4], read_from_mu)),
+            Arc::new(move || Tile::new_empty([0, 4], 4, read_from_mu)),
             1, // rank
             AccumConfig {
                 compute_bw: 1000, // FLOPs per cycle (Currently unused)

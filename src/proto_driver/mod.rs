@@ -121,8 +121,11 @@ fn build_from_proto<'a>(
     let channel_depth = sim_config.channel_depth;
     let mut mem_context = HBMContext::new(builder, hbm_config.clone());
 
+    // Use a regular variable instead of a const, since sim_config.mock_bf16 is not a constant
+    let f32_bytes: usize = if sim_config.mock_bf16 { 2 } else { 4 }; // we will use this to mimic bfloat16
+
     for operation in step_graph.operators {
-        println!("processing {:?}\n", operation);
+        // println!("processing {:?}\n", operation);
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
                 unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
@@ -295,7 +298,11 @@ fn build_from_proto<'a>(
                         out_stream,
                         map_fn,
                         Arc::new(move || {
-                            Tile::new_zero([tile_row, tile_col], binary_map_accum.write_back_mu)
+                            Tile::new_zero(
+                                [tile_row, tile_col],
+                                f32_bytes,
+                                binary_map_accum.write_back_mu,
+                            )
                         }),
                         binary_map_accum.rank,
                         binary_map_accum.compute_bw as u64,
@@ -324,7 +331,7 @@ fn build_from_proto<'a>(
                             off_chip_load.npy_path,
                             off_chip_load.tile_row as usize,
                             off_chip_load.tile_col as usize,
-                            4,
+                            f32_bytes,
                             0,
                             hbm_config.addr_offset,
                             off_chip_load.par_dispatch as usize,
@@ -810,7 +817,7 @@ fn build_from_proto<'a>(
                             hbm_config,
                             tile_f32,
                             tile_f32,
-                            4,
+                            f32_bytes,
                             mem_context,
                             builder,
                             channel_depth
@@ -829,7 +836,7 @@ fn build_from_proto<'a>(
                             hbm_config,
                             buff_tile_f32,
                             tile_f32,
-                            4,
+                            f32_bytes,
                             mem_context,
                             builder,
                             channel_depth
@@ -843,7 +850,7 @@ fn build_from_proto<'a>(
                             hbm_config,
                             multihot,
                             tile_f32,
-                            4,
+                            f32_bytes,
                             mem_context,
                             builder,
                             channel_depth
@@ -935,22 +942,31 @@ fn build_from_proto<'a>(
                     let tile_row = accum.tile_row as usize;
                     let tile_col = accum.tile_col as usize;
 
-                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
-                        if sim_config.functional_sim {
-                            match accum.init_func.unwrap().init_fn.unwrap() {
-                                init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                                    Tile::new_zero([tile_row, tile_col], accum.write_back_mu)
-                                }),
-                                init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                                    Tile::new_empty([tile_row, tile_col], accum.write_back_mu)
-                                }),
-                                _ => todo!(),
-                            }
-                        } else {
-                            Arc::new(move || {
-                                Tile::new_blank(vec![tile_row, tile_col], 4, accum.write_back_mu)
-                            })
-                        };
+                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = if sim_config
+                        .functional_sim
+                    {
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                Tile::new_zero([tile_row, tile_col], f32_bytes, accum.write_back_mu)
+                            }),
+                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                Tile::new_empty(
+                                    [tile_row, tile_col],
+                                    f32_bytes,
+                                    accum.write_back_mu,
+                                )
+                            }),
+                            _ => todo!(),
+                        }
+                    } else {
+                        Arc::new(move || {
+                            Tile::new_blank(
+                                vec![tile_row, tile_col],
+                                f32_bytes,
+                                accum.write_back_mu,
+                            )
+                        })
+                    };
 
                     builder.add_child(Accum::<SimpleEvent, _, _>::new(
                         rcv,
@@ -1026,13 +1042,14 @@ fn build_from_proto<'a>(
                                         if sim_config.functional_sim {
                                             Tile::new_zero_padded(
                                                 [tile_row, tile_col],
+                                                f32_bytes,
                                                 reshape.write_back_mu,
                                                 0,
                                             )
                                         } else {
                                             Tile::new_blank_padded(
                                                 vec![tile_row, tile_col],
-                                                4,
+                                                f32_bytes,
                                                 reshape.write_back_mu,
                                                 0,
                                             )
@@ -1152,7 +1169,7 @@ pub fn parse_proto<'a>(
         false => Default::default(),
     };
 
-    println!("{}", initialized.to_dot_string());
+    // println!("{}", initialized.to_dot_string());
 
     let start = Instant::now();
     let executed = initialized.run(run_options);

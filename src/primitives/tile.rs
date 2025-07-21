@@ -97,10 +97,10 @@ impl<T: Clone + num::Zero> Tile<T> {
     /// * Tile Shape: arr_shape
     /// * Tile content: all zeros
     /// * Offset: arr_shape[0]
-    pub fn new_zero(arr_shape: [usize; 2], read_from_mu: bool) -> Self {
+    pub fn new_zero(arr_shape: [usize; 2], bytes_per_elem: usize, read_from_mu: bool) -> Self {
         Self {
             shape: arr_shape.to_vec(),
-            bytes_per_elem: std::mem::size_of::<T>(),
+            bytes_per_elem: bytes_per_elem,
             read_from_mu: read_from_mu,
             underlying: Some(ndarray::ArcArray2::zeros(arr_shape)),
             offset: arr_shape[0],
@@ -111,10 +111,15 @@ impl<T: Clone + num::Zero> Tile<T> {
     /// * Tile Shape: arr_shape
     /// * Tile content: all zeros
     /// * Offset: offset
-    pub fn new_zero_padded(arr_shape: [usize; 2], read_from_mu: bool, offset: usize) -> Self {
+    pub fn new_zero_padded(
+        arr_shape: [usize; 2],
+        bytes_per_elem: usize,
+        read_from_mu: bool,
+        offset: usize,
+    ) -> Self {
         Self {
             shape: arr_shape.to_vec(),
-            bytes_per_elem: std::mem::size_of::<T>(),
+            bytes_per_elem: bytes_per_elem,
             read_from_mu: read_from_mu,
             underlying: Some(ndarray::ArcArray2::zeros(arr_shape)),
             offset: offset,
@@ -126,10 +131,10 @@ impl<T: Clone + num::Zero> Tile<T> {
     /// * Tile Shape: arr_shape (should contain 0-sized dimension)
     /// * Tile content: [] (empty array)
     /// * Offset: arr_shape[0]
-    pub fn new_empty(arr_shape: [usize; 2], read_from_mu: bool) -> Self {
+    pub fn new_empty(arr_shape: [usize; 2], bytes_per_elem: usize, read_from_mu: bool) -> Self {
         Self {
             shape: arr_shape.to_vec(),
-            bytes_per_elem: std::mem::size_of::<T>(),
+            bytes_per_elem: bytes_per_elem,
             read_from_mu: read_from_mu,
             underlying: Some(
                 Array2::from_shape_vec((arr_shape[0], arr_shape[1]), vec![])
