@@ -209,6 +209,18 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::DynMatmul(matmul) => {
+                            let weight_transposed = matmul.weight_transposed;
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::matmul(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    weight_transposed,
+                                )
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::Mul(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::mul(tile1, tile2, comp_bw, write_back_mu)
@@ -275,6 +287,19 @@ fn build_from_proto<'a>(
                             let weight_transposed = matmul.weight_transposed;
                             Arc::new(move |tile1, tile2, accumulator, comp_bw, write_back_mu| {
                                 functions::map_accum_fn::matmul(
+                                    tile1,
+                                    tile2,
+                                    accumulator,
+                                    comp_bw,
+                                    write_back_mu,
+                                    weight_transposed,
+                                )
+                            })
+                        }
+                        map_accum_func::MapAccumFn::DynMatmul(matmul) => {
+                            let weight_transposed = matmul.weight_transposed;
+                            Arc::new(move |tile1, tile2, accumulator, comp_bw, write_back_mu| {
+                                functions::map_accum_fn::dyn_matmul(
                                     tile1,
                                     tile2,
                                     accumulator,

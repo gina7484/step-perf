@@ -118,15 +118,14 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                         }
                     },
                     Err(_) => {
-                        // use this as if we got a done token
-                        assert!(
-                            self.pad_val.is_some(),
-                            "When splitting the innermost dimension, \
-                            we pad if the dimension is not exactly divisible by the chunk size. \
-                            Therefore, the pad_val must be provided."
-                        );
-
                         if 0 < counter && counter < self.chunk_size {
+                            // use this as if we got a done token
+                            assert!(
+                                self.pad_val.is_some(),
+                                "When splitting the innermost dimension, \
+                                we pad if the dimension is not exactly divisible by the chunk size. \
+                                Therefore, the pad_val must be provided."
+                            );
                             // pad so that the dimension is divisible by the chunk size
                             for i in 0..self.chunk_size - counter {
                                 let padded_val = if i == self.chunk_size - counter - 1 {
