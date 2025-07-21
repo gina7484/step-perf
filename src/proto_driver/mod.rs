@@ -1088,6 +1088,8 @@ fn build_from_proto<'a>(
                                     reshape.split_dim as usize,
                                     reshape.chunk_size as usize,
                                     Some(pad_val),
+                                    reshape.input_stream_rank,
+                                    reshape.add_outer_dim,
                                     operation.id,
                                 ));
                             }
@@ -1098,6 +1100,8 @@ fn build_from_proto<'a>(
                                     reshape.split_dim as usize,
                                     reshape.chunk_size as usize,
                                     None,
+                                    reshape.input_stream_rank,
+                                    reshape.add_outer_dim,
                                     operation.id,
                                 ));
                             }
