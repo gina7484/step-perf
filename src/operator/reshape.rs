@@ -56,7 +56,15 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
 
                             let output_elem = if counter == self.chunk_size {
                                 counter = 0;
-                                Elem::ValStop(x.clone(), 1)
+                                if self.add_outer_dim {
+                                    let stop_level = match self.in_stream.peek_next(&self.time) {
+                                        Ok(ChannelElement { time: _, data: _ }) => 1,
+                                        Err(_) => 2,
+                                    };
+                                    Elem::ValStop(x.clone(), stop_level)
+                                } else {
+                                    Elem::ValStop(x.clone(), 1)
+                                }
                             } else {
                                 Elem::Val(x.clone())
                             };
@@ -398,6 +406,82 @@ mod tests {
             val_tile_pad.clone(),
             val_tile_pad.clone(),
             val_stop_tile_pad.clone(),
+        ];
+        ctx.add_child(ApproxCheckerContext::new(
+            move || output_tile_vec.into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+        // ctx.add_child(PrinterContext::new(out_rcv));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn reshape_0d_with_pad_0d_stream_add_outer_dim_divisible() {
+        // (9) => (1, 3, 3)
+        // the last three vector tiles will be padded values
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 2;
+        const READ_FROM_MU: bool = true;
+
+        let tile_shape: Vec<usize> = vec![1, 4];
+
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        let in_arr =
+            vec![Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU); 9]
+                .into_iter()
+                .collect::<Vec<_>>();
+        ctx.add_child(GeneratorContext::new(
+            move || in_arr.into_iter().map(|x| Elem::Val(x.clone())).into_iter(),
+            in_snd,
+        ));
+
+        ctx.add_child(Reshape::new(
+            in_rcv,
+            out_snd,
+            0,
+            3,
+            Some(Tile::new_blank_padded(
+                tile_shape.clone(),
+                BYTES_PER_ELEM,
+                READ_FROM_MU,
+                0,
+            )),
+            0,
+            true,
+            0,
+        ));
+
+        let val_tile = Elem::Val(Tile::<VT>::new_blank(
+            tile_shape.clone(),
+            BYTES_PER_ELEM,
+            READ_FROM_MU,
+        ));
+        let val_stop_tile = Elem::ValStop(
+            Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
+            1,
+        );
+        let val_stop_tile_last = Elem::ValStop(
+            Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
+            2,
+        );
+        let output_tile_vec = vec![
+            val_tile.clone(),
+            val_tile.clone(),
+            val_stop_tile.clone(),
+            val_tile.clone(),
+            val_tile.clone(),
+            val_stop_tile.clone(),
+            val_tile.clone(),
+            val_tile.clone(),
+            val_stop_tile_last.clone(),
         ];
         ctx.add_child(ApproxCheckerContext::new(
             move || output_tile_vec.into_iter(),
