@@ -1,9 +1,10 @@
 pub mod dyn_offchip_load;
 pub mod offchip_load;
 pub mod offchip_store;
+pub mod random_offchip_load;
 
 /// PMU bandwidth (bytes/cycle)
-pub static PMU_BW: u64 = 64;
+pub static PMU_BW: u64 = 256;
 
 use crate::primitives::{elem::StopType, tile::Tile};
 use dam::types::DAMType;

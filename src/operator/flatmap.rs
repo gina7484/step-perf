@@ -1,6 +1,7 @@
-use std::{marker::PhantomData, sync::Arc};
+// This is an operator that will be abstracted as a FlatMap operator
 
 use crate::primitives::elem::{Elem, StopType};
+use crate::primitives::select::SelectAdapter;
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
 use dam::types::DAMType;
@@ -161,8 +162,92 @@ where
     }
 }
 
+#[context_macro]
+pub struct ExpertAddrGen<SEL: Clone + SelectAdapter> {
+    in_stream: Receiver<Elem<SEL>>, // Index of the expert
+    out_stream: Sender<Elem<u64>>,
+    num_tile_per_expert: u64,
+    expert_addr_base: u64,
+    id: u32,
+}
+
+impl<SEL: Clone + SelectAdapter> ExpertAddrGen<SEL>
+where
+    SEL: DAMType,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<SEL>>,
+        out_stream: Sender<Elem<u64>>,
+        num_tile_per_expert: u64,
+        expert_addr_base: u64,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            num_tile_per_expert,
+            expert_addr_base,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+}
+
+impl<SEL: Clone + SelectAdapter> Context for ExpertAddrGen<SEL>
+where
+    SEL: DAMType,
+{
+    fn run(&mut self) {
+        loop {
+            match self.in_stream.dequeue(&self.time) {
+                Ok(ChannelElement {
+                    time: _,
+                    data: data_enum,
+                }) => match data_enum {
+                    Elem::Val(data) => {
+                        let expert_idx_list = data.to_sel_vec();
+                        assert_eq!(expert_idx_list.len(), 1);
+
+                        let expert_addr: u64 = self.expert_addr_base
+                            + expert_idx_list[0] as u64 * self.num_tile_per_expert;
+
+                        for i in 0..self.num_tile_per_expert {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::ValStop(
+                                            expert_addr + i,
+                                            if i < self.num_tile_per_expert - 1 {
+                                                1
+                                            } else {
+                                                2
+                                            },
+                                        ),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    }
+                    Elem::ValStop(_data, _s) => {
+                        panic!("This function is designed to only be used for 0d input streams");
+                    }
+                },
+                Err(_) => {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod retile_tests {
     use super::RetileStreamify;
     use crate::{
         functions::map_fn,
@@ -437,6 +522,100 @@ mod tests {
             out_data_rcv,
             tolerance_fn,
         ));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+}
+
+#[cfg(test)]
+mod expert_addr_gen_tests {
+    use super::ExpertAddrGen;
+    use crate::{
+        primitives::{elem::Elem, select::MultiHotN, tile::Tile},
+        utils::events::SimpleEvent,
+    };
+    use dam::simulation::ProgramBuilder;
+    use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext};
+
+    fn tolerance_fn<T: PartialEq>(a: &Elem<T>, b: &Elem<T>) -> bool {
+        match (a, b) {
+            (Elem::Val(a_tile), Elem::Val(b_tile)) => a_tile == b_tile,
+            (Elem::ValStop(a_tile, a_level), Elem::ValStop(b_tile, b_level)) => {
+                a_tile == b_tile && a_level == b_level
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn test_expert_addr_gen() {
+        let num_tile_per_expert = 3;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_data_snd, in_data_rcv) = ctx.unbounded();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(MultiHotN::new(
+                        vec![false, false, true, false, false, false, false, false], // 2
+                        false,
+                    )),
+                    Elem::Val(MultiHotN::new(
+                        vec![false, true, false, false, false, false, false, false], // 1
+                        false,
+                    )),
+                    Elem::Val(MultiHotN::new(
+                        vec![false, false, false, true, false, false, false, false], // 3
+                        false,
+                    )),
+                    Elem::Val(MultiHotN::new(
+                        vec![false, false, false, false, false, false, false, true], // 7
+                        false,
+                    )),
+                ]
+                .into_iter()
+            },
+            in_data_snd,
+        ));
+
+        ctx.add_child(ExpertAddrGen::<_>::new(
+            in_data_rcv,
+            out_data_snd,
+            num_tile_per_expert,
+            0,
+            0,
+        ));
+
+        ctx.add_child(ApproxCheckerContext::new(
+            || {
+                vec![vec![0, 1, 2]; 4]
+                    .into_iter()
+                    .zip(vec![2, 1, 3, 7].into_iter())
+                    .map(|(vec_addr, expert_i)| {
+                        vec_addr
+                            .iter()
+                            .map(|addr| {
+                                Elem::ValStop(
+                                    expert_i * num_tile_per_expert + *addr as u64,
+                                    if *addr < num_tile_per_expert - 1 {
+                                        1
+                                    } else {
+                                        2
+                                    },
+                                )
+                            })
+                            .collect::<Vec<Elem<u64>>>()
+                    })
+                    .flatten()
+            },
+            out_data_rcv,
+            tolerance_fn,
+        ));
+
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());

@@ -3,6 +3,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
+use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::operator::eager_merge::EagerMerge;
 use std::time::Instant;
 
@@ -10,6 +11,7 @@ use crate::operator::accum::{Accum, AccumConfig};
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
+use crate::operator::flatmap::{ExpertAddrGen, RetileStreamify};
 use crate::operator::flatten::Flatten;
 use crate::operator::map::{UnaryMap, UnaryMapConfig};
 use crate::operator::map_accum::BinaryMapAccum;
@@ -17,7 +19,6 @@ use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::Promote;
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::Reshape;
-use crate::operator::retile_streamify::RetileStreamify;
 use crate::operator::streamify::Streamify;
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
@@ -362,6 +363,55 @@ fn build_from_proto<'a>(
                             off_chip_load.par_dispatch as usize,
                             addr_snd,
                             resp_rcv,
+                            on_chip_snd,
+                            operation.id,
+                        ));
+
+                        mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    _ => todo!(),
+                }
+            }
+            OpType::RandomOffChipLoad(random_off_chip_load) => {
+                match random_off_chip_load
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let raddr = channel_map_collection.u64.get_receiver(
+                            random_off_chip_load.raddr_id,
+                            random_off_chip_load.raddr_stream_idx,
+                            builder,
+                            channel_depth,
+                        );
+                        let on_chip_snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            channel_depth,
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(RandomOffChipLoad::<SimpleEvent, _>::new(
+                            to_usize_vec(random_off_chip_load.tensor_shape_tiled),
+                            random_off_chip_load.npy_path,
+                            random_off_chip_load.tile_row as usize,
+                            random_off_chip_load.tile_col as usize,
+                            f32_bytes,
+                            0,
+                            hbm_config.addr_offset,
+                            random_off_chip_load.par_dispatch as usize,
+                            addr_snd,
+                            resp_rcv,
+                            raddr,
                             on_chip_snd,
                             operation.id,
                         ));
@@ -1039,6 +1089,39 @@ fn build_from_proto<'a>(
                         ));
                     }
                     _ => panic!("Unsupported data type for RetileStreamify operation"),
+                }
+            }
+            OpType::ExpertAddrGen(expert_addr_gen) => {
+                match expert_addr_gen
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            expert_addr_gen.input_id,
+                            expert_addr_gen.input_stream_idx,
+                            builder,
+                            channel_depth,
+                        );
+                        let snd = channel_map_collection.u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            channel_depth,
+                        );
+                        builder.add_child(ExpertAddrGen::<_>::new(
+                            rcv,
+                            snd,
+                            expert_addr_gen.num_tile_per_expert as u64,
+                            expert_addr_gen.expert_addr_base as u64,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for ExpertAddrGen operation"),
                 }
             }
             OpType::Reshape(reshape) => {
