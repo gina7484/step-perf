@@ -956,6 +956,26 @@ fn build_from_proto<'a>(
                             flatten.max_rank,
                         ));
                     }
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            flatten.input_id,
+                            flatten.stream_idx,
+                            builder,
+                            channel_depth,
+                        );
+                        let snd = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            channel_depth,
+                        );
+                        builder.add_child(Flatten::new(
+                            rcv,
+                            snd,
+                            flatten.min_rank,
+                            flatten.max_rank,
+                        ));
+                    }
                     _ => panic!("Unsupported data type for Flatten operation"),
                 }
             }
