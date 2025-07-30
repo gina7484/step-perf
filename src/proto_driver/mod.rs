@@ -5,6 +5,7 @@ use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::operator::eager_merge::EagerMerge;
+use crate::operator::parallelize::Parallelize;
 use std::time::Instant;
 
 use crate::operator::accum::{Accum, AccumConfig};
@@ -126,7 +127,11 @@ fn build_from_proto<'a>(
     let f32_bytes: usize = if sim_config.mock_bf16 { 2 } else { 4 }; // we will use this to mimic bfloat16
 
     for operation in step_graph.operators {
+        // if operation.id == 336 || operation.id == 272 || operation.id == 721 {
+        //     println!("processing {:?}\n", operation);
+        // }
         // println!("processing {:?}\n", operation);
+
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
                 unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
@@ -523,6 +528,16 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
+                    Type::ScalarU64(_) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            u64,
+                            builder,
+                            channel_depth
+                        );
+                    }
                     _ => panic!("Unsupported data type for Broadcast operation"),
                 }
             }
@@ -633,54 +648,190 @@ fn build_from_proto<'a>(
                 }
             }
             OpType::FlatReassemble(reassemble) => {
-                let mut rcv_list = vec![];
-                for (rcv_id, stream_idx) in reassemble
-                    .input_id_list
-                    .into_iter()
-                    .zip(reassemble.input_stream_idx_list.into_iter())
-                {
-                    let rcv = channel_map_collection.tile_f32.get_receiver(
-                        rcv_id,
-                        if stream_idx < 0 {
-                            None
-                        } else {
-                            Some(stream_idx as u32)
-                        },
-                        builder,
-                        channel_depth,
-                    );
-                    rcv_list.push(rcv);
-                }
-
-                let snd = channel_map_collection.tile_f32.get_sender(
-                    operation.id,
-                    None,
-                    builder,
-                    channel_depth,
-                );
                 match reassemble
-                    .control_dtype
+                    .input_dtype
                     .clone()
                     .unwrap()
                     .r#type
                     .clone()
                     .unwrap()
                 {
-                    Type::MultiHot(multi_hot) => {
-                        let control_rcv = channel_map_collection.multihot.get_receiver(
-                            reassemble.control_id,
-                            reassemble.control_stream_idx,
+                    Type::F32(f32) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_f32.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                channel_depth,
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
                             builder,
                             channel_depth,
                         );
-                        builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
-                            rcv_list,
-                            control_rcv,
-                            snd,
-                            reassemble.reassemble_rank,
-                            FlatReassembleConfig {
-                                switch_cycles: to_u64_vec(reassemble.switch_cycles),
-                                write_back_mu: reassemble.write_back_mu,
+                        match reassemble
+                            .control_dtype
+                            .clone()
+                            .unwrap()
+                            .r#type
+                            .clone()
+                            .unwrap()
+                        {
+                            Type::MultiHot(multi_hot) => {
+                                let control_rcv = channel_map_collection.multihot.get_receiver(
+                                    reassemble.control_id,
+                                    reassemble.control_stream_idx,
+                                    builder,
+                                    channel_depth,
+                                );
+                                builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
+                                    rcv_list,
+                                    control_rcv,
+                                    snd,
+                                    reassemble.reassemble_rank,
+                                    FlatReassembleConfig {
+                                        switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                        write_back_mu: reassemble.write_back_mu,
+                                    },
+                                    operation.id,
+                                ))
+                            }
+                            _ => panic!("Unsupported data type"),
+                        }
+                    }
+                    Type::MultiHot(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.multihot.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                channel_depth,
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            channel_depth,
+                        );
+                        match reassemble
+                            .control_dtype
+                            .clone()
+                            .unwrap()
+                            .r#type
+                            .clone()
+                            .unwrap()
+                        {
+                            Type::MultiHot(multi_hot) => {
+                                let control_rcv = channel_map_collection.multihot.get_receiver(
+                                    reassemble.control_id,
+                                    reassemble.control_stream_idx,
+                                    builder,
+                                    channel_depth,
+                                );
+                                builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
+                                    rcv_list,
+                                    control_rcv,
+                                    snd,
+                                    reassemble.reassemble_rank,
+                                    FlatReassembleConfig {
+                                        switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                        write_back_mu: reassemble.write_back_mu,
+                                    },
+                                    operation.id,
+                                ))
+                            }
+                            _ => panic!("Unsupported data type"),
+                        }
+                    }
+                    _ => panic!("Unsupported data type"),
+                }
+            }
+            OpType::Parallelize(parallelize) => {
+                match parallelize
+                    .input_dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(f32) => {
+                        let input_rcv = channel_map_collection.tile_f32.get_receiver(
+                            parallelize.input_id,
+                            parallelize.input_stream_idx,
+                            builder,
+                            channel_depth,
+                        );
+                        let mut snd_list = vec![];
+                        for i in 0..parallelize.num_consumers {
+                            snd_list.push(channel_map_collection.tile_f32.get_sender(
+                                operation.id,
+                                Some(i),
+                                builder,
+                                channel_depth,
+                            ));
+                        }
+                        builder.add_child(Parallelize::<SimpleEvent, _>::new(
+                            input_rcv,
+                            snd_list,
+                            parallelize.parallelize_rank,
+                            parallelize.per_region_input as usize,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(parallelize.switch_cycles),
+                                write_back_mu: parallelize.write_back_mu,
+                            },
+                            operation.id,
+                        ))
+                    }
+                    Type::MultiHot(_) => {
+                        let input_rcv = channel_map_collection.multihot.get_receiver(
+                            parallelize.input_id,
+                            parallelize.input_stream_idx,
+                            builder,
+                            channel_depth,
+                        );
+                        let mut snd_list = vec![];
+                        for i in 0..parallelize.num_consumers {
+                            snd_list.push(channel_map_collection.multihot.get_sender(
+                                operation.id,
+                                Some(i),
+                                builder,
+                                channel_depth,
+                            ));
+                        }
+                        builder.add_child(Parallelize::<SimpleEvent, _>::new(
+                            input_rcv,
+                            snd_list,
+                            parallelize.parallelize_rank,
+                            parallelize.per_region_input as usize,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(parallelize.switch_cycles),
+                                write_back_mu: parallelize.write_back_mu,
                             },
                             operation.id,
                         ))

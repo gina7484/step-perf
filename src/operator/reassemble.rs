@@ -15,9 +15,9 @@ pub struct FlatReassembleConfig {
 
 #[context_macro]
 pub struct FlatReassemble<E, A: DAMType, SELT: DAMType> {
-    in_streams: Vec<Receiver<Elem<Tile<A>>>>,
+    in_streams: Vec<Receiver<Elem<A>>>,
     sel_stream: Receiver<Elem<SELT>>,
-    out_stream: Sender<Elem<Tile<A>>>,
+    out_stream: Sender<Elem<A>>,
     reassemble_rank: StopType,
     config: FlatReassembleConfig,
     id: u32,
@@ -26,17 +26,17 @@ pub struct FlatReassemble<E, A: DAMType, SELT: DAMType> {
 
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        A: DAMType,
+        A: DAMType + Bufferizable,
         SELT: DAMType + SelectAdapter + Bufferizable,
     > FlatReassemble<E, A, SELT>
 where
-    Elem<Tile<A>>: DAMType,
+    Elem<A>: DAMType,
     Elem<SELT>: DAMType,
 {
     pub fn new(
-        in_streams: Vec<Receiver<Elem<Tile<A>>>>,
+        in_streams: Vec<Receiver<Elem<A>>>,
         sel_stream: Receiver<Elem<SELT>>,
-        out_stream: Sender<Elem<Tile<A>>>,
+        out_stream: Sender<Elem<A>>,
         reassemble_rank: StopType,
         config: FlatReassembleConfig,
         id: u32,
@@ -72,17 +72,14 @@ where
         self.time.advance((data_arrive_time + load_cycle).into());
     }
 
-    fn handle_memory_writeback(&mut self, x: &Tile<A>) {
+    fn handle_memory_writeback(&mut self, x: &A) {
         if self.config.write_back_mu {
             self.time
                 .incr_cycles(div_ceil(x.size_in_bytes() as u64, PMU_BW));
         }
     }
 
-    fn peek_all_streams(
-        &mut self,
-        select_vec: &[usize],
-    ) -> Vec<Option<ChannelElement<Elem<Tile<A>>>>> {
+    fn peek_all_streams(&mut self, select_vec: &[usize]) -> Vec<Option<ChannelElement<Elem<A>>>> {
         let mut peeked = vec![false; select_vec.len()];
         let mut num_peeked = 0;
         let mut peek_results = vec![None; select_vec.len()];
@@ -111,7 +108,7 @@ where
         peek_results
     }
 
-    fn get_arrive_times(&self, peek_results: &[Option<ChannelElement<Elem<Tile<A>>>>]) -> Vec<u64> {
+    fn get_arrive_times(&self, peek_results: &[Option<ChannelElement<Elem<A>>>]) -> Vec<u64> {
         let mut data_arrive_times = vec![];
         peek_results.iter().for_each(|elem| {
             if let Some(ChannelElement { time: arrive, .. }) = elem {
@@ -173,7 +170,7 @@ where
                         match &val_data {
                             Elem::Val(x) => {
                                 self.handle_memory_writeback(x);
-                                let updated_x: Tile<A> =
+                                let updated_x: A =
                                     x.clone_with_updated_read_from_mu(self.config.write_back_mu);
                                 let data = if self.reassemble_rank == 0 {
                                     if is_last_selected {
@@ -196,7 +193,7 @@ where
                             }
                             Elem::ValStop(x, level) => {
                                 self.handle_memory_writeback(x);
-                                let updated_x: Tile<A> =
+                                let updated_x: A =
                                     x.clone_with_updated_read_from_mu(self.config.write_back_mu);
                                 let data = if self.reassemble_rank == 0 {
                                     if is_last_selected {
@@ -273,11 +270,11 @@ where
 
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        A: DAMType,
+        A: DAMType + Bufferizable,
         SELT: DAMType + SelectAdapter + Bufferizable,
     > Context for FlatReassemble<E, A, SELT>
 where
-    Elem<Tile<A>>: DAMType,
+    Elem<A>: DAMType,
     Elem<SELT>: DAMType,
 {
     fn run(&mut self) {

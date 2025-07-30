@@ -1,4 +1,4 @@
-use std::{collections::HashMap, marker::PhantomData};
+use std::{collections::HashMap, fmt, marker::PhantomData};
 
 use crate::primitives::{buffer::Buffer, elem::Elem, select::MultiHotN, tile::Tile};
 use dam::{
@@ -13,6 +13,16 @@ pub enum ChanType<T: DAMType> {
     Sender(Sender<Elem<T>>),
 }
 
+impl<T: DAMType> fmt::Debug for ChanType<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChanType::Receiver(_) => write!(f, "Rcv"),
+            ChanType::Sender(_) => write!(f, "Snd"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ChannelMapEntry<T: DAMType> {
     Single(ChanType<T>),
     Broadcast(HashMap<u32, ChanType<T>>),
@@ -89,6 +99,10 @@ where
         builder: &mut ProgramBuilder<'a>,
         capacity: Option<usize>,
     ) -> Receiver<Elem<T>> {
+        // if id == 272 {
+        //     println!("get_sender: {:?}", idx);
+        //     println!("{:?}", self.map.as_ref().unwrap().get(&id));
+        // }
         match &mut self.map {
             Some(chan_map) => match idx {
                 Some(stream_idx) => match chan_map.get_mut(&id) {
@@ -186,7 +200,7 @@ where
                             match capacity {
                                 Some(cap) => {
                                     let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
-                                    // inspect_receiver(&rcv, 141, id, idx, "L150");
+                                    // inspect_receiver(&rcv, 472, id, idx, "L189");
                                     x.insert(stream_idx, ChanType::Receiver(rcv));
                                     snd
                                 }
@@ -205,7 +219,7 @@ where
                         match capacity {
                             Some(cap) => {
                                 let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
-                                // inspect_receiver(&rcv, 141, id, idx, "L163");
+                                // inspect_receiver(&rcv, 472, id, idx, "L208");
                                 let mut broadcast_map = HashMap::new();
                                 broadcast_map.insert(stream_idx, ChanType::Receiver(rcv));
                                 chan_map.insert(id, ChannelMapEntry::Broadcast(broadcast_map));
@@ -231,7 +245,7 @@ where
                         match capacity {
                             Some(cap) => {
                                 let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
-                                // inspect_receiver(&rcv, 141, id, idx, "L186");
+                                // inspect_receiver(&rcv, 498, id, idx, "L1234");
                                 chan_map
                                     .insert(id, ChannelMapEntry::Single(ChanType::Receiver(rcv)));
                                 snd

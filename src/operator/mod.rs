@@ -8,6 +8,7 @@ pub mod dynstreamify;
 pub mod eager_merge;
 pub mod flatmap;
 pub mod flatten;
+pub mod parallelize;
 pub mod partition;
 pub mod promote;
 pub mod reassemble;
