@@ -6,6 +6,7 @@ use crate::memory::dyn_offchip_load::DynOffChipLoad;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::parallelize::Parallelize;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::operator::accum::{Accum, AccumConfig};
@@ -113,6 +114,18 @@ macro_rules! make_dyn_offchip_load {
     };
 }
 
+fn get_chan_depth(
+    custom_depth_chan: &HashMap<u32, usize>,
+    id: u32,
+    base_depth: Option<usize>,
+) -> Option<usize> {
+    if custom_depth_chan.contains_key(&id) {
+        Some(custom_depth_chan[&id])
+    } else {
+        base_depth
+    }
+}
+
 fn build_from_proto<'a>(
     step_graph: ProgramGraph,
     channel_map_collection: &mut ChannelMapCollection<'a>,
@@ -142,13 +155,13 @@ fn build_from_proto<'a>(
                         unarymap.input_id,
                         unarymap.stream_idx,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
                     );
                     let snd = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
@@ -186,19 +199,27 @@ fn build_from_proto<'a>(
                         binary_map.input_id1,
                         binary_map.stream_idx1,
                         builder,
-                        channel_depth,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
                     );
                     let rcv2 = channel_map_collection.tile_f32.get_receiver(
                         binary_map.input_id2,
                         binary_map.stream_idx2,
                         builder,
-                        channel_depth,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
                     );
                     let snd = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
@@ -270,19 +291,27 @@ fn build_from_proto<'a>(
                         binary_map_accum.input_id1,
                         binary_map_accum.stream_idx1,
                         builder,
-                        channel_depth,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map_accum.input_id1,
+                            channel_depth,
+                        ),
                     );
                     let in2_stream = channel_map_collection.tile_f32.get_receiver(
                         binary_map_accum.input_id2,
                         binary_map_accum.stream_idx2,
                         builder,
-                        channel_depth,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map_accum.input_id2,
+                            channel_depth,
+                        ),
                     );
                     let out_stream = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>)
@@ -350,7 +379,7 @@ fn build_from_proto<'a>(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
@@ -394,13 +423,17 @@ fn build_from_proto<'a>(
                             random_off_chip_load.raddr_id,
                             random_off_chip_load.raddr_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                random_off_chip_load.raddr_id,
+                                channel_depth,
+                            ),
                         );
                         let on_chip_snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
@@ -443,7 +476,11 @@ fn build_from_proto<'a>(
                             off_chip_store.input_id,
                             off_chip_store.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                off_chip_store.input_id,
+                                channel_depth,
+                            ),
                         );
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
@@ -477,13 +514,17 @@ fn build_from_proto<'a>(
                             repeat_static.input_id,
                             repeat_static.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_static.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(RepeatStatic::<_>::new(
                             rcv,
@@ -555,7 +596,11 @@ fn build_from_proto<'a>(
                             flat_partition.input_id,
                             flat_partition.input_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flat_partition.input_id,
+                                channel_depth,
+                            ),
                         );
                         let mut snd_list = vec![];
                         for i in 0..flat_partition.num_consumers {
@@ -563,7 +608,11 @@ fn build_from_proto<'a>(
                                 operation.id,
                                 Some(i),
                                 builder,
-                                channel_depth,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
                             ));
                         }
 
@@ -602,7 +651,11 @@ fn build_from_proto<'a>(
                             flat_partition.input_id,
                             flat_partition.input_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flat_partition.input_id,
+                                channel_depth,
+                            ),
                         );
                         let mut snd_list = vec![];
                         for i in 0..flat_partition.num_consumers {
@@ -610,7 +663,11 @@ fn build_from_proto<'a>(
                                 operation.id,
                                 Some(i),
                                 builder,
-                                channel_depth,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
                             ));
                         }
 
@@ -671,7 +728,7 @@ fn build_from_proto<'a>(
                                     Some(stream_idx as u32)
                                 },
                                 builder,
-                                channel_depth,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
                             );
                             rcv_list.push(rcv);
                         }
@@ -680,7 +737,7 @@ fn build_from_proto<'a>(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         match reassemble
                             .control_dtype
@@ -695,7 +752,11 @@ fn build_from_proto<'a>(
                                     reassemble.control_id,
                                     reassemble.control_stream_idx,
                                     builder,
-                                    channel_depth,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        reassemble.control_id,
+                                        channel_depth,
+                                    ),
                                 );
                                 builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
                                     rcv_list,
@@ -727,7 +788,7 @@ fn build_from_proto<'a>(
                                     Some(stream_idx as u32)
                                 },
                                 builder,
-                                channel_depth,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
                             );
                             rcv_list.push(rcv);
                         }
@@ -736,7 +797,7 @@ fn build_from_proto<'a>(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         match reassemble
                             .control_dtype
@@ -751,7 +812,11 @@ fn build_from_proto<'a>(
                                     reassemble.control_id,
                                     reassemble.control_stream_idx,
                                     builder,
-                                    channel_depth,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        reassemble.control_id,
+                                        channel_depth,
+                                    ),
                                 );
                                 builder.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
                                     rcv_list,
@@ -785,7 +850,11 @@ fn build_from_proto<'a>(
                             parallelize.input_id,
                             parallelize.input_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                parallelize.input_id,
+                                channel_depth,
+                            ),
                         );
                         let mut snd_list = vec![];
                         for i in 0..parallelize.num_consumers {
@@ -793,7 +862,11 @@ fn build_from_proto<'a>(
                                 operation.id,
                                 Some(i),
                                 builder,
-                                channel_depth,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
                             ));
                         }
                         builder.add_child(Parallelize::<SimpleEvent, _>::new(
@@ -813,7 +886,11 @@ fn build_from_proto<'a>(
                             parallelize.input_id,
                             parallelize.input_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                parallelize.input_id,
+                                channel_depth,
+                            ),
                         );
                         let mut snd_list = vec![];
                         for i in 0..parallelize.num_consumers {
@@ -821,7 +898,11 @@ fn build_from_proto<'a>(
                                 operation.id,
                                 Some(i),
                                 builder,
-                                channel_depth,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
                             ));
                         }
                         builder.add_child(Parallelize::<SimpleEvent, _>::new(
@@ -846,13 +927,17 @@ fn build_from_proto<'a>(
                             promote.input_id,
                             promote.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                promote.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
                     }
@@ -926,13 +1011,17 @@ fn build_from_proto<'a>(
                             bufferize.input_id,
                             bufferize.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                bufferize.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.buff_tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Bufferize::<SimpleEvent, _>::new(
                             rcv,
@@ -951,13 +1040,17 @@ fn build_from_proto<'a>(
                             streamify.input_id,
                             streamify.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                streamify.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Streamify::<SimpleEvent, _>::new(
                             to_usize_vec(streamify.repeat_factor),
@@ -992,19 +1085,27 @@ fn build_from_proto<'a>(
                             dyn_streamify.input_id,
                             dyn_streamify.input_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                dyn_streamify.input_id,
+                                channel_depth,
+                            ),
                         );
                         let ref_rcv = channel_map_collection.tile_f32.get_receiver(
                             dyn_streamify.ref_id,
                             dyn_streamify.ref_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                dyn_streamify.ref_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(DynStreamify::<SimpleEvent, _, _>::new(
                             rcv,
@@ -1092,13 +1193,17 @@ fn build_from_proto<'a>(
                             flatten.input_id,
                             flatten.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flatten.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Flatten::new(
                             rcv,
@@ -1112,13 +1217,17 @@ fn build_from_proto<'a>(
                             flatten.input_id,
                             flatten.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flatten.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.multihot.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Flatten::new(
                             rcv,
@@ -1136,7 +1245,7 @@ fn build_from_proto<'a>(
                         operation.id,
                         None,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
                     builder.add_child(GeneratorContext::new(
                         move || {
@@ -1156,13 +1265,13 @@ fn build_from_proto<'a>(
                         accum.input_id,
                         accum.stream_idx,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
                     );
                     let snd = channel_map_collection.tile_f32.get_sender(
                         operation.id,
                         None,
                         builder,
-                        channel_depth,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
                     let func: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
@@ -1243,13 +1352,17 @@ fn build_from_proto<'a>(
                             retile_streamify.input_id,
                             retile_streamify.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                retile_streamify.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(RetileStreamify::<_>::new(
                             rcv,
@@ -1276,13 +1389,17 @@ fn build_from_proto<'a>(
                             expert_addr_gen.input_id,
                             expert_addr_gen.input_stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expert_addr_gen.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.u64.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(ExpertAddrGen::<_>::new(
                             rcv,
@@ -1302,13 +1419,17 @@ fn build_from_proto<'a>(
                             reshape.input_id,
                             reshape.stream_idx,
                             builder,
-                            channel_depth,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                reshape.input_id,
+                                channel_depth,
+                            ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
 
                         match reshape.pad_func {
@@ -1381,7 +1502,7 @@ fn build_from_proto<'a>(
                                     Some(stream_idx as u32)
                                 },
                                 builder,
-                                channel_depth,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
                             );
                             rcv_list.push(rcv);
                         }
@@ -1390,13 +1511,13 @@ fn build_from_proto<'a>(
                             operation.id,
                             Some(1),
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             Some(0),
                             builder,
-                            channel_depth,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(EagerMerge::new(
                             rcv_list,

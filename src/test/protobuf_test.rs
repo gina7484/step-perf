@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
     use std::fs;
     use std::io::repeat;
     use std::sync::Arc;
@@ -56,6 +57,7 @@ mod test {
                 channel_depth: Some(16),
                 functional_sim: true,
                 mock_bf16: true,
+                config_dict: HashMap::new(),
             },
             db_name,
         );
