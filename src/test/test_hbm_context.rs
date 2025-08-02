@@ -152,7 +152,7 @@ mod test {
         //     1022,
         //     true,
         // );
-        let gen_q = BinaryMap::<SimpleEvent, f32, f32>::new(
+        let gen_q = BinaryMap::<SimpleEvent, f32, f32, f32>::new(
             on_chip_rcv1,
             on_chip_rcv2,
             mm_snd,

@@ -18,11 +18,11 @@ use dam::{context_tools::*, logging::LogEvent};
 ///   However, as this uses a statically divided bandwidth, there are limits in terms of how accurate we can model contention.
 ///   To accurately model on-chip memory accesses, one has to create a similar context as ramulator context for PMUs.
 #[context_macro]
-pub struct BinaryMap<E, A: DAMType, B: DAMType> {
+pub struct BinaryMap<E, A: DAMType, B: DAMType, O: DAMType> {
     in1_stream: Receiver<Elem<Tile<A>>>,
-    in2_stream: Receiver<Elem<Tile<A>>>,
-    out_stream: Sender<Elem<Tile<B>>>,
-    func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+    in2_stream: Receiver<Elem<Tile<B>>>,
+    out_stream: Sender<Elem<Tile<O>>>,
+    func: Arc<dyn Fn(&Tile<A>, &Tile<B>, u64, bool) -> (u64, Tile<O>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
     id: u32,
@@ -33,16 +33,18 @@ impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         A: DAMType,
         B: DAMType,
-    > BinaryMap<E, A, B>
+        O: DAMType,
+    > BinaryMap<E, A, B, O>
 where
     Elem<Tile<A>>: DAMType,
     Elem<Tile<B>>: DAMType,
+    Elem<Tile<O>>: DAMType,
 {
     pub fn new(
         in1_stream: Receiver<Elem<Tile<A>>>,
-        in2_stream: Receiver<Elem<Tile<A>>>,
-        out_stream: Sender<Elem<Tile<B>>>,
-        func: Arc<dyn Fn(&Tile<A>, &Tile<A>, u64, bool) -> (u64, Tile<B>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
+        in2_stream: Receiver<Elem<Tile<B>>>,
+        out_stream: Sender<Elem<Tile<O>>>,
+        func: Arc<dyn Fn(&Tile<A>, &Tile<B>, u64, bool) -> (u64, Tile<O>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
         compute_bw: u64, // FLOPs / cycle
         write_back_mu: bool,
         id: u32,
@@ -70,10 +72,12 @@ impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         A: DAMType,
         B: DAMType,
-    > Context for BinaryMap<E, A, B>
+        O: DAMType,
+    > Context for BinaryMap<E, A, B, O>
 where
     Elem<Tile<A>>: DAMType,
     Elem<Tile<B>>: DAMType,
+    Elem<Tile<O>>: DAMType,
 {
     fn run(&mut self) {
         loop {
@@ -363,7 +367,7 @@ mod tests {
             || in2_stream_data.into_iter(),
             in2_data_snd,
         ));
-        ctx.add_child(BinaryMap::<SimpleEvent, _, _>::new(
+        ctx.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
             in1_data_rcv,
             in2_data_rcv,
             out_data_snd,

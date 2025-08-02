@@ -280,6 +280,7 @@ pub struct ChannelMapCollection<'a> {
     pub dummy: ChannelMap<'a, ()>,
     // data types
     pub tile_f32: ChannelMap<'a, Tile<f32>>,
+    pub tile_u64: ChannelMap<'a, Tile<u64>>,
     // buffered data types
     pub buff_tile_f32: ChannelMap<'a, Buffer<Tile<f32>>>,
     // select

@@ -1,21 +1,18 @@
-use crate::primitives::elem::Elem;
+use crate::primitives::{elem::Elem, tile::Tile};
 use dam::{context_tools::*, types::DAMType};
 
 use itertools::enumerate;
-use ndarray::{IntoDimension, IxDyn, IxDynImpl};
+use ndarray::{Array2, IntoDimension, IxDyn, IxDynImpl};
 
 #[context_macro]
-pub struct MetadataGen<T: DAMType> {
-    pub underlying: ndarray::ArcArray<T, IxDyn>,
-    pub snd: Sender<Elem<T>>,
+pub struct MetadataGen {
+    pub underlying: ndarray::ArcArray<u64, IxDyn>,
+    pub snd: Sender<Elem<Tile<u64>>>,
     pub id: u32,
 }
 
-impl<T: npyz::Deserialize + DAMType> MetadataGen<T>
-where
-    Elem<T>: DAMType,
-{
-    pub fn new(npy_path: String, snd: Sender<Elem<T>>, id: u32) -> Self {
+impl MetadataGen {
+    pub fn new(npy_path: String, snd: Sender<Elem<Tile<u64>>>, id: u32) -> Self {
         let mut file = std::fs::File::open(npy_path).unwrap();
 
         // Read the data and shape of the `.npy` file
@@ -28,7 +25,7 @@ where
 
         let shape: ndarray::Dim<IxDynImpl> = shape_vec.into_dimension();
 
-        let vec_data: Vec<T> = file_data.into_vec().unwrap();
+        let vec_data: Vec<u64> = file_data.into_vec().unwrap();
         let underlying = ndarray::ArcArray::from_shape_vec(shape, vec_data).unwrap();
 
         let ctx = Self {
@@ -43,7 +40,7 @@ where
         ctx
     }
 
-    fn get_elem_array(&self) -> Vec<Elem<T>> {
+    fn get_elem_array(&self) -> Vec<Elem<Tile<u64>>> {
         let mut result = Vec::new();
         let shape = self.underlying.shape();
 
@@ -51,9 +48,24 @@ where
         if shape.len() == 1 {
             for (i, val) in self.underlying.iter().enumerate() {
                 if i == shape[0] - 1 {
-                    result.push(Elem::ValStop(val.clone(), 1));
+                    result.push(Elem::ValStop(
+                        Tile::new(
+                            Array2::from_shape_vec((1, 1), vec![val.clone()])
+                                .unwrap()
+                                .to_shared(),
+                            8,
+                            false,
+                        ),
+                        1,
+                    ));
                 } else {
-                    result.push(Elem::Val(val.clone()));
+                    result.push(Elem::Val(Tile::new(
+                        Array2::from_shape_vec((1, 1), vec![val.clone()])
+                            .unwrap()
+                            .to_shared(),
+                        8,
+                        false,
+                    )));
                 }
             }
             return result;
@@ -98,9 +110,24 @@ where
             }
 
             if let Some(stop_type) = highest_stop_token {
-                result.push(Elem::ValStop(val.clone(), stop_type));
+                result.push(Elem::ValStop(
+                    Tile::new(
+                        Array2::from_shape_vec((1, 1), vec![val.clone()])
+                            .unwrap()
+                            .to_shared(),
+                        8,
+                        false,
+                    ),
+                    stop_type,
+                ));
             } else {
-                result.push(Elem::Val(val.clone()));
+                result.push(Elem::Val(Tile::new(
+                    Array2::from_shape_vec((1, 1), vec![val.clone()])
+                        .unwrap()
+                        .to_shared(),
+                    8,
+                    false,
+                )));
             }
         }
 
@@ -108,10 +135,7 @@ where
     }
 }
 
-impl<T: npyz::Deserialize + DAMType> Context for MetadataGen<T>
-where
-    Elem<T>: DAMType,
-{
+impl Context for MetadataGen {
     fn run(&mut self) {
         let elems = self.get_elem_array();
         let start_time = self.time.tick();
@@ -136,17 +160,26 @@ mod test {
         utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext},
     };
 
-    use crate::primitives::elem::Elem;
+    use crate::primitives::{elem::Elem, tile::Tile};
 
     use super::MetadataGen;
 
     #[test]
     fn test_3d() {
+        // shape: [2, 3, 2]
         // cargo test --package step_perf --lib -- memory::metadata_gen::test::test_3d --exact --show-output
+
+        /*
+        import torch
+        import numpy as np
+        a = torch.tensor([[[0,1],[2,3],[4,5]],[[6,7],[8,9],[10,11]]],dtype=torch.uint64)
+        print(a.shape)
+        np.save("medatagen_3d.npy",a.detach().numpy())
+         */
         let npy_path = "medatagen_3d.npy";
 
         let mut ctx = ProgramBuilder::default();
-        let (in_snd, in_rcv) = ctx.unbounded::<Elem<i32>>();
+        let (in_snd, in_rcv) = ctx.unbounded::<Elem<Tile<u64>>>();
 
         ctx.add_child(MetadataGen::new(npy_path.to_owned(), in_snd, 0));
 

@@ -173,6 +173,16 @@ fn build_from_proto<'a>(
                                 functions::map_fn::silu(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Exp(exp) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::exp(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::RowWiseSum(row_wise_sum) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::row_wise_sum(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }
@@ -194,8 +204,15 @@ fn build_from_proto<'a>(
             OpType::Binarymap(binary_map) => match (
                 binary_map.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 binary_map.dtype_b.clone().unwrap().r#type.clone().unwrap(),
+                binary_map
+                    .dtype_out
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap(),
             ) {
-                (Type::F32(_), Type::F32(_)) => {
+                (Type::F32(_), Type::F32(_), Type::F32(_)) => {
                     // create
                     let rcv1 = channel_map_collection.tile_f32.get_receiver(
                         binary_map.input_id1,
@@ -255,11 +272,122 @@ fn build_from_proto<'a>(
                                 functions::map_fn::mul(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::RowWiseAppend(row_wise_append) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::row_wise_append(tile1, tile2, write_back_mu)
+                            })
+                        }
                         _ => {
                             panic!("Unsupported binary map function type")
                         }
                     };
-                    builder.add_child(BinaryMap::<SimpleEvent, _, _>::new(
+                    builder.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
+                        rcv1,
+                        rcv2,
+                        snd,
+                        map_fn,
+                        binary_map.compute_bw as u64,
+                        binary_map.write_back_mu,
+                        operation.id,
+                    ));
+                }
+                (Type::U64(_), Type::U64(_), Type::U64(_)) => {
+                    // create
+                    let rcv1 = channel_map_collection.tile_u64.get_receiver(
+                        binary_map.input_id1,
+                        binary_map.stream_idx1,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
+                    );
+                    let rcv2 = channel_map_collection.tile_u64.get_receiver(
+                        binary_map.input_id2,
+                        binary_map.stream_idx2,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
+                    );
+                    let snd = channel_map_collection.tile_u64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<u64>, &Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
+                    > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::CacheWriteAddrGen(cache_write_addr_gen) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::cache_write_addr_gen(
+                                    tile1,
+                                    tile2,
+                                    cache_write_addr_gen.offset_per_idx,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported binary map function type")
+                        }
+                    };
+                    builder.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
+                        rcv1,
+                        rcv2,
+                        snd,
+                        map_fn,
+                        binary_map.compute_bw as u64,
+                        binary_map.write_back_mu,
+                        operation.id,
+                    ));
+                }
+                (Type::F32(_), Type::U64(_), Type::F32(_)) => {
+                    // create
+                    let rcv1 = channel_map_collection.tile_f32.get_receiver(
+                        binary_map.input_id1,
+                        binary_map.stream_idx1,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
+                    );
+                    let rcv2 = channel_map_collection.tile_u64.get_receiver(
+                        binary_map.input_id2,
+                        binary_map.stream_idx2,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, &Tile<u64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::SetOffset(set_offset) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::set_offset(tile1, tile2, write_back_mu)
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported binary map function type")
+                        }
+                    };
+                    builder.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
                         rcv1,
                         rcv2,
                         snd,
@@ -421,7 +549,7 @@ fn build_from_proto<'a>(
                     .unwrap()
                 {
                     Type::F32(_) => {
-                        let waddr = channel_map_collection.u64.get_receiver(
+                        let waddr = channel_map_collection.tile_u64.get_receiver(
                             random_off_chip_store.waddr_id,
                             random_off_chip_store.waddr_stream_idx,
                             builder,
@@ -490,7 +618,7 @@ fn build_from_proto<'a>(
                     .unwrap()
                 {
                     Type::F32(_) => {
-                        let raddr = channel_map_collection.u64.get_receiver(
+                        let raddr = channel_map_collection.tile_u64.get_receiver(
                             random_off_chip_load.raddr_id,
                             random_off_chip_load.raddr_stream_idx,
                             builder,
@@ -1423,7 +1551,7 @@ fn build_from_proto<'a>(
             OpType::MetadataGen(metadata_gen) => {
                 match metadata_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::ScalarU64(_) => {
-                        let snd = channel_map_collection.u64.get_sender(
+                        let snd = channel_map_collection.tile_u64.get_sender(
                             operation.id,
                             None,
                             builder,
@@ -1458,7 +1586,7 @@ fn build_from_proto<'a>(
                                 channel_depth,
                             ),
                         );
-                        let snd = channel_map_collection.u64.get_sender(
+                        let snd = channel_map_collection.tile_u64.get_sender(
                             operation.id,
                             None,
                             builder,

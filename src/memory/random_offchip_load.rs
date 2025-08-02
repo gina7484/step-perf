@@ -28,7 +28,7 @@ pub struct RandomOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
     // Channel facing on-chip memory
-    pub raddr: Receiver<Elem<u64>>,
+    pub raddr: Receiver<Elem<Tile<u64>>>,
     pub rdata: Sender<Elem<Tile<T>>>,
     pub id: u32,
     // Phantom data for the event type
@@ -53,7 +53,7 @@ where
         par_dispatch: usize,
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
-        raddr: Receiver<Elem<u64>>,
+        raddr: Receiver<Elem<Tile<u64>>>,
         rdata: Sender<Elem<Tile<T>>>,
         id: u32,
     ) -> Self {
@@ -199,8 +199,10 @@ where
         // Process requests from raddr until we get a stop signal
         while let Ok(addr_elem) = self.raddr.dequeue(&self.time) {
             match addr_elem.data {
-                Elem::Val(tile_idx) => {
+                Elem::Val(addr_tile) => {
                     // Generate addresses for the requested tile
+                    let tile_arr = addr_tile.underlying.as_ref().unwrap();
+                    let tile_idx = tile_arr[[0, 0]];
                     let tile_addrs = self.generate_tile_addresses(tile_idx);
 
                     // Send read request to HBM
@@ -254,8 +256,10 @@ where
                         )
                         .unwrap();
                 }
-                Elem::ValStop(tile_idx, stop_level) => {
+                Elem::ValStop(addr_tile, stop_level) => {
                     // Generate addresses for the requested tile
+                    let tile_arr = addr_tile.underlying.as_ref().unwrap();
+                    let tile_idx: u64 = tile_arr[[0, 0]];
                     let tile_addrs = self.generate_tile_addresses(tile_idx);
 
                     // Send read request to HBM

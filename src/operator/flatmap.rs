@@ -5,6 +5,7 @@ use crate::primitives::select::SelectAdapter;
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
 use dam::types::DAMType;
+use ndarray::Array2;
 
 #[context_macro]
 pub struct RetileStreamify<T: Clone> {
@@ -165,7 +166,7 @@ where
 #[context_macro]
 pub struct ExpertAddrGen<SEL: Clone + SelectAdapter> {
     in_stream: Receiver<Elem<SEL>>, // Index of the expert
-    out_stream: Sender<Elem<u64>>,
+    out_stream: Sender<Elem<Tile<u64>>>,
     num_tile_per_expert: u64,
     expert_addr_base: u64,
     id: u32,
@@ -177,7 +178,7 @@ where
 {
     pub fn new(
         in_stream: Receiver<Elem<SEL>>,
-        out_stream: Sender<Elem<u64>>,
+        out_stream: Sender<Elem<Tile<u64>>>,
         num_tile_per_expert: u64,
         expert_addr_base: u64,
         id: u32,
@@ -222,7 +223,16 @@ where
                                     ChannelElement {
                                         time: self.time.tick(),
                                         data: Elem::ValStop(
-                                            expert_addr + i,
+                                            Tile::new(
+                                                Array2::from_shape_vec(
+                                                    (1, 1),
+                                                    vec![expert_addr + i],
+                                                )
+                                                .unwrap()
+                                                .to_shared(),
+                                                8,
+                                                false,
+                                            ),
                                             if i < self.num_tile_per_expert - 1 {
                                                 1
                                             } else {
@@ -537,6 +547,7 @@ mod expert_addr_gen_tests {
     };
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext};
+    use ndarray::Array2;
 
     fn tolerance_fn<T: PartialEq>(a: &Elem<T>, b: &Elem<T>) -> bool {
         match (a, b) {
@@ -600,7 +611,16 @@ mod expert_addr_gen_tests {
                             .iter()
                             .map(|addr| {
                                 Elem::ValStop(
-                                    expert_i * num_tile_per_expert + *addr as u64,
+                                    Tile::new(
+                                        Array2::from_shape_vec(
+                                            (1, 1),
+                                            vec![expert_i * num_tile_per_expert + *addr as u64],
+                                        )
+                                        .unwrap()
+                                        .to_shared(),
+                                        8,
+                                        false,
+                                    ),
                                     if *addr < num_tile_per_expert - 1 {
                                         1
                                     } else {
@@ -608,7 +628,7 @@ mod expert_addr_gen_tests {
                                     },
                                 )
                             })
-                            .collect::<Vec<Elem<u64>>>()
+                            .collect::<Vec<Elem<Tile<u64>>>>()
                     })
                     .flatten()
             },

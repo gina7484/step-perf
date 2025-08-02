@@ -28,7 +28,7 @@ pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<ParAddrs>,
     pub ack_rcv: Receiver<u64>,
     // Channel facing on-chip memory
-    pub waddr: Receiver<Elem<u64>>,
+    pub waddr: Receiver<Elem<Tile<u64>>>,
     pub wdata: Receiver<Elem<Tile<T>>>,
     pub wack: Sender<Elem<bool>>,
     pub ack_based_on_waddr: bool, // if true, the ack stream's shape will be based on the waddr,
@@ -58,7 +58,7 @@ where
         addr_snd: Sender<ParAddrs>,
         ack_rcv: Receiver<u64>,
         // On-chip memory facing the channels
-        waddr: Receiver<Elem<u64>>,
+        waddr: Receiver<Elem<Tile<u64>>>,
         wdata: Receiver<Elem<Tile<T>>>,
         wack: Sender<Elem<bool>>,
         id: u32,
@@ -231,15 +231,16 @@ where
                 (
                     Ok(ChannelElement {
                         time: _,
-                        data: waddr,
+                        data: waddr_tile,
                     }),
                     Ok(ChannelElement {
                         time: _,
                         data: wdata,
                     }),
                 ) => {
-                    match (waddr, wdata) {
-                        (Elem::Val(waddr), Elem::Val(wdata)) => {
+                    match (waddr_tile, wdata) {
+                        (Elem::Val(waddr_tile), Elem::Val(wdata)) => {
+                            let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
                             // Send write request to HBM
                             self.send_write_request(waddr, &wdata);
 
@@ -256,7 +257,11 @@ where
                                 )
                                 .unwrap();
                         }
-                        (Elem::ValStop(waddr, waddr_stop), Elem::ValStop(wdata, wdata_stop)) => {
+                        (
+                            Elem::ValStop(waddr_tile, waddr_stop),
+                            Elem::ValStop(wdata, wdata_stop),
+                        ) => {
+                            let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
                             // Send write request to HBM
                             self.send_write_request(waddr, &wdata);
 
@@ -279,7 +284,8 @@ where
                                 )
                                 .unwrap();
                         }
-                        (Elem::Val(waddr), Elem::ValStop(wdata, wdata_stop)) => {
+                        (Elem::Val(waddr_tile), Elem::ValStop(wdata, wdata_stop)) => {
+                            let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
                             // Send write request to HBM
                             self.send_write_request(waddr, &wdata);
 
@@ -302,7 +308,8 @@ where
                                 )
                                 .unwrap();
                         }
-                        (Elem::ValStop(waddr, waddr_stop), Elem::Val(wdata)) => {
+                        (Elem::ValStop(waddr_tile, waddr_stop), Elem::Val(wdata)) => {
+                            let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
                             // Send write request to HBM
                             self.send_write_request(waddr, &wdata);
 
