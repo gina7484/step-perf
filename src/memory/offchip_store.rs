@@ -155,7 +155,7 @@ where
                         tile_data
                     }
                 },
-                Err(v) => {
+                Err(_) => {
                     if self.store_path.is_some() {
                         // Save the collected so far and return
 
