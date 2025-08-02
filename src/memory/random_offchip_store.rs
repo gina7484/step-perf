@@ -31,6 +31,8 @@ pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub waddr: Receiver<Elem<u64>>,
     pub wdata: Receiver<Elem<Tile<T>>>,
     pub wack: Sender<Elem<bool>>,
+    pub ack_based_on_waddr: bool, // if true, the ack stream's shape will be based on the waddr,
+    // otherwise it is based on the wdata.
     pub id: u32,
     // Phantom data for the event type
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
@@ -52,12 +54,15 @@ where
         base_addr_byte: u64,
         addr_offset: u64,
         par_dispatch: usize,
+        // HBM context facing the channels
         addr_snd: Sender<ParAddrs>,
         ack_rcv: Receiver<u64>,
+        // On-chip memory facing the channels
         waddr: Receiver<Elem<u64>>,
         wdata: Receiver<Elem<Tile<T>>>,
         wack: Sender<Elem<bool>>,
         id: u32,
+        ack_based_on_waddr: bool,
     ) -> Self {
         let underlying = match npy_path.clone() {
             Some(file_path) => {
@@ -108,6 +113,7 @@ where
             wdata,
             wack,
             id,
+            ack_based_on_waddr,
             _phantom: PhantomData,
             context_info: Default::default(),
         };
@@ -257,20 +263,67 @@ where
                             // Update the tensor if underlying is not None
                             self.update_underlying(waddr, wdata);
 
-                            assert_eq!(waddr_stop, wdata_stop);
+                            let stop_level = if self.ack_based_on_waddr {
+                                waddr_stop
+                            } else {
+                                wdata_stop
+                            };
 
                             self.wack
                                 .enqueue(
                                     &self.time,
                                     ChannelElement {
                                         time: self.time.tick(),
-                                        data: Elem::ValStop(true, waddr_stop),
+                                        data: Elem::ValStop(true, stop_level),
                                     },
                                 )
                                 .unwrap();
                         }
-                        _ => {
-                            panic!("Invalid write address or data");
+                        (Elem::Val(waddr), Elem::ValStop(wdata, wdata_stop)) => {
+                            // Send write request to HBM
+                            self.send_write_request(waddr, &wdata);
+
+                            // Update the tensor if underlying is not None
+                            self.update_underlying(waddr, wdata);
+
+                            let out_elem = if self.ack_based_on_waddr {
+                                Elem::Val(true)
+                            } else {
+                                Elem::ValStop(true, wdata_stop)
+                            };
+
+                            self.wack
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: out_elem,
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        (Elem::ValStop(waddr, waddr_stop), Elem::Val(wdata)) => {
+                            // Send write request to HBM
+                            self.send_write_request(waddr, &wdata);
+
+                            // Update the tensor if underlying is not None
+                            self.update_underlying(waddr, wdata);
+
+                            let out_elem = if self.ack_based_on_waddr {
+                                Elem::ValStop(true, waddr_stop)
+                            } else {
+                                Elem::Val(true)
+                            };
+
+                            self.wack
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: out_elem,
+                                    },
+                                )
+                                .unwrap();
                         }
                     }
                 }

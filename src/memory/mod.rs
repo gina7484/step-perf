@@ -1,4 +1,5 @@
 pub mod dyn_offchip_load;
+pub mod metadata_gen;
 pub mod offchip_load;
 pub mod offchip_store;
 pub mod random_offchip_load;

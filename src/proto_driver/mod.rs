@@ -3,7 +3,9 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_offchip_load::DynOffChipLoad;
+use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
+use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::parallelize::Parallelize;
 use std::collections::HashMap;
@@ -143,7 +145,7 @@ fn build_from_proto<'a>(
         // if operation.id == 336 || operation.id == 272 || operation.id == 721 {
         //     println!("processing {:?}\n", operation);
         // }
-        // println!("processing {:?}\n", operation);
+        println!("processing {:?}\n", operation);
 
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
@@ -409,6 +411,75 @@ fn build_from_proto<'a>(
                     _ => todo!(),
                 }
             }
+            OpType::RandomOffChipStore(random_off_chip_store) => {
+                match random_off_chip_store
+                    .wdata_dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let waddr = channel_map_collection.u64.get_receiver(
+                            random_off_chip_store.waddr_id,
+                            random_off_chip_store.waddr_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                random_off_chip_store.waddr_id,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    random_off_chip_store.waddr_id,
+                                    channel_depth,
+                                ),
+                            ),
+                        );
+                        let wdata = channel_map_collection.tile_f32.get_receiver(
+                            random_off_chip_store.wdata_id,
+                            random_off_chip_store.wdata_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                random_off_chip_store.wdata_id,
+                                channel_depth,
+                            ),
+                        );
+                        let wack = channel_map_collection.bool.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(RandomOffChipStore::<SimpleEvent, _>::new(
+                            to_usize_vec(random_off_chip_store.tensor_shape_tiled),
+                            random_off_chip_store.npy_path,
+                            random_off_chip_store.tile_row as usize,
+                            random_off_chip_store.tile_col as usize,
+                            f32_bytes,
+                            0,
+                            hbm_config.addr_offset,
+                            random_off_chip_store.par_dispatch as usize,
+                            addr_snd,
+                            resp_rcv,
+                            waddr,
+                            wdata,
+                            wack,
+                            operation.id,
+                            random_off_chip_store.ack_based_on_waddr,
+                        ));
+
+                        mem_context.add_writer(WriteBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    _ => todo!(),
+                }
+            }
             OpType::RandomOffChipLoad(random_off_chip_load) => {
                 match random_off_chip_load
                     .dtype
@@ -462,51 +533,7 @@ fn build_from_proto<'a>(
                     _ => todo!(),
                 }
             }
-            OpType::OffChipStore(off_chip_store) => {
-                match off_chip_store
-                    .dtype
-                    .clone()
-                    .unwrap()
-                    .r#type
-                    .clone()
-                    .unwrap()
-                {
-                    Type::F32(_) => {
-                        let on_chip_rcv = channel_map_collection.tile_f32.get_receiver(
-                            off_chip_store.input_id,
-                            off_chip_store.stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                off_chip_store.input_id,
-                                channel_depth,
-                            ),
-                        );
-                        let (addr_snd, addr_rcv) = builder.unbounded();
-                        let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        builder.add_child(OffChipStore::<SimpleEvent, _>::new(
-                            to_usize_vec(off_chip_store.tensor_shape_tiled),
-                            off_chip_store.tile_row as usize,
-                            off_chip_store.tile_col as usize,
-                            off_chip_store.store_path,
-                            0,
-                            hbm_config.addr_offset,
-                            off_chip_store.par_dispatch as usize,
-                            on_chip_rcv,
-                            addr_snd,
-                            resp_rcv,
-                            operation.id,
-                        ));
-
-                        mem_context.add_writer(WriteBundle {
-                            addr: addr_rcv,
-                            resp: resp_snd,
-                        });
-                    }
-                    _ => todo!(),
-                }
-            }
             OpType::RepeatStatic(repeat_static) => {
                 match repeat_static.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::F32(_) => {
@@ -971,6 +998,24 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
+                    Type::ScalarU64(_) => {
+                        let rcv = channel_map_collection.u64.get_receiver(
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
+                    Type::ScalarBool(_) => {
+                        let rcv = channel_map_collection.bool.get_receiver(
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
                     _ => panic!("Unsupported data type for ConsumerContext operation"),
                 }
             }
@@ -1373,6 +1418,24 @@ fn build_from_proto<'a>(
                         ));
                     }
                     _ => panic!("Unsupported data type for RetileStreamify operation"),
+                }
+            }
+            OpType::MetadataGen(metadata_gen) => {
+                match metadata_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::ScalarU64(_) => {
+                        let snd = channel_map_collection.u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(MetadataGen::new(
+                            metadata_gen.npy_path,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for MetadataGen operation"),
                 }
             }
             OpType::ExpertAddrGen(expert_addr_gen) => {

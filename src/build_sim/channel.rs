@@ -285,4 +285,5 @@ pub struct ChannelMapCollection<'a> {
     // select
     pub multihot: ChannelMap<'a, MultiHotN>,
     pub u64: ChannelMap<'a, u64>,
+    pub bool: ChannelMap<'a, bool>,
 }
