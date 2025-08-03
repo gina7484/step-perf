@@ -7,6 +7,7 @@ use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::eager_merge::EagerMerge;
+use crate::operator::expand::ExpandRef;
 use crate::operator::parallelize::Parallelize;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -15,7 +16,7 @@ use crate::operator::accum::{Accum, AccumConfig};
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
-use crate::operator::flatmap::{ExpertAddrGen, RetileStreamify};
+use crate::operator::flatmap::{CacheReadAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify};
 use crate::operator::flatten::Flatten;
 use crate::operator::map::{UnaryMap, UnaryMapConfig};
 use crate::operator::map_accum::BinaryMapAccum;
@@ -661,7 +662,55 @@ fn build_from_proto<'a>(
                     _ => todo!(),
                 }
             }
-
+            OpType::ExpandRef(expand_ref) => {
+                match (
+                    expand_ref.dtype.clone().unwrap().r#type.clone().unwrap(),
+                    expand_ref
+                        .ref_dtype
+                        .clone()
+                        .unwrap()
+                        .r#type
+                        .clone()
+                        .unwrap(),
+                ) {
+                    (Type::F32(_), Type::F32(_)) => {
+                        let in_rcv = channel_map_collection.tile_f32.get_receiver(
+                            expand_ref.input_id,
+                            expand_ref.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expand_ref.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let ref_rcv = channel_map_collection.tile_f32.get_receiver(
+                            expand_ref.ref_id,
+                            expand_ref.ref_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expand_ref.ref_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(ExpandRef::<_, _>::new(
+                            in_rcv,
+                            ref_rcv,
+                            expand_ref.expand_rank,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    _ => panic!("Unsupported data type for ExpandRef operation"),
+                }
+            }
             OpType::RepeatStatic(repeat_static) => {
                 match repeat_static.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::F32(_) => {
@@ -1602,6 +1651,60 @@ fn build_from_proto<'a>(
                     }
                     _ => panic!("Unsupported data type for ExpertAddrGen operation"),
                 }
+            }
+            OpType::CacheReadAddrGen(cache_read_addr_gen) => {
+                let idx_rcv = channel_map_collection.tile_u64.get_receiver(
+                    cache_read_addr_gen.idx_id,
+                    cache_read_addr_gen.idx_stream_idx,
+                    builder,
+                    get_chan_depth(
+                        &sim_config.config_dict,
+                        cache_read_addr_gen.idx_id,
+                        channel_depth,
+                    ),
+                );
+                let seq_len_rcv = channel_map_collection.tile_u64.get_receiver(
+                    cache_read_addr_gen.seq_len_id,
+                    cache_read_addr_gen.seq_len_stream_idx,
+                    builder,
+                    get_chan_depth(
+                        &sim_config.config_dict,
+                        cache_read_addr_gen.seq_len_id,
+                        channel_depth,
+                    ),
+                );
+                let snd = channel_map_collection.tile_u64.get_sender(
+                    operation.id,
+                    None,
+                    builder,
+                    get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                );
+                builder.add_child(CacheReadAddrGen::new(
+                    idx_rcv,
+                    seq_len_rcv,
+                    cache_read_addr_gen.offset_per_idx,
+                    snd,
+                    operation.id,
+                ));
+            }
+            OpType::FilterLastTile(filter_last_tile) => {
+                let seq_len_rcv = channel_map_collection.tile_u64.get_receiver(
+                    filter_last_tile.seq_len_id,
+                    filter_last_tile.seq_len_stream_idx,
+                    builder,
+                    get_chan_depth(
+                        &sim_config.config_dict,
+                        filter_last_tile.seq_len_id,
+                        channel_depth,
+                    ),
+                );
+                let snd = channel_map_collection.multihot.get_sender(
+                    operation.id,
+                    None,
+                    builder,
+                    get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                );
+                builder.add_child(FilterLastTile::new(seq_len_rcv, snd, operation.id));
             }
             OpType::Reshape(reshape) => {
                 match reshape.dtype.clone().unwrap().r#type.clone().unwrap() {

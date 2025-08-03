@@ -1,7 +1,7 @@
 // This is an operator that will be abstracted as a FlatMap operator
 
 use crate::primitives::elem::{Elem, StopType};
-use crate::primitives::select::SelectAdapter;
+use crate::primitives::select::{MultiHotN, SelectAdapter};
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
 use dam::types::DAMType;
@@ -256,18 +256,278 @@ where
     }
 }
 
+#[context_macro]
+pub struct CacheReadAddrGen {
+    idx_stream: Receiver<Elem<Tile<u64>>>, // Index of the request
+    seq_len_stream: Receiver<Elem<Tile<u64>>>, // Sequence length
+    offset_per_idx: u64,
+    out_stream: Sender<Elem<Tile<u64>>>,
+    id: u32,
+}
+
+impl CacheReadAddrGen {
+    pub fn new(
+        idx_stream: Receiver<Elem<Tile<u64>>>,
+        seq_len_stream: Receiver<Elem<Tile<u64>>>,
+        offset_per_idx: u64,
+        out_stream: Sender<Elem<Tile<u64>>>,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            idx_stream,
+            seq_len_stream,
+            offset_per_idx,
+            out_stream,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.idx_stream.attach_receiver(&ctx);
+        ctx.seq_len_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+}
+
+impl Context for CacheReadAddrGen {
+    fn run(&mut self) {
+        loop {
+            let idx_elem = self.idx_stream.dequeue(&self.time);
+            let seq_len_elem = self.seq_len_stream.dequeue(&self.time);
+
+            match (idx_elem, seq_len_elem) {
+                (Ok(idx_elem), Ok(seq_len_elem)) => match (idx_elem.data, seq_len_elem.data) {
+                    (Elem::Val(idx_tile), Elem::Val(seq_len_tile)) => {
+                        let idx_val = idx_tile.underlying.as_ref().unwrap()[[0, 0]];
+                        let seq_len_val = seq_len_tile.underlying.as_ref().unwrap()[[0, 0]];
+
+                        let start_time = self.time.tick();
+                        for i in 0..(seq_len_val - 1) {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: start_time + i,
+                                        data: Elem::Val(Tile::new(
+                                            Array2::from_shape_vec(
+                                                (1, 1),
+                                                vec![idx_val * self.offset_per_idx + i as u64],
+                                            )
+                                            .unwrap()
+                                            .to_shared(),
+                                            8,
+                                            false,
+                                        )),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        self.out_stream
+                            .enqueue(
+                                &self.time,
+                                ChannelElement {
+                                    time: start_time + (seq_len_val - 1),
+                                    data: Elem::ValStop(
+                                        Tile::new(
+                                            Array2::from_shape_vec(
+                                                (1, 1),
+                                                vec![
+                                                    idx_val * self.offset_per_idx
+                                                        + (seq_len_val - 1) as u64,
+                                                ],
+                                            )
+                                            .unwrap()
+                                            .to_shared(),
+                                            8,
+                                            false,
+                                        ),
+                                        1,
+                                    ),
+                                },
+                            )
+                            .unwrap();
+                    }
+                    (
+                        Elem::ValStop(idx_tile, idx_stop_level),
+                        Elem::ValStop(seq_len_tile, seq_len_stop_level),
+                    ) => {
+                        assert_eq!(idx_stop_level, seq_len_stop_level);
+
+                        let idx_val = idx_tile.underlying.as_ref().unwrap()[[0, 0]];
+                        let seq_len_val = seq_len_tile.underlying.as_ref().unwrap()[[0, 0]];
+
+                        let start_time = self.time.tick();
+                        for i in 0..(seq_len_val - 1) {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: start_time + i,
+                                        data: Elem::Val(Tile::new(
+                                            Array2::from_shape_vec(
+                                                (1, 1),
+                                                vec![idx_val * self.offset_per_idx + i as u64],
+                                            )
+                                            .unwrap()
+                                            .to_shared(),
+                                            8,
+                                            false,
+                                        )),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        self.out_stream
+                            .enqueue(
+                                &self.time,
+                                ChannelElement {
+                                    time: start_time + (seq_len_val - 1),
+                                    data: Elem::ValStop(
+                                        Tile::new(
+                                            Array2::from_shape_vec(
+                                                (1, 1),
+                                                vec![
+                                                    idx_val * self.offset_per_idx
+                                                        + (seq_len_val - 1) as u64,
+                                                ],
+                                            )
+                                            .unwrap()
+                                            .to_shared(),
+                                            8,
+                                            false,
+                                        ),
+                                        idx_stop_level + 1,
+                                    ),
+                                },
+                            )
+                            .unwrap();
+                    }
+                    _ => {
+                        panic!(
+                            "CacheReadAddrGen {}: idx_stream and seq_len_stream must have the same shape",
+                            self.id)
+                    }
+                },
+                (Err(_), Err(_)) => {
+                    return;
+                }
+                _ => {
+                    panic!(
+                        "CacheReadAddrGen {}: idx_stream and seq_len_stream must have the same shape",
+                        self.id
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[context_macro]
+pub struct FilterLastTile {
+    seq_len_stream: Receiver<Elem<Tile<u64>>>,
+    out_stream: Sender<Elem<MultiHotN>>,
+    id: u32,
+}
+
+impl FilterLastTile {
+    pub fn new(
+        seq_len_stream: Receiver<Elem<Tile<u64>>>,
+        out_stream: Sender<Elem<MultiHotN>>,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            seq_len_stream,
+            out_stream,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.seq_len_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+}
+
+impl Context for FilterLastTile {
+    fn run(&mut self) {
+        loop {
+            match self.seq_len_stream.dequeue(&self.time) {
+                Ok(ChannelElement {
+                    time: _,
+                    data: data_enum,
+                }) => match data_enum {
+                    Elem::Val(data) => {
+                        let seq_len_val = data.underlying.as_ref().unwrap()[[0, 0]];
+
+                        for _ in 0..(seq_len_val - 1) {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::Val(MultiHotN::new(vec![false, true], false)),
+                                    },
+                                )
+                                .unwrap();
+                        }
+
+                        self.out_stream
+                            .enqueue(
+                                &self.time,
+                                ChannelElement {
+                                    time: self.time.tick(),
+                                    data: Elem::Val(MultiHotN::new(vec![true, false], false)),
+                                },
+                            )
+                            .unwrap();
+                    }
+                    Elem::ValStop(data, stop_level) => {
+                        let seq_len_val = data.underlying.as_ref().unwrap()[[0, 0]];
+
+                        for _ in 0..(seq_len_val - 1) {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::Val(MultiHotN::new(vec![false, true], false)),
+                                    },
+                                )
+                                .unwrap();
+                        }
+
+                        self.out_stream
+                            .enqueue(
+                                &self.time,
+                                ChannelElement {
+                                    time: self.time.tick(),
+                                    data: Elem::ValStop(
+                                        MultiHotN::new(vec![true, false], false),
+                                        stop_level + 1,
+                                    ),
+                                },
+                            )
+                            .unwrap();
+                    }
+                },
+                Err(_) => {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod retile_tests {
     use super::RetileStreamify;
     use crate::{
-        functions::map_fn,
         primitives::{elem::Elem, tile::Tile},
         utils::events::SimpleEvent,
     };
     use dam::simulation::ProgramBuilder;
-    use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
+    use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext};
     use ndarray::Array2;
-    use std::sync::Arc;
 
     fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
         match (a, b) {
@@ -539,9 +799,10 @@ mod retile_tests {
 }
 
 #[cfg(test)]
-mod expert_addr_gen_tests {
+mod tests {
     use super::ExpertAddrGen;
     use crate::{
+        operator::flatmap::CacheReadAddrGen,
         primitives::{elem::Elem, select::MultiHotN, tile::Tile},
         utils::events::SimpleEvent,
     };
@@ -632,6 +893,92 @@ mod expert_addr_gen_tests {
                     })
                     .flatten()
             },
+            out_data_rcv,
+            tolerance_fn,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn test_cache_read_addr_gen() {
+        // cargo test --package step_perf --lib -- operator::flatmap::tests::test_cache_read_addr_gen --exact --show-output
+        let offset_per_idx = 16;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let (idx_data_snd, idx_data_rcv) = ctx.unbounded();
+        let (seq_len_data_snd, seq_len_data_rcv) = ctx.unbounded();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+
+        // Idx
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![0, 3, 11].into_iter().map(|i| {
+                    Elem::Val(Tile::new(
+                        Array2::from_shape_vec((1, 1), vec![i]).unwrap().to_shared(),
+                        8,
+                        false,
+                    ))
+                })
+            },
+            idx_data_snd,
+        ));
+
+        // Seq len
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![2, 4, 3].into_iter().map(|i| {
+                    Elem::Val(Tile::new(
+                        Array2::from_shape_vec((1, 1), vec![i]).unwrap().to_shared(),
+                        8,
+                        false,
+                    ))
+                })
+            },
+            seq_len_data_snd,
+        ));
+
+        // Cache read addr gen
+        ctx.add_child(CacheReadAddrGen::new(
+            idx_data_rcv,
+            seq_len_data_rcv,
+            offset_per_idx,
+            out_data_snd,
+            0,
+        ));
+
+        let mut gold = vec![];
+
+        for (idx, seq_len) in vec![(0, 2), (3, 4), (11, 3)].into_iter() {
+            for i in 0..(seq_len - 1) {
+                gold.push(Elem::Val(Tile::new(
+                    Array2::from_shape_vec((1, 1), vec![idx * offset_per_idx + i as u64])
+                        .unwrap()
+                        .to_shared(),
+                    8,
+                    false,
+                )));
+            }
+            gold.push(Elem::ValStop(
+                Tile::new(
+                    Array2::from_shape_vec(
+                        (1, 1),
+                        vec![idx * offset_per_idx + (seq_len - 1) as u64],
+                    )
+                    .unwrap()
+                    .to_shared(),
+                    8,
+                    false,
+                ),
+                1,
+            ));
+        }
+
+        ctx.add_child(ApproxCheckerContext::new(
+            move || gold.clone().into_iter(),
             out_data_rcv,
             tolerance_fn,
         ));
