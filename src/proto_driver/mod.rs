@@ -146,7 +146,7 @@ fn build_from_proto<'a>(
         // if operation.id == 336 || operation.id == 272 || operation.id == 721 {
         //     println!("processing {:?}\n", operation);
         // }
-        println!("processing {:?}\n", operation);
+        // println!("processing {:?}\n", operation);
 
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
@@ -276,6 +276,11 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::RowWiseAppend(row_wise_append) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::row_wise_append(tile1, tile2, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Div(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::div(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         _ => {
@@ -741,12 +746,22 @@ fn build_from_proto<'a>(
             }
             OpType::Broadcast(broadcast) => {
                 match broadcast.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(f32) => {
+                    Type::F32(_) => {
                         make_broadcast!(
                             channel_map_collection,
                             operation,
                             broadcast,
                             tile_f32,
+                            builder,
+                            channel_depth
+                        );
+                    }
+                    Type::U64(_) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            tile_u64,
                             builder,
                             channel_depth
                         );
@@ -795,7 +810,7 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(f32) => {
+                    Type::F32(_) => {
                         let input_rcv = channel_map_collection.tile_f32.get_receiver(
                             flat_partition.input_id,
                             flat_partition.input_stream_idx,
@@ -809,6 +824,61 @@ fn build_from_proto<'a>(
                         let mut snd_list = vec![];
                         for i in 0..flat_partition.num_consumers {
                             snd_list.push(channel_map_collection.tile_f32.get_sender(
+                                operation.id,
+                                Some(i),
+                                builder,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
+                            ));
+                        }
+
+                        match flat_partition
+                            .control_dtype
+                            .clone()
+                            .unwrap()
+                            .r#type
+                            .clone()
+                            .unwrap()
+                        {
+                            Type::MultiHot(multi_hot) => {
+                                let control_rcv = channel_map_collection.multihot.get_receiver(
+                                    flat_partition.control_id,
+                                    flat_partition.control_stream_idx,
+                                    builder,
+                                    channel_depth,
+                                );
+                                builder.add_child(FlatPartition::<SimpleEvent, _, _>::new(
+                                    input_rcv,
+                                    control_rcv,
+                                    snd_list,
+                                    flat_partition.partition_rank,
+                                    FlatPartitionConfig {
+                                        switch_cycles: to_u64_vec(flat_partition.switch_cycles),
+                                        write_back_mu: flat_partition.write_back_mu,
+                                    },
+                                    operation.id,
+                                ))
+                            }
+                            _ => panic!("Unsupported data type"),
+                        }
+                    }
+                    Type::U64(_) => {
+                        let input_rcv = channel_map_collection.tile_u64.get_receiver(
+                            flat_partition.input_id,
+                            flat_partition.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flat_partition.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let mut snd_list = vec![];
+                        for i in 0..flat_partition.num_consumers {
+                            snd_list.push(channel_map_collection.tile_u64.get_sender(
                                 operation.id,
                                 Some(i),
                                 builder,
@@ -1166,6 +1236,15 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
                             consumer_context.input_id,
@@ -1207,6 +1286,15 @@ fn build_from_proto<'a>(
                 {
                     Type::F32(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(PrinterContext::new(rcv));
+                    }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
                             printer_context.input_id,
                             printer_context.stream_idx,
                             builder,
@@ -1558,6 +1646,54 @@ fn build_from_proto<'a>(
                         operation.id,
                     ));
                 }
+                (Type::F32(_), Type::U64(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        accum.input_id,
+                        accum.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_u64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let func: Arc<
+                        dyn Fn(&Tile<f32>, &Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
+                    > = match accum.func.unwrap().accum_fn.unwrap() {
+                        accum_func::AccumFn::SignalReqAllRead(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::signal_req_all_read(
+                                    tile1,
+                                    tile2,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => todo!(),
+                    };
+
+                    let tile_row = accum.tile_row as usize;
+                    let tile_col = accum.tile_col as usize;
+
+                    let init_accum = Arc::new(move || {
+                        Tile::new_blank(vec![tile_row, tile_col], 8, accum.write_back_mu)
+                    });
+
+                    builder.add_child(Accum::<SimpleEvent, _, _>::new(
+                        rcv,
+                        snd,
+                        func,
+                        init_accum,
+                        accum.rank,
+                        AccumConfig {
+                            compute_bw: accum.compute_bw as u64,
+                            write_back_mu: accum.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
                 _ => todo!(),
             },
             OpType::RetileStreamify(retile_streamify) => {
@@ -1598,15 +1734,22 @@ fn build_from_proto<'a>(
                 }
             }
             OpType::MetadataGen(metadata_gen) => {
+                let snd = channel_map_collection.tile_u64.get_sender(
+                    operation.id,
+                    None,
+                    builder,
+                    get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                );
                 match metadata_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::ScalarU64(_) => {
-                        let snd = channel_map_collection.tile_u64.get_sender(
+                        builder.add_child(MetadataGen::<u64>::new(
+                            metadata_gen.npy_path,
+                            snd,
                             operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        builder.add_child(MetadataGen::new(
+                        ));
+                    }
+                    Type::ScalarI64(_) => {
+                        builder.add_child(MetadataGen::<i64>::new(
                             metadata_gen.npy_path,
                             snd,
                             operation.id,
@@ -1808,6 +1951,46 @@ fn build_from_proto<'a>(
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            Some(0),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(EagerMerge::new(
+                            rcv_list,
+                            sel_snd,
+                            snd,
+                            eager_merge.input_rank,
+                            operation.id,
+                        ));
+                    }
+                    Type::U64(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in eager_merge
+                            .input_id_list
+                            .into_iter()
+                            .zip(eager_merge.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_u64.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let sel_snd = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            Some(1),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
                             operation.id,
                             Some(0),
                             builder,

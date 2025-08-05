@@ -194,7 +194,10 @@ where
                             Err(_) => panic!("Error while writing metadata to {}", meta_file_path),
                         }
 
-                        println!("Successfully wrote the output");
+                        println!(
+                            "Successfully wrote the output to {}",
+                            self.store_path.clone().unwrap()
+                        );
                     }
                     return;
                 }

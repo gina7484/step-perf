@@ -476,7 +476,10 @@ impl Context for FilterLastTile {
                                 &self.time,
                                 ChannelElement {
                                     time: self.time.tick(),
-                                    data: Elem::Val(MultiHotN::new(vec![true, false], false)),
+                                    data: Elem::ValStop(
+                                        MultiHotN::new(vec![true, false], false),
+                                        1,
+                                    ),
                                 },
                             )
                             .unwrap();
@@ -802,7 +805,7 @@ mod retile_tests {
 mod tests {
     use super::ExpertAddrGen;
     use crate::{
-        operator::flatmap::CacheReadAddrGen,
+        operator::flatmap::{CacheReadAddrGen, FilterLastTile},
         primitives::{elem::Elem, select::MultiHotN, tile::Tile},
         utils::events::SimpleEvent,
     };
@@ -975,6 +978,52 @@ mod tests {
                 ),
                 1,
             ));
+        }
+
+        ctx.add_child(ApproxCheckerContext::new(
+            move || gold.clone().into_iter(),
+            out_data_rcv,
+            tolerance_fn,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn test_filter_last_tile() {
+        // cargo test --package step_perf --lib -- operator::flatmap::tests::test_filter_last_tile --exact --show-output
+
+        let mut ctx = ProgramBuilder::default();
+
+        let (seq_len_data_snd, seq_len_data_rcv) = ctx.unbounded();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+
+        // Seq len
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![2, 4, 3].into_iter().map(|i| {
+                    Elem::Val(Tile::new(
+                        Array2::from_shape_vec((1, 1), vec![i]).unwrap().to_shared(),
+                        8,
+                        false,
+                    ))
+                })
+            },
+            seq_len_data_snd,
+        ));
+
+        // Cache read addr gen
+        ctx.add_child(FilterLastTile::new(seq_len_data_rcv, out_data_snd, 0));
+
+        let mut gold = vec![];
+
+        for seq_len in vec![2, 4, 3].into_iter() {
+            for _ in 0..(seq_len - 1) {
+                gold.push(Elem::Val(MultiHotN::new(vec![false, true], false)));
+            }
+            gold.push(Elem::ValStop(MultiHotN::new(vec![true, false], false), 1));
         }
 
         ctx.add_child(ApproxCheckerContext::new(

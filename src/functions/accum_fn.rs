@@ -1,3 +1,5 @@
+use ndarray::Array2;
+
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 
@@ -186,5 +188,23 @@ pub fn retile_row<T: Debug + ndarray::LinalgScalar>(
                 ),
             )
         }
+    }
+}
+
+pub fn signal_req_all_read<T: Debug>(
+    in_data: &Tile<T>,
+    _: &Tile<u64>,
+    write_back_mu: bool,
+) -> (u64, Tile<u64>) {
+    match &in_data.underlying {
+        Some(_) => (
+            1,
+            Tile::new(
+                Array2::from_shape_vec((1, 1), vec![1]).unwrap().to_shared(),
+                8,
+                write_back_mu,
+            ),
+        ),
+        None => (1, Tile::new_blank(vec![1, 1], 8, write_back_mu)),
     }
 }

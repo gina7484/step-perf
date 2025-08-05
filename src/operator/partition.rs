@@ -148,11 +148,15 @@ where
                             start_time = Some(self.time.tick().time());
                         }
                         // Validate stop level based on context
-                        if let Some(expected) = expected_stop_level {
+                        if let Some(expected) = expected_stop_level.clone() {
                             if expected != stop_lev {
                                 panic!("The expected stop level does not match the stop level in the select stream!");
                             }
                         } else if stop_lev > self.partition_rank {
+                            println!(
+                                "id {}: stop_lev in input {}, expected {:?}, partition_rank {}",
+                                self.id, stop_lev, expected_stop_level, self.partition_rank
+                            );
                             panic!("The stop level in the select stream is greater than the partition rank!");
                         }
                         // Determine output stop level

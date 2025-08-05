@@ -41,6 +41,7 @@ impl<T> Bufferizable for Tile<T> {
     }
 }
 impl<T> Tile<T> {
+    /// This creates a tile with no underlying data
     pub fn new_blank(shape: Vec<usize>, bytes_per_elem: usize, read_from_mu: bool) -> Self {
         Self {
             shape: shape.clone(),
@@ -60,6 +61,8 @@ impl<T> Tile<T> {
             offset: rows,
         }
     }
+
+    /// This creates a tile with no underlying data and a padded value
     pub fn new_blank_padded(
         shape: Vec<usize>,
         bytes_per_elem: usize,
@@ -75,6 +78,7 @@ impl<T> Tile<T> {
         }
     }
 
+    /// This creates a tile with underlying data and a padded value
     pub fn new_padded(
         arr: ndarray::ArcArray2<T>,
         bytes_per_elem: usize,

@@ -5,13 +5,13 @@ use itertools::enumerate;
 use ndarray::{Array2, IntoDimension, IxDyn, IxDynImpl};
 
 #[context_macro]
-pub struct MetadataGen {
-    pub underlying: ndarray::ArcArray<u64, IxDyn>,
+pub struct MetadataGen<T: Clone> {
+    pub underlying: ndarray::ArcArray<T, IxDyn>,
     pub snd: Sender<Elem<Tile<u64>>>,
     pub id: u32,
 }
 
-impl MetadataGen {
+impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> MetadataGen<T> {
     pub fn new(npy_path: String, snd: Sender<Elem<Tile<u64>>>, id: u32) -> Self {
         let mut file = std::fs::File::open(npy_path).unwrap();
 
@@ -25,7 +25,7 @@ impl MetadataGen {
 
         let shape: ndarray::Dim<IxDynImpl> = shape_vec.into_dimension();
 
-        let vec_data: Vec<u64> = file_data.into_vec().unwrap();
+        let vec_data: Vec<T> = file_data.into_vec().unwrap();
         let underlying = ndarray::ArcArray::from_shape_vec(shape, vec_data).unwrap();
 
         let ctx = Self {
@@ -47,10 +47,14 @@ impl MetadataGen {
         // Handle 1D arrays
         if shape.len() == 1 {
             for (i, val) in self.underlying.iter().enumerate() {
+                let val_u64 = val
+                    .clone()
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("Error converting T into u64"));
                 if i == shape[0] - 1 {
                     result.push(Elem::ValStop(
                         Tile::new(
-                            Array2::from_shape_vec((1, 1), vec![val.clone()])
+                            Array2::from_shape_vec((1, 1), vec![val_u64])
                                 .unwrap()
                                 .to_shared(),
                             8,
@@ -60,7 +64,7 @@ impl MetadataGen {
                     ));
                 } else {
                     result.push(Elem::Val(Tile::new(
-                        Array2::from_shape_vec((1, 1), vec![val.clone()])
+                        Array2::from_shape_vec((1, 1), vec![val_u64])
                             .unwrap()
                             .to_shared(),
                         8,
@@ -109,10 +113,14 @@ impl MetadataGen {
                 }
             }
 
+            let val_u64 = val
+                .clone()
+                .try_into()
+                .unwrap_or_else(|_| panic!("Error converting T into u64"));
             if let Some(stop_type) = highest_stop_token {
                 result.push(Elem::ValStop(
                     Tile::new(
-                        Array2::from_shape_vec((1, 1), vec![val.clone()])
+                        Array2::from_shape_vec((1, 1), vec![val_u64])
                             .unwrap()
                             .to_shared(),
                         8,
@@ -122,7 +130,7 @@ impl MetadataGen {
                 ));
             } else {
                 result.push(Elem::Val(Tile::new(
-                    Array2::from_shape_vec((1, 1), vec![val.clone()])
+                    Array2::from_shape_vec((1, 1), vec![val_u64])
                         .unwrap()
                         .to_shared(),
                     8,
@@ -135,7 +143,9 @@ impl MetadataGen {
     }
 }
 
-impl Context for MetadataGen {
+impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> Context
+    for MetadataGen<T>
+{
     fn run(&mut self) {
         let elems = self.get_elem_array();
         let start_time = self.time.tick();
@@ -181,7 +191,34 @@ mod test {
         let mut ctx = ProgramBuilder::default();
         let (in_snd, in_rcv) = ctx.unbounded::<Elem<Tile<u64>>>();
 
-        ctx.add_child(MetadataGen::new(npy_path.to_owned(), in_snd, 0));
+        ctx.add_child(MetadataGen::<u64>::new(npy_path.to_owned(), in_snd, 0));
+
+        ctx.add_child(PrinterContext::new(in_rcv));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn test_3d_i64() {
+        // shape: [4]
+        // cargo test --package step_perf --lib -- memory::metadata_gen::test::test_3d_i64 --exact --show-output
+
+        /*
+        import torch
+        import numpy as np
+        a = torch.arange(4)
+        print(a.dtype)
+        print(a.shape)
+        np.save("medatagen_3d_i64.npy",a.detach().numpy())
+         */
+        let npy_path = "medatagen_3d_i64.npy";
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded::<Elem<Tile<u64>>>();
+
+        ctx.add_child(MetadataGen::<u64>::new(npy_path.to_owned(), in_snd, 0));
 
         ctx.add_child(PrinterContext::new(in_rcv));
 
