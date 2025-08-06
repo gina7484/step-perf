@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn parallelize_1d() {
-        // cargo test --package step_perf --lib -- operator::parallelize::tests::parallelize_0d --exact --show-output
+        // cargo test --package step_perf --lib -- operator::parallelize::tests::parallelize_1d --exact --show-output
         type VT = u32;
         const READ_FROM_MU: bool = false;
         const DUMMY_ID: u32 = 0;

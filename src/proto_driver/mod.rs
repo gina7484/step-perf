@@ -545,6 +545,51 @@ fn build_from_proto<'a>(
                     _ => todo!(),
                 }
             }
+            OpType::OffChipStore(off_chip_store) => {
+                match off_chip_store
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let on_chip_rcv = channel_map_collection.tile_f32.get_receiver(
+                            off_chip_store.input_id,
+                            off_chip_store.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                off_chip_store.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(OffChipStore::<SimpleEvent, _>::new(
+                            to_usize_vec(off_chip_store.tensor_shape_tiled),
+                            off_chip_store.tile_row as usize,
+                            off_chip_store.tile_col as usize,
+                            off_chip_store.store_path,
+                            0,
+                            hbm_config.addr_offset,
+                            off_chip_store.par_dispatch as usize,
+                            on_chip_rcv,
+                            addr_snd,
+                            resp_rcv,
+                            operation.id,
+                        ));
+
+                        mem_context.add_writer(WriteBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    _ => todo!(),
+                }
+            }
             OpType::RandomOffChipStore(random_off_chip_store) => {
                 match random_off_chip_store
                     .wdata_dtype
