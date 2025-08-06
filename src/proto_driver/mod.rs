@@ -1147,7 +1147,6 @@ fn build_from_proto<'a>(
                             input_rcv,
                             snd_list,
                             parallelize.parallelize_rank,
-                            parallelize.per_region_input as usize,
                             FlatPartitionConfig {
                                 switch_cycles: to_u64_vec(parallelize.switch_cycles),
                                 write_back_mu: parallelize.write_back_mu,
@@ -1183,7 +1182,41 @@ fn build_from_proto<'a>(
                             input_rcv,
                             snd_list,
                             parallelize.parallelize_rank,
-                            parallelize.per_region_input as usize,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(parallelize.switch_cycles),
+                                write_back_mu: parallelize.write_back_mu,
+                            },
+                            operation.id,
+                        ))
+                    }
+                    Type::U64(u64) => {
+                        let input_rcv = channel_map_collection.tile_u64.get_receiver(
+                            parallelize.input_id,
+                            parallelize.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                parallelize.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let mut snd_list = vec![];
+                        for i in 0..parallelize.num_consumers {
+                            snd_list.push(channel_map_collection.tile_u64.get_sender(
+                                operation.id,
+                                Some(i),
+                                builder,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
+                            ));
+                        }
+                        builder.add_child(Parallelize::<SimpleEvent, _>::new(
+                            input_rcv,
+                            snd_list,
+                            parallelize.parallelize_rank,
                             FlatPartitionConfig {
                                 switch_cycles: to_u64_vec(parallelize.switch_cycles),
                                 write_back_mu: parallelize.write_back_mu,
@@ -1546,6 +1579,31 @@ fn build_from_proto<'a>(
                             flatten.max_rank,
                         ));
                     }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            flatten.input_id,
+                            flatten.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flatten.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(Flatten::new(
+                            rcv,
+                            snd,
+                            flatten.min_rank,
+                            flatten.max_rank,
+                        ));
+                    }
+
                     _ => panic!("Unsupported data type for Flatten operation"),
                 }
             }
