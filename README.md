@@ -68,9 +68,9 @@ If the data arriaved on cycle `x` and is reapted `y` times, the data is enqueued
 
 
 ### Off-chip memory access
-#### OffChipLoad
+#### LinearOffChipLoad
 
-#### OffChipLoadRef (or DynOffChipLoad)
+#### LinearOffChipLoadRef
 
 #### OffChipStore
 

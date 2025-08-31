@@ -317,7 +317,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
-                "DynOffChipLoad".to_string(),
+                "LinearOffChipLoadRef".to_string(),
                 self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
