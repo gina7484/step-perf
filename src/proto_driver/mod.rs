@@ -2,7 +2,8 @@ pub mod configs;
 pub mod proto_headers;
 
 use crate::functions;
-use crate::memory::dyn_offchip_load::DynOffChipLoad;
+use crate::memory::dyn_linear_offchip_load::DynLinearOffChipLoad;
+use crate::memory::linear_offchip_load_ref::LinearOffChipLoadRef;
 use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
@@ -36,7 +37,7 @@ use std::sync::Arc;
 use std::usize;
 
 use crate::build_sim::channel::ChannelMapCollection;
-use crate::memory::offchip_load::OffChipLoad;
+use crate::memory::linear_offchip_load::LinearOffChipLoad;
 use crate::memory::offchip_store::OffChipStore;
 use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
 use crate::primitives::tile::Tile;
@@ -76,7 +77,7 @@ macro_rules! make_broadcast {
     };
 }
 
-macro_rules! make_dyn_offchip_load {
+macro_rules! make_linear_offchip_load_ref {
     ($collection:expr, $operation: expr, $dyn_offchip_load: expr,$hbm_config: expr,
      $type_ref:ident, $type:ident, $n_bytes: expr,$mem_context: expr, $builder:expr, $channel_depth:expr) => {
         let ref_rcv = $collection.$type_ref.get_receiver(
@@ -93,7 +94,7 @@ macro_rules! make_dyn_offchip_load {
         let (addr_snd, addr_rcv) = $builder.unbounded();
         let (resp_snd, resp_rcv) = $builder.unbounded();
 
-        $builder.add_child(DynOffChipLoad::<SimpleEvent, _, _>::new(
+        $builder.add_child(LinearOffChipLoadRef::<SimpleEvent, _, _>::new(
             to_usize_vec($dyn_offchip_load.tensor_shape_tiled),
             to_usize_vec($dyn_offchip_load.stride),
             to_usize_vec($dyn_offchip_load.out_shape_tiled),
@@ -508,8 +509,15 @@ fn build_from_proto<'a>(
                 }
                 (_, _) => todo!(),
             },
-            OpType::OffChipLoad(off_chip_load) => {
-                match off_chip_load.dtype.clone().unwrap().r#type.clone().unwrap() {
+            OpType::LinearOffChipLoad(linear_off_chip_load) => {
+                match linear_off_chip_load
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
                     Type::F32(_) => {
                         let on_chip_snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
@@ -520,17 +528,59 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        builder.add_child(OffChipLoad::<SimpleEvent, _>::new(
-                            to_usize_vec(off_chip_load.tensor_shape_tiled),
-                            to_usize_vec(off_chip_load.stride),
-                            to_usize_vec(off_chip_load.out_shape_tiled),
-                            off_chip_load.npy_path,
-                            off_chip_load.tile_row as usize,
-                            off_chip_load.tile_col as usize,
+                        builder.add_child(LinearOffChipLoad::<SimpleEvent, _>::new(
+                            to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
+                            to_usize_vec(linear_off_chip_load.stride),
+                            to_usize_vec(linear_off_chip_load.out_shape_tiled),
+                            linear_off_chip_load.npy_path,
+                            linear_off_chip_load.tile_row as usize,
+                            linear_off_chip_load.tile_col as usize,
                             f32_bytes,
                             0,
                             hbm_config.addr_offset,
-                            off_chip_load.par_dispatch as usize,
+                            linear_off_chip_load.par_dispatch as usize,
+                            addr_snd,
+                            resp_rcv,
+                            on_chip_snd,
+                            operation.id,
+                        ));
+
+                        mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    _ => todo!(),
+                }
+            }
+            OpType::DynLinearOffChipLoad(dyn_linear_off_chip_load) => {
+                match dyn_linear_off_chip_load
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let on_chip_snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(DynLinearOffChipLoad::<SimpleEvent, _>::new(
+                            dyn_linear_off_chip_load.shape_path,
+                            dyn_linear_off_chip_load.npy_path,
+                            dyn_linear_off_chip_load.tile_row as usize,
+                            dyn_linear_off_chip_load.tile_col as usize,
+                            f32_bytes,
+                            0,
+                            hbm_config.addr_offset,
+                            dyn_linear_off_chip_load.par_dispatch as usize,
                             addr_snd,
                             resp_rcv,
                             on_chip_snd,
@@ -1507,16 +1557,16 @@ fn build_from_proto<'a>(
                     _ => panic!("Unsupported data type for DynStreamify operation"),
                 }
             }
-            OpType::DynOffChipLoad(dyn_offchip_load) => {
+            OpType::LinearOffChipLoadRef(linear_offchip_load_ref) => {
                 match (
-                    dyn_offchip_load
+                    linear_offchip_load_ref
                         .dtype
                         .clone()
                         .unwrap()
                         .r#type
                         .clone()
                         .unwrap(),
-                    dyn_offchip_load
+                    linear_offchip_load_ref
                         .ref_dtype
                         .clone()
                         .unwrap()
@@ -1525,10 +1575,10 @@ fn build_from_proto<'a>(
                         .unwrap(),
                 ) {
                     (Type::F32(_), Type::F32(_)) => {
-                        make_dyn_offchip_load!(
+                        make_linear_offchip_load_ref!(
                             channel_map_collection,
                             operation,
-                            dyn_offchip_load,
+                            linear_offchip_load_ref,
                             hbm_config,
                             tile_f32,
                             tile_f32,
@@ -1544,10 +1594,10 @@ fn build_from_proto<'a>(
                             r#type: Some(buffer::Type::F32(_)),
                         }),
                     ) => {
-                        make_dyn_offchip_load!(
+                        make_linear_offchip_load_ref!(
                             channel_map_collection,
                             operation,
-                            dyn_offchip_load,
+                            linear_offchip_load_ref,
                             hbm_config,
                             buff_tile_f32,
                             tile_f32,
@@ -1558,10 +1608,10 @@ fn build_from_proto<'a>(
                         );
                     }
                     (Type::F32(_), Type::MultiHot(_)) => {
-                        make_dyn_offchip_load!(
+                        make_linear_offchip_load_ref!(
                             channel_map_collection,
                             operation,
-                            dyn_offchip_load,
+                            linear_offchip_load_ref,
                             hbm_config,
                             multihot,
                             tile_f32,
@@ -1571,7 +1621,7 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
-                    _ => panic!("Unsupported data type for DynOffChipLoad operation"),
+                    _ => panic!("Unsupported data type for LinearOffChipLoadRef operation"),
                 }
             }
             OpType::Flatten(flatten) => {

@@ -3,7 +3,7 @@ mod test {
     use std::default;
     use std::sync::Arc;
 
-    use crate::memory::offchip_load::OffChipLoad;
+    use crate::memory::linear_offchip_load::LinearOffChipLoad;
     use crate::memory::offchip_store::OffChipStore;
 
     use crate::functions::{map_accum_fn, map_fn};
@@ -78,7 +78,7 @@ mod test {
         let (resp_addr_snd1, resp_addr_rcv1) = ctx.unbounded();
         let (repeat_snd1, repeat_rcv1) = ctx.bounded(1);
 
-        let mat1 = OffChipLoad::<SimpleEvent, f32>::new(
+        let mat1 = LinearOffChipLoad::<SimpleEvent, f32>::new(
             vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
@@ -113,7 +113,7 @@ mod test {
         } else {
             vec![0, 1, H / tile_n_gen_q]
         };
-        let mat2 = OffChipLoad::<SimpleEvent, f32>::new(
+        let mat2 = LinearOffChipLoad::<SimpleEvent, f32>::new(
             vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             mat2_stride,
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],

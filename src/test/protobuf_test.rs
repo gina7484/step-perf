@@ -20,7 +20,7 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::build_sim::channel::ChannelMapCollection;
-    use crate::memory::offchip_load::OffChipLoad;
+    use crate::memory::linear_offchip_load::LinearOffChipLoad;
     use crate::memory::offchip_store::OffChipStore;
     use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
     use crate::primitives::tile::Tile;

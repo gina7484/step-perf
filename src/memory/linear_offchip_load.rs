@@ -16,11 +16,11 @@ use crate::primitives::tile::Tile;
 use crate::utils::events::LoggableEventSimple;
 
 #[context_macro]
-pub struct DynOffChipLoad<E: LoggableEventSimple, T: DAMType, R: DAMType> {
+pub struct LinearOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     // Tiling configurations
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
-    pub stride: Vec<usize>,
-    pub out_shape_tiled: Vec<usize>,
+    pub stride: Vec<usize>,             // Express the view information with strides
+    pub out_shape_tiled: Vec<usize>,    // stride and out_shape are both in terms of tiles
     pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     pub tile_row: usize,
     pub tile_col: usize,
@@ -30,7 +30,6 @@ pub struct DynOffChipLoad<E: LoggableEventSimple, T: DAMType, R: DAMType> {
     pub addr_offset: u64,    // The data received per request
     pub par_dispatch: usize,
     // Sender & Receiver (DAM details)
-    pub ref_rcv: Receiver<Elem<R>>,
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
@@ -41,11 +40,9 @@ pub struct DynOffChipLoad<E: LoggableEventSimple, T: DAMType, R: DAMType> {
 impl<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
         T: npyz::Deserialize + DAMType,
-        R: DAMType,
-    > DynOffChipLoad<E, T, R>
+    > LinearOffChipLoad<E, T>
 where
     Elem<Tile<T>>: DAMType,
-    Elem<R>: DAMType,
 {
     pub fn new(
         tensor_shape_tiled: Vec<usize>,
@@ -58,7 +55,6 @@ where
         base_addr_byte: u64,
         addr_offset: u64,
         par_dispatch: usize,
-        ref_rcv: Receiver<Elem<R>>,
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
@@ -91,6 +87,7 @@ where
             }
             None => None,
         };
+
         let ctx = Self {
             tensor_shape_tiled,
             stride,
@@ -102,7 +99,6 @@ where
             base_addr_byte,
             addr_offset,
             par_dispatch,
-            ref_rcv,
             addr_snd,
             resp_addr_rcv,
             on_chip_snd,
@@ -110,7 +106,6 @@ where
             context_info: Default::default(),
             _phantom: PhantomData,
         };
-        ctx.ref_rcv.attach_receiver(&ctx);
         ctx.addr_snd.attach_sender(&ctx);
         ctx.resp_addr_rcv.attach_receiver(&ctx);
         ctx.on_chip_snd.attach_sender(&ctx);
@@ -269,23 +264,39 @@ where
         addrs.into_iter()
     }
 
-    fn stream_tiles(&self, ref_stop_lev: Option<StopType>) {
+    pub fn on_chip_req_elems(&self) -> usize {
+        self.tile_row * self.tile_col
+    }
+
+    pub fn loaded_elems(&self) -> usize {
+        let total_tiles: usize = self.out_shape_tiled.iter().product();
+        total_tiles * self.tile_row * self.tile_col
+    }
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        T: npyz::Deserialize + DAMType,
+    > Context for LinearOffChipLoad<E, T>
+where
+    Elem<Tile<T>>: DAMType,
+{
+    fn run(&mut self) {
+        // Ensure stride and out_shape have the same length
+        assert_eq!(
+            self.stride.len(),
+            self.out_shape_tiled.len(),
+            "Stride and output shape must have the same number of dimensions"
+        );
+        // assert!(((self.tile_col * self.n_byte) as u64) % self.addr_offset == 0);
+
+        // println!("Started run of OFFHCIP LOAD");
+
         for addr_enum in self.generate_addr() {
             let (tile_addrs, elem_tile, is_stop) = match addr_enum {
                 HbmAddrEnum::ADDR(addrs, tile) => (addrs, Elem::Val(tile), false),
                 HbmAddrEnum::ADDRSTOP(addrs, tile, level) => {
-                    let final_stop_lev = match ref_stop_lev {
-                        Some(ref_stop) => {
-                            if level == self.out_shape_tiled.len() as u32 {
-                                // Last tile in the weight matrix
-                                ref_stop + level
-                            } else {
-                                level
-                            }
-                        }
-                        None => level,
-                    };
-                    (addrs, Elem::ValStop(tile, final_stop_lev), true)
+                    (addrs, Elem::ValStop(tile, level), true)
                 }
             };
 
@@ -317,7 +328,7 @@ where
             let read_finish_time = self.time.tick();
 
             dam::logging::log_event(&E::new(
-                "DynOffChipLoad".to_string(),
+                "LinearOffChipLoad".to_string(),
                 self.id,
                 send_request_time.time(),
                 read_finish_time.time(),
@@ -340,159 +351,162 @@ where
                 .unwrap();
         }
     }
-
-    pub fn on_chip_req_elems(&self) -> usize {
-        self.tile_row * self.tile_col
-    }
 }
 
-impl<
-        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
-        T: npyz::Deserialize + DAMType,
-        R: DAMType,
-    > Context for DynOffChipLoad<E, T, R>
-where
-    Elem<Tile<T>>: DAMType,
-    Elem<R>: DAMType,
-{
-    fn run(&mut self) {
-        loop {
-            match self.ref_rcv.dequeue(&self.time) {
-                Ok(ChannelElement {
-                    time: _,
-                    data: ref_elem,
-                }) => match ref_elem {
-                    Elem::Val(_) => {
-                        self.stream_tiles(None);
-                    }
-                    Elem::ValStop(_, s) => {
-                        self.stream_tiles(Some(s));
-                    }
-                },
-                Err(_) => return,
-            }
-        }
-    }
-}
+// Mongodb: logging for the time used to load each tile
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use dam::{
-        simulation::ProgramBuilder,
-        utility_contexts::{
-            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext, PrinterContext,
-        },
-    };
-    use frunk::labelled::chars::T;
-    use ndarray::{ArcArray, IxDyn};
-
-    use crate::{
-        memory::dyn_offchip_load::DynOffChipLoad,
-        operator::bufferize::Bufferize,
-        primitives::{
-            buffer::Buffer,
-            elem::{Elem, StopType},
-            select::MultiHotN,
-            tile::Tile,
-        },
-        ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle},
-        utils::events::{SimpleEvent, DUMMY_ID},
-    };
+mod test {
+    use super::HbmAddrEnum;
+    use crate::primitives::tile::Tile;
 
     #[test]
-    fn round_trip_test_4d() {
-        // matrix: [2,2]
-        // [2,3] (ref)
-        // output = [2,3,2,2]
-        type VT = u32;
+    fn test_generate_addr() {
+        /*
+        ADDR_OFFSET = (Channel Width) x (Burst Length) = 64 bytes
+        - Channel Width: 16 bytes/channel
+            - HBM2 standard (JEDEC HBM2 specification) defines each pseudo-channel width explicitly as 16 bytes/channel
+        - Burst Length: 4
+            - HBM2 standard (JEDEC HBM2 specification) specifies a burst length of 4 beats per DRAM access.
+         */
+        const ADDR_OFFSET: u64 = 64;
 
-        const BYTES_PER_ELEM: usize = 4;
-        const TILE_ROW: usize = 16;
-        const TILE_COL: usize = 16;
+        // Identity view (size 1 dim)
+        // let tensor_shape_tiled = [2, 1];
+        // let stride = vec![1, 1];
+        // let out_shape_tiled = vec![2, 1];
 
-        const ADDR_OFFSET: u64 = 64; // The number of bytes to read per request
+        // Identity view
+        // let tensor_shape_tiled = [2, 3];
+        // let stride = vec![3, 1];
+        // let out_shape_tiled = vec![2, 3];
 
-        let mut ctx = ProgramBuilder::default();
-        let (addr_snd, addr_rcv) = ctx.unbounded();
-        let (resp_snd, resp_rcv) = ctx.unbounded();
-        let (ref_snd, ref_rcv) = ctx.unbounded();
-        let (snd, rcv) = ctx.unbounded();
+        // 2D repeat view (size-1 dim)
+        // let tensor_shape_tiled = [2, 1];
+        // let stride = vec![0, 1, 1];
+        // let out_shape_tiled = vec![2, 2, 1];
 
-        let ref_arr = Arc::new(
-            ArcArray::from_vec(vec![MultiHotN::new(vec![true, false], false); 2 * 3])
-                .into_shape_with_order((2, 3))
-                .unwrap(),
-        );
-        let ref_buff = Buffer::new((*ref_arr).clone().into_dyn(), DUMMY_CREATION_TIME);
+        // 2D repeat view (size-1 dim)
+        const B: usize = 32;
+        const H: usize = 64;
 
-        let mut mem_context = HBMContext::new(
-            &mut ctx,
-            HBMConfig {
-                addr_offset: ADDR_OFFSET,
-                channel_num: 8,
-                per_channel_init_interval: 2,
-                per_channel_latency: 2,
-                per_channel_outstanding: 1,
-                per_channel_start_up_time: 14,
-            },
-        );
-        mem_context.add_reader(ReadBundle {
-            addr: addr_rcv,
-            resp: resp_snd,
-        });
+        let n_byte = 2;
 
-        ctx.add_child(mem_context);
+        let par_b = 16;
+        let tile_m_gen_q = par_b;
+        let tile_k_gen_q = H; // Same as the dimension's size as we don't tile this dim.
+        let tile_n_gen_q = 32;
 
-        ctx.add_child(GeneratorContext::new(
-            move || ref_buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
-            ref_snd,
-        ));
-        ctx.add_child(DynOffChipLoad::<SimpleEvent, VT, _>::new(
-            vec![2, 2],
-            vec![2, 1],
-            vec![2, 2],
-            None,
-            TILE_ROW,
-            TILE_COL,
-            BYTES_PER_ELEM,
-            0,
-            ADDR_OFFSET,
-            4,
-            ref_rcv,
-            addr_snd,
-            resp_rcv,
-            snd,
-            0,
-        ));
+        let tensor_shape_tiled = [H / tile_n_gen_q, H / tile_k_gen_q]; // As we don't tile K, the second element is 1
+        let stride = vec![0, H / tile_k_gen_q, 1];
+        let out_shape_tiled = vec![B / tile_m_gen_q, H / tile_n_gen_q, H / tile_k_gen_q];
+        // 2D repeat view
+        // let tensor_shape_tiled = [3, 2];
+        // let stride = vec![0, 2, 1];
+        // let out_shape_tiled = vec![2, 3, 2];
 
-        const READ_FROM_MU: bool = true;
-        const DUMMY_CREATION_TIME: u64 = 0;
-        let tile_vec =
-            vec![
-                Tile::<VT>::new_blank(vec![TILE_ROW, TILE_COL], BYTES_PER_ELEM, READ_FROM_MU);
-                2 * 3 * 2 * 2
-            ];
+        // 1D repeat view (size-1 dim)
+        // let tensor_shape_tiled = [2, 1];
+        // let stride = vec![1, 0, 1];
+        // let out_shape_tiled = vec![2, 2, 1];
 
-        // =============== Input [2,2] ================
-        // Create 2x2 Buffers (each are a buffer of 2x2 tiles)
-        let arr = Arc::new(
-            ArcArray::from_vec(tile_vec)
-                .into_shape_with_order((2, 3, 2, 2))
-                .unwrap(),
-        );
-        let buff = Buffer::new((*arr).clone().into_dyn(), DUMMY_CREATION_TIME);
+        // 1D repeat view
+        // let tensor_shape_tiled = [2, 3];
+        // let stride = vec![3, 0, 1];
+        // let out_shape_tiled = vec![2, 2, 3];
 
-        // =============== Output Stream [2,3,2,2] ================
-        ctx.add_child(ApproxCheckerContext::new(
-            move || buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
-            rcv,
-            |x, y| x == y,
-        ));
+        let tile_row = 16;
+        let tile_col = 32;
+        let n_byte = 2;
+        let base_addr_byte = 0;
 
-        ctx.initialize(Default::default())
-            .unwrap()
-            .run(Default::default());
+        let total_tiles: usize = out_shape_tiled.iter().product();
+
+        // Create a vector to hold all the addresses
+        let mut addrs: Vec<HbmAddrEnum<f32>> = vec![];
+
+        for flat_idx in 0..total_tiles {
+            // Convert flat index to multi-dimensional indices
+            let mut remaining = flat_idx;
+            let mut multi_index = vec![0; out_shape_tiled.len()];
+
+            // Calculate multi-dimensional indices
+            for i in (0..out_shape_tiled.len()).rev() {
+                multi_index[i] = remaining % out_shape_tiled[i];
+                remaining /= out_shape_tiled[i];
+            }
+
+            // Calculate the index in the original flat tensor using strides
+            let mut tile_idx = 0;
+            for (dim, &idx_in_dim) in multi_index.iter().enumerate() {
+                tile_idx += idx_in_dim * stride[dim];
+            }
+
+            // Ensure we don't go out of bounds of the original tensor
+            let original_size: usize = tensor_shape_tiled.iter().product();
+            if original_size > 0 {
+                tile_idx = tile_idx % original_size;
+            } else {
+                tile_idx = 0; // Handle empty tensor case
+            }
+            println!("tile_idx: {}", tile_idx);
+
+            // Generate addresses to fetch the given tile
+            let tile_offset = tile_row * tile_col * n_byte;
+            let base_addr_i = base_addr_byte + (tile_idx * tile_offset) as u64;
+            let row_offset = tensor_shape_tiled[1] * tile_col * n_byte;
+
+            // Generate all addresses for this tile
+            let mut tile_addrs = vec![];
+            for r in 0..tile_row {
+                for c in (0..(tile_col * n_byte)).step_by(ADDR_OFFSET as usize) {
+                    let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
+                    tile_addrs.push(addr);
+                }
+            }
+
+            // Determine the highest-dimensional stop token needed
+            let mut highest_stop_token: Option<u32> = None;
+            let mut all_inner_dims_at_end = true;
+
+            // Check from innermost to outermost
+            for dim in (0..out_shape_tiled.len()).rev() {
+                // If all inner dimensions are at their end, check this dimension
+                if all_inner_dims_at_end {
+                    let is_dim_size_one = out_shape_tiled[dim] == 1;
+                    let is_last_elem = multi_index[dim] == out_shape_tiled[dim] - 1;
+
+                    // If at end or dim size is 1, update the highest stop token
+                    if is_last_elem || is_dim_size_one {
+                        highest_stop_token = Some((out_shape_tiled.len() - dim) as u32);
+                    }
+
+                    // Update tracking for outer dimensions
+                    // Only continue checking outer dimensions if this one is at its last element
+                    all_inner_dims_at_end = is_last_elem;
+                }
+            }
+
+            // Add the addresses to the result list
+            if !tile_addrs.is_empty() {
+                if let Some(stop_type) = highest_stop_token {
+                    addrs.push(HbmAddrEnum::ADDRSTOP(
+                        tile_addrs,
+                        Tile::new_blank(vec![tile_row, tile_col], n_byte, true),
+                        stop_type,
+                    ));
+                } else {
+                    // No stop token, add all addresses normally
+                    addrs.push(HbmAddrEnum::ADDR(
+                        tile_addrs,
+                        Tile::new_blank(vec![tile_row, tile_col], n_byte, true),
+                    ));
+                }
+            }
+        }
+
+        for i in addrs.iter() {
+            println!("Addr: {:?}", i);
+        }
     }
 }
