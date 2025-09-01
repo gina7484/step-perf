@@ -1,8 +1,8 @@
 use serde_json;
 use std::marker::PhantomData;
 
+use dam::context_tools::*;
 use dam::logging::LogEvent;
-use dam::{context_tools::*, types::StaticallySized};
 use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
@@ -337,33 +337,18 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::HbmAddrEnum;
 
     use std::sync::Arc;
 
-    use dam::{
-        simulation::ProgramBuilder,
-        utility_contexts::{
-            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext, PrinterContext,
-        },
-    };
-    use frunk::labelled::chars::T;
-    use ndarray::{ArcArray, IxDyn};
+    use dam::{simulation::ProgramBuilder, utility_contexts::ApproxCheckerContext};
+
+    use ndarray::ArcArray;
 
     use crate::{
-        memory::{
-            dyn_linear_offchip_load::DynLinearOffChipLoad,
-            linear_offchip_load_ref::LinearOffChipLoadRef,
-        },
-        operator::bufferize::Bufferize,
-        primitives::{
-            buffer::Buffer,
-            elem::{Elem, StopType},
-            select::MultiHotN,
-            tile::Tile,
-        },
+        memory::dyn_linear_offchip_load::DynLinearOffChipLoad,
+        primitives::{buffer::Buffer, tile::Tile},
         ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle},
-        utils::events::{SimpleEvent, DUMMY_ID},
+        utils::events::SimpleEvent,
     };
 
     #[test]

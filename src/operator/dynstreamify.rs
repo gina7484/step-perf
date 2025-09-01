@@ -1,20 +1,13 @@
 use std::marker::PhantomData;
-use std::thread::panicking;
 
+use dam::context_tools::*;
 use dam::logging::LogEvent;
-use dam::{context_tools::*, types::StaticallySized};
-use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
 
 use crate::primitives::buffer::Buffer;
 use crate::primitives::elem::Bufferizable;
-use crate::{
-    primitives::elem::{Elem, StopType},
-    ramulator::access::MemoryData,
-};
+use crate::primitives::elem::{Elem, StopType};
 
 use crate::utils::events::LoggableEventSimple;
-
-use crate::primitives::tile::Tile;
 
 /// `bufferized_rank`: Rank of the buffers in in_stream <br/><br/>
 /// `repeat_rank`: The last (largest) rank that is expanded. <br/><br/>
@@ -119,7 +112,7 @@ where
                                 }
                             }
                         }
-                        Elem::ValStop(buff, outer_stop_lev) => {
+                        Elem::ValStop(buff, _outer_stop_lev) => {
                             loop {
                                 match self.ref_stream.dequeue(&self.time) {
                                     Ok(ChannelElement {
@@ -228,15 +221,12 @@ mod tests {
 
     use dam::{
         simulation::ProgramBuilder,
-        utility_contexts::{
-            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext, PrinterContext,
-        },
+        utility_contexts::{ApproxCheckerContext, GeneratorContext},
     };
-    use ndarray::{ArcArray, IxDyn};
+    use ndarray::ArcArray;
 
     use super::Buffer;
     use crate::{
-        operator::bufferize::Bufferize,
         primitives::{
             elem::{Elem, StopType},
             tile::Tile,

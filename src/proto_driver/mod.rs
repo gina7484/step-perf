@@ -3,6 +3,7 @@ pub mod proto_headers;
 
 use crate::functions;
 use crate::memory::dyn_linear_offchip_load::DynLinearOffChipLoad;
+use crate::memory::dyn_offchip_store::DynOffChipStore;
 use crate::memory::linear_offchip_load_ref::LinearOffChipLoadRef;
 use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
@@ -588,6 +589,51 @@ fn build_from_proto<'a>(
                         ));
 
                         mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    _ => todo!(),
+                }
+            }
+            OpType::DynOffChipStore(dyn_off_chip_store) => {
+                match dyn_off_chip_store
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let on_chip_rcv = channel_map_collection.tile_f32.get_receiver(
+                            dyn_off_chip_store.input_id,
+                            dyn_off_chip_store.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                dyn_off_chip_store.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(DynOffChipStore::<SimpleEvent, _>::new(
+                            dyn_off_chip_store.shape_path,
+                            dyn_off_chip_store.tile_row as usize,
+                            dyn_off_chip_store.tile_col as usize,
+                            dyn_off_chip_store.store_path,
+                            0,
+                            hbm_config.addr_offset,
+                            dyn_off_chip_store.par_dispatch as usize,
+                            on_chip_rcv,
+                            addr_snd,
+                            resp_rcv,
+                            operation.id,
+                        ));
+
+                        mem_context.add_writer(WriteBundle {
                             addr: addr_rcv,
                             resp: resp_snd,
                         });

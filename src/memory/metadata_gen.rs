@@ -1,5 +1,5 @@
 use crate::primitives::{elem::Elem, tile::Tile};
-use dam::{context_tools::*, types::DAMType};
+use dam::context_tools::*;
 
 use itertools::enumerate;
 use ndarray::{Array2, IntoDimension, IxDyn, IxDynImpl};
@@ -74,11 +74,6 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
             }
             return result;
         }
-
-        // Handle 2D and higher dimensional arrays
-        let total_elements = self.underlying.len();
-        let elements_per_row = shape[1..].iter().product::<usize>();
-        let num_rows = shape[0];
 
         for (i, val) in self.underlying.iter().enumerate() {
             // Convert flat index to multi-dimensional indices
@@ -167,7 +162,7 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> C
 mod test {
     use dam::{
         simulation::ProgramBuilder,
-        utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext},
+        utility_contexts::PrinterContext,
     };
 
     use crate::primitives::{elem::Elem, tile::Tile};

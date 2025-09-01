@@ -1,4 +1,5 @@
 pub mod dyn_linear_offchip_load;
+pub mod dyn_offchip_store;
 pub mod linear_offchip_load;
 pub mod linear_offchip_load_ref;
 pub mod metadata_gen;

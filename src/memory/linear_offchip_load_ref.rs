@@ -1,15 +1,12 @@
 use std::marker::PhantomData;
 
+use dam::context_tools::*;
 use dam::logging::LogEvent;
-use dam::{context_tools::*, types::StaticallySized};
 use itertools::Itertools;
-use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
+use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
+use crate::primitives::elem::{Elem, StopType};
 use crate::ramulator::hbm_context::ParAddrs;
-use crate::{
-    primitives::elem::{Elem, StopType},
-    ramulator::access::MemoryData,
-};
 
 use crate::memory::HbmAddrEnum;
 use crate::primitives::tile::Tile;
@@ -381,24 +378,15 @@ mod tests {
 
     use dam::{
         simulation::ProgramBuilder,
-        utility_contexts::{
-            ApproxCheckerContext, CheckerContext, FunctionContext, GeneratorContext, PrinterContext,
-        },
+        utility_contexts::{ApproxCheckerContext, GeneratorContext},
     };
-    use frunk::labelled::chars::T;
-    use ndarray::{ArcArray, IxDyn};
+    use ndarray::ArcArray;
 
     use crate::{
         memory::linear_offchip_load_ref::LinearOffChipLoadRef,
-        operator::bufferize::Bufferize,
-        primitives::{
-            buffer::Buffer,
-            elem::{Elem, StopType},
-            select::MultiHotN,
-            tile::Tile,
-        },
+        primitives::{buffer::Buffer, select::MultiHotN, tile::Tile},
         ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle},
-        utils::events::{SimpleEvent, DUMMY_ID},
+        utils::events::SimpleEvent,
     };
 
     #[test]

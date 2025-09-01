@@ -1,15 +1,12 @@
 use std::marker::PhantomData;
 
+use dam::context_tools::*;
 use dam::logging::LogEvent;
-use dam::{context_tools::*, types::StaticallySized};
 use itertools::Itertools;
-use ndarray::{IntoDimension, Ix2, IxDyn, IxDynImpl};
+use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
+use crate::primitives::elem::Elem;
 use crate::ramulator::hbm_context::ParAddrs;
-use crate::{
-    primitives::elem::{Elem, StopType},
-    ramulator::access::MemoryData,
-};
 
 use crate::memory::HbmAddrEnum;
 use crate::primitives::tile::Tile;
@@ -389,8 +386,6 @@ mod test {
         // 2D repeat view (size-1 dim)
         const B: usize = 32;
         const H: usize = 64;
-
-        let n_byte = 2;
 
         let par_b = 16;
         let tile_m_gen_q = par_b;
