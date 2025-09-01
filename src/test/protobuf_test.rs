@@ -1,34 +1,13 @@
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-    use std::fs;
-    use std::io::repeat;
-    use std::sync::Arc;
-
-    use crate::functions;
     use crate::proto_driver::configs::SimConfig;
     use crate::proto_driver::parse_proto;
-    use dam::dam_macros::event_type;
-    use dam::simulation::{
-        DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
-        RunOptionsBuilder,
-    };
-    use frunk::labelled::chars::V;
     use prost::Message;
-    use pyo3::exceptions::PyTypeError;
-    use pyo3::prelude::*;
-    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+    use std::fs;
 
-    use crate::build_sim::channel::ChannelMapCollection;
-    use crate::memory::linear_offchip_load::LinearOffChipLoad;
-    use crate::memory::offchip_store::OffChipStore;
-    use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
-    use crate::primitives::tile::Tile;
-    use crate::proto_driver::proto_headers::graph_proto::{
-        data_type::Type, elemto_elem_func, operation::OpType, ProgramGraph,
-    };
-    use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
-    use crate::utils::{cast::to_usize_vec, events::SimpleEvent};
+    use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
+    use crate::ramulator::hbm_context::HBMConfig;
 
     #[test]
     fn run_graph() {
