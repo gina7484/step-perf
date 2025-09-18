@@ -34,6 +34,7 @@ prost = "0.13.5"
 protobuf = "3.7.2"
 itertools = "0.14.0"
 num-traits = "0.2.19"
+symbolica = "0.16.0"
 
 [build-dependencies]
 prost-build = "0.11"
