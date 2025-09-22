@@ -2244,13 +2244,13 @@ fn build_from_proto<'a>(
                         );
                         let mask_snd = channel_map_collection.tile_bool.get_sender(
                             operation.id,
-                            None,
+                            Some(1),
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
-                            None,
+                            Some(0),
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
