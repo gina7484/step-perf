@@ -1,5 +1,9 @@
-use crate::primitives::elem::{Elem, StopType};
+use crate::primitives::{
+    elem::{Elem, StopType},
+    tile::Tile,
+};
 use dam::context_tools::*;
+use ndarray::Array2;
 
 #[context_macro]
 pub struct Reshape<InputType: Clone> {
@@ -208,6 +212,329 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                                         ChannelElement {
                                             time: self.time.tick(),
                                             data: Elem::ValStop(x.clone(), s),
+                                        },
+                                    )
+                                    .unwrap();
+                            };
+                        }
+                    },
+                    Err(_) => return,
+                }
+            }
+        }
+    }
+}
+
+#[context_macro]
+pub struct ReshapePadStream<InputType: Clone> {
+    in_stream: Receiver<Elem<InputType>>,
+    out_stream: Sender<Elem<InputType>>,
+    mask_stream: Sender<Elem<Tile<bool>>>,
+    split_dim: usize,
+    chunk_size: usize,
+    pad_val: Option<InputType>,
+    input_stream_rank: StopType,
+    add_outer_dim: bool,
+    id: u32,
+}
+
+impl<InputType: DAMType> ReshapePadStream<InputType>
+where
+    Self: Context,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<InputType>>,
+        out_stream: Sender<Elem<InputType>>,
+        mask_stream: Sender<Elem<Tile<bool>>>,
+        split_dim: usize,
+        chunk_size: usize,
+        pad_val: Option<InputType>,
+        input_stream_rank: StopType,
+        add_outer_dim: bool,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            mask_stream,
+            split_dim,
+            chunk_size,
+            pad_val,
+            input_stream_rank,
+            add_outer_dim,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+        ctx.mask_stream.attach_sender(&ctx);
+        ctx
+    }
+
+    pub fn true_tile() -> Tile<bool> {
+        Tile::<bool>::new(Array2::from(vec![[true]]).to_shared(), 1, false)
+    }
+
+    pub fn false_tile() -> Tile<bool> {
+        Tile::<bool>::new(Array2::from(vec![[false]]).to_shared(), 1, false)
+    }
+}
+
+impl<InputType: DAMType> Context for ReshapePadStream<InputType> {
+    fn run(&mut self) {
+        if self.split_dim == 0 {
+            let mut counter = 0;
+            loop {
+                match self.in_stream.dequeue(&self.time) {
+                    Ok(ChannelElement { time: _, data }) => match data {
+                        Elem::Val(x) => {
+                            counter += 1;
+
+                            let (output_elem, pad_elem) = if counter == self.chunk_size {
+                                counter = 0;
+                                if self.add_outer_dim {
+                                    let stop_level = match self.in_stream.peek_next(&self.time) {
+                                        Ok(ChannelElement { time: _, data: _ }) => 1,
+                                        Err(_) => 2,
+                                    };
+                                    (
+                                        Elem::ValStop(x.clone(), stop_level),
+                                        Elem::ValStop(Self::true_tile(), stop_level),
+                                    )
+                                } else {
+                                    (
+                                        Elem::ValStop(x.clone(), 1),
+                                        Elem::ValStop(Self::true_tile(), 1),
+                                    )
+                                }
+                            } else {
+                                (Elem::Val(x.clone()), Elem::Val(Self::true_tile()))
+                            };
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: output_elem,
+                                    },
+                                )
+                                .unwrap();
+                            self.mask_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: pad_elem,
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        Elem::ValStop(x, s) => {
+                            counter += 1;
+                            if counter == self.chunk_size {
+                                counter = 0;
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(x.clone(), s + 1),
+                                        },
+                                    )
+                                    .unwrap();
+                                self.mask_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(Self::true_tile(), s + 1),
+                                        },
+                                    )
+                                    .unwrap();
+                            } else {
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::Val(x.clone()),
+                                        },
+                                    )
+                                    .unwrap();
+                                self.mask_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::Val(Self::true_tile()),
+                                        },
+                                    )
+                                    .unwrap();
+
+                                assert!(
+                                    self.pad_val.is_some(),
+                                    "When splitting the innermost dimension, \
+                                    we pad if the dimension is not exactly divisible by the chunk size. \
+                                    Therefore, the pad_val must be provided."
+                                );
+
+                                // pad so that the dimension is divisible by the chunk size
+                                for i in 0..self.chunk_size - counter {
+                                    let (padded_val, pad_stream_elem) =
+                                        if i == self.chunk_size - counter - 1 {
+                                            (
+                                                Elem::ValStop(self.pad_val.clone().unwrap(), s + 1),
+                                                Elem::ValStop(Self::false_tile(), s + 1),
+                                            )
+                                        } else {
+                                            (
+                                                Elem::Val(self.pad_val.clone().unwrap()),
+                                                Elem::Val(Self::false_tile()),
+                                            )
+                                        };
+
+                                    self.out_stream
+                                        .enqueue(
+                                            &self.time,
+                                            ChannelElement {
+                                                time: self.time.tick(),
+                                                data: padded_val,
+                                            },
+                                        )
+                                        .unwrap();
+                                    self.mask_stream
+                                        .enqueue(
+                                            &self.time,
+                                            ChannelElement {
+                                                time: self.time.tick(),
+                                                data: pad_stream_elem,
+                                            },
+                                        )
+                                        .unwrap();
+                                }
+                                counter = 0;
+                            };
+                        }
+                    },
+                    Err(_) => {
+                        if 0 < counter && counter < self.chunk_size {
+                            // use this as if we got a done token
+                            assert!(
+                                self.pad_val.is_some(),
+                                "When splitting the innermost dimension, \
+                                we pad if the dimension is not exactly divisible by the chunk size. \
+                                Therefore, the pad_val must be provided."
+                            );
+                            assert!(
+                                self.input_stream_rank == 0,
+                                "input stream rank should be 0 to enter here"
+                            );
+                            // pad so that the dimension is divisible by the chunk size
+                            for i in 0..self.chunk_size - counter {
+                                let is_last = i == self.chunk_size - counter - 1;
+                                let (padded_val, pad_stream_elem) = if is_last {
+                                    let stop_lev = if self.add_outer_dim { 2 } else { 1 };
+                                    (
+                                        Elem::ValStop(self.pad_val.clone().unwrap(), stop_lev),
+                                        Elem::ValStop(Self::false_tile(), stop_lev),
+                                    )
+                                } else {
+                                    (
+                                        Elem::Val(self.pad_val.clone().unwrap()),
+                                        Elem::Val(Self::false_tile()),
+                                    )
+                                };
+
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: padded_val,
+                                        },
+                                    )
+                                    .unwrap();
+                                self.mask_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: pad_stream_elem,
+                                        },
+                                    )
+                                    .unwrap();
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        } else {
+            let mut counter = 0;
+            loop {
+                match self.in_stream.dequeue(&self.time) {
+                    Ok(ChannelElement { time: _, data }) => match data {
+                        Elem::Val(x) => {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::Val(x.clone()),
+                                    },
+                                )
+                                .unwrap();
+                            self.mask_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::Val(Self::true_tile()),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        Elem::ValStop(x, s) => {
+                            if s >= self.split_dim as StopType {
+                                counter += 1;
+                            }
+                            if counter == self.chunk_size {
+                                counter = 0;
+
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(x.clone(), s + 1),
+                                        },
+                                    )
+                                    .unwrap();
+                                self.mask_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(Self::true_tile(), s + 1),
+                                        },
+                                    )
+                                    .unwrap();
+                            } else {
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(x.clone(), s),
+                                        },
+                                    )
+                                    .unwrap();
+                                self.mask_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(Self::true_tile(), s),
                                         },
                                     )
                                     .unwrap();

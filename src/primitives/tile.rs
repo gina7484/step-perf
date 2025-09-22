@@ -40,7 +40,7 @@ impl<T> Bufferizable for Tile<T> {
         }
     }
 }
-impl<T> Tile<T> {
+impl<T: Clone> Tile<T> {
     /// This creates a tile with no underlying data
     pub fn new_blank(shape: Vec<usize>, bytes_per_elem: usize, read_from_mu: bool) -> Self {
         Self {
@@ -52,7 +52,7 @@ impl<T> Tile<T> {
         }
     }
     pub fn new(arr: ndarray::ArcArray2<T>, bytes_per_elem: usize, read_from_mu: bool) -> Self {
-        let rows = arr.shape().clone().to_vec()[0];
+        let rows = arr.shape().to_vec()[0];
         Self {
             shape: arr.shape().to_vec(),
             bytes_per_elem: bytes_per_elem,
@@ -93,6 +93,25 @@ impl<T> Tile<T> {
             offset: offset,
         }
     }
+
+    /// This is used for the accumulator in the retile_col or retile_row function.
+    /// It contains an 0-sized dimension.
+    /// * Tile Shape: arr_shape (should contain 0-sized dimension)
+    /// * Tile content: [] (empty array)
+    /// * Offset: arr_shape[0]
+    pub fn new_empty(arr_shape: [usize; 2], bytes_per_elem: usize, read_from_mu: bool) -> Self {
+        Self {
+            shape: arr_shape.to_vec(),
+            bytes_per_elem: bytes_per_elem,
+            read_from_mu: read_from_mu,
+            underlying: Some(
+                Array2::from_shape_vec((arr_shape[0], arr_shape[1]), vec![])
+                    .unwrap()
+                    .to_shared(),
+            ),
+            offset: arr_shape[0],
+        }
+    }
 }
 
 // Functions to initialize tiles
@@ -127,25 +146,6 @@ impl<T: Clone + num::Zero> Tile<T> {
             read_from_mu: read_from_mu,
             underlying: Some(ndarray::ArcArray2::zeros(arr_shape)),
             offset: offset,
-        }
-    }
-
-    /// This is used for the accumulator in the retile_col or retile_row function.
-    /// It contains an 0-sized dimension.
-    /// * Tile Shape: arr_shape (should contain 0-sized dimension)
-    /// * Tile content: [] (empty array)
-    /// * Offset: arr_shape[0]
-    pub fn new_empty(arr_shape: [usize; 2], bytes_per_elem: usize, read_from_mu: bool) -> Self {
-        Self {
-            shape: arr_shape.to_vec(),
-            bytes_per_elem: bytes_per_elem,
-            read_from_mu: read_from_mu,
-            underlying: Some(
-                Array2::from_shape_vec((arr_shape[0], arr_shape[1]), vec![])
-                    .unwrap()
-                    .to_shared(),
-            ),
-            offset: arr_shape[0],
         }
     }
 }

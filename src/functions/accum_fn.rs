@@ -110,7 +110,7 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
-pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
+pub fn retile_col<T: Debug + Clone>(
     in_data: &Tile<T>,
     accumulator: &Tile<T>,
     flop_per_cycle: u64,
@@ -135,7 +135,7 @@ pub fn retile_col<T: Debug + ndarray::LinalgScalar>(
     )
 }
 
-pub fn retile_row<T: Debug + ndarray::LinalgScalar>(
+pub fn retile_row<T: Debug + Clone>(
     in_data: &Tile<T>,
     accumulator: &Tile<T>,
     flop_per_cycle: u64,
