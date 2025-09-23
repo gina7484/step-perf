@@ -24,7 +24,7 @@ use crate::operator::flatten::Flatten;
 use crate::operator::map::{UnaryMap, UnaryMapConfig};
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
-use crate::operator::promote::Promote;
+use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::{Reshape, ReshapePadStream};
 use crate::operator::streamify::Streamify;
@@ -1389,6 +1389,30 @@ fn build_from_proto<'a>(
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
+                    }
+                    _ => panic!("Unsupported data type"),
+                }
+            }
+            OpType::PromoteOuter(promote_outer) => {
+                match promote_outer.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(f32) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            promote_outer.input_id,
+                            promote_outer.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                promote_outer.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(PromoteOuter::new(rcv, snd));
                     }
                     _ => panic!("Unsupported data type"),
                 }
