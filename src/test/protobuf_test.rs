@@ -1,3 +1,11 @@
+use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
+
+pub fn print_proto(step_graph: ProgramGraph) {
+    for operation in step_graph.operators {
+        println!("processing {:?}\n", operation);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::proto_driver::configs::SimConfig;
@@ -6,8 +14,20 @@ mod test {
     use std::collections::HashMap;
     use std::fs;
 
+    use super::print_proto;
+
     use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
     use crate::ramulator::hbm_context::HBMConfig;
+
+    #[test]
+    fn test_print_proto() {
+        let proto = "graph.pb";
+        let step_graph: ProgramGraph = {
+            let file_contents = fs::read(proto).unwrap();
+            ProgramGraph::decode(file_contents.as_slice()).unwrap()
+        };
+        print_proto(step_graph);
+    }
 
     #[test]
     fn run_graph() {
