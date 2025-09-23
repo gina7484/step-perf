@@ -108,9 +108,9 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
 
                                 assert!(
                                     self.pad_val.is_some(),
-                                    "When splitting the innermost dimension, \
+                                    "[Reshape_{}] When splitting the innermost dimension, \
                                     we pad if the dimension is not exactly divisible by the chunk size. \
-                                    Therefore, the pad_val must be provided."
+                                    Therefore, the pad_val must be provided.",self.id
                                 );
 
                                 // pad so that the dimension is divisible by the chunk size
@@ -140,9 +140,9 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
                             // use this as if we got a done token
                             assert!(
                                 self.pad_val.is_some(),
-                                "When splitting the innermost dimension, \
+                                "[Reshape_{}] When splitting the innermost dimension, \
                                 we pad if the dimension is not exactly divisible by the chunk size. \
-                                Therefore, the pad_val must be provided."
+                                Therefore, the pad_val must be provided.",self.id
                             );
                             assert!(
                                 self.input_stream_rank == 0,
@@ -373,9 +373,9 @@ impl<InputType: DAMType> Context for ReshapePadStream<InputType> {
 
                                 assert!(
                                     self.pad_val.is_some(),
-                                    "When splitting the innermost dimension, \
+                                    "[Reshape_{}] When splitting the innermost dimension, \
                                     we pad if the dimension is not exactly divisible by the chunk size. \
-                                    Therefore, the pad_val must be provided."
+                                    Therefore, the pad_val must be provided.",self.id
                                 );
 
                                 // pad so that the dimension is divisible by the chunk size
@@ -554,9 +554,7 @@ mod tests {
 
     use dam::{
         simulation::ProgramBuilder,
-        utility_contexts::{
-            ApproxCheckerContext, CheckerContext, GeneratorContext, PrinterContext,
-        },
+        utility_contexts::{ApproxCheckerContext, GeneratorContext},
     };
     use ndarray::ArcArray;
 
@@ -877,10 +875,6 @@ mod tests {
             READ_FROM_MU,
             0,
         ));
-        let val_stop_tile_pad = Elem::ValStop(
-            Tile::<VT>::new_blank_padded(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU, 0),
-            1,
-        );
         let val_stop_tile_pad_last = Elem::ValStop(
             Tile::<VT>::new_blank_padded(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU, 0),
             2,

@@ -2,6 +2,88 @@ use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
 
 #[context_macro]
+pub struct PromoteOuter<T: DAMType> {
+    in_stream: Receiver<Elem<T>>,
+    out_stream: Sender<Elem<T>>,
+}
+
+impl<T: DAMType> PromoteOuter<T>
+where
+    Self: Context,
+{
+    pub fn new(in_stream: Receiver<Elem<T>>, out_stream: Sender<Elem<T>>) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+        ctx
+    }
+}
+
+impl<T: DAMType> Context for PromoteOuter<T> {
+    fn run(&mut self) {
+        loop {
+            match self.in_stream.dequeue(&self.time) {
+                Ok(ChannelElement { time: _, data }) => match data {
+                    Elem::Val(x) => match self.in_stream.peek_next(&self.time) {
+                        Ok(ChannelElement { time: _, data: _ }) => {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::Val(x.clone()),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        Err(_) => {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::ValStop(x.clone(), 1),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    },
+                    Elem::ValStop(x, s) => match self.in_stream.peek_next(&self.time) {
+                        Ok(ChannelElement { time: _, data: _ }) => {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::ValStop(x.clone(), s),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                        Err(_) => {
+                            self.out_stream
+                                .enqueue(
+                                    &self.time,
+                                    ChannelElement {
+                                        time: self.time.tick(),
+                                        data: Elem::ValStop(x.clone(), s + 1),
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    },
+                },
+                Err(_) => return,
+            }
+        }
+    }
+}
+
+#[context_macro]
 pub struct Promote<T: DAMType> {
     in_stream: Receiver<Elem<T>>,
     out_stream: Sender<Elem<T>>,
@@ -85,7 +167,7 @@ mod tests {
 
     use crate::primitives::elem::Elem;
 
-    use super::Promote;
+    use super::{Promote, PromoteOuter};
 
     #[test]
     fn promote_2d() {
@@ -176,6 +258,52 @@ mod tests {
             |x, y| x == y,
         ));
         ctx.add_child(Promote::new(in_rcv, out_snd, 0));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn promote_1d_outer() {
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        ctx.add_child(GeneratorContext::new(
+            || vec![Elem::Val(0), Elem::Val(1), Elem::ValStop(2, 1)].into_iter(),
+            in_snd,
+        ));
+        ctx.add_child(ApproxCheckerContext::new(
+            || vec![Elem::Val(0), Elem::Val(1), Elem::ValStop(2, 2)].into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+        ctx.add_child(PromoteOuter::new(in_rcv, out_snd));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn promote_0d_outer() {
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        ctx.add_child(GeneratorContext::new(
+            || vec![Elem::Val(0), Elem::Val(1), Elem::Val(2)].into_iter(),
+            in_snd,
+        ));
+        ctx.add_child(ApproxCheckerContext::new(
+            || vec![Elem::Val(0), Elem::Val(1), Elem::ValStop(2, 1)].into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+        ctx.add_child(PromoteOuter::new(in_rcv, out_snd));
 
         ctx.initialize(Default::default())
             .unwrap()
