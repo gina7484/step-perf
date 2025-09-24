@@ -1414,6 +1414,25 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(PromoteOuter::new(rcv, snd));
                     }
+                    Type::Bool(_) => {
+                        let rcv = channel_map_collection.tile_bool.get_receiver(
+                            promote_outer.input_id,
+                            promote_outer.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                promote_outer.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_bool.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(PromoteOuter::new(rcv, snd));
+                    }
                     _ => panic!("Unsupported data type"),
                 }
             }
@@ -1709,6 +1728,30 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(Flatten::new(
+                            rcv,
+                            snd,
+                            flatten.min_rank,
+                            flatten.max_rank,
+                        ));
+                    }
+                    Type::Bool(_) => {
+                        let rcv = channel_map_collection.tile_bool.get_receiver(
+                            flatten.input_id,
+                            flatten.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flatten.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_bool.get_sender(
                             operation.id,
                             None,
                             builder,
