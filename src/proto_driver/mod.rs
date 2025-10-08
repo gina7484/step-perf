@@ -26,7 +26,7 @@ use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
-use crate::operator::reshape::{Reshape, ReshapePadStream};
+use crate::operator::reshape::{Reshape, ReshapeNoPadStream, ReshapePadStream};
 use crate::operator::streamify::Streamify;
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
@@ -2309,19 +2309,7 @@ fn build_from_proto<'a>(
                                 channel_depth,
                             ),
                         );
-                        let mask_snd = channel_map_collection.tile_bool.get_sender(
-                            operation.id,
-                            Some(1),
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        let snd = channel_map_collection.tile_f32.get_sender(
-                            operation.id,
-                            Some(0),
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        match reshape.pad_func {
+                        let padding_value = match reshape.pad_func {
                             Some(pad_func) => {
                                 let tile_row = reshape.tile_row.unwrap() as usize;
                                 let tile_col = reshape.tile_col.unwrap() as usize;
@@ -2346,26 +2334,62 @@ fn build_from_proto<'a>(
                                     }
                                     _ => todo!(),
                                 };
+                                Some(pad_val)
+                            }
+                            None => None,
+                        };
+                        match reshape.have_pad_stream {
+                            true => {
+                                let mask_snd = channel_map_collection.tile_bool.get_sender(
+                                    operation.id,
+                                    Some(1),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+                                let snd = channel_map_collection.tile_f32.get_sender(
+                                    operation.id,
+                                    Some(0),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+
                                 builder.add_child(ReshapePadStream::new(
                                     rcv,
                                     snd,
                                     mask_snd,
                                     reshape.split_dim as usize,
                                     reshape.chunk_size as usize,
-                                    Some(pad_val),
+                                    padding_value,
                                     reshape.input_stream_rank,
                                     false,
                                     operation.id,
                                 ));
                             }
-                            None => {
-                                builder.add_child(ReshapePadStream::new(
+                            false => {
+                                let snd = channel_map_collection.tile_f32.get_sender(
+                                    operation.id,
+                                    None,
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+                                builder.add_child(ReshapeNoPadStream::new(
                                     rcv,
                                     snd,
-                                    mask_snd,
                                     reshape.split_dim as usize,
                                     reshape.chunk_size as usize,
-                                    None,
+                                    padding_value,
                                     reshape.input_stream_rank,
                                     false,
                                     operation.id,

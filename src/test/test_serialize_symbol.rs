@@ -26,9 +26,11 @@ mod test {
 
         // Method 2: Parse existing expression and add new terms
         // let parsed_expr = parse!("x^2 + 2*x*y + y^2").unwrap();
-        let parsed_expr = parse!("floor(s0/16 + 15/16)").unwrap();
-        let new_term = &z_atom * &z_atom; // z^2
-        let modified_expr = &parsed_expr + &new_term;
+        // let parsed_expr: Atom = parse!("floor(s0/16 + 15/16)").unwrap();
+        let string_expr = "floor(s0/16 + 15/16)".to_string();
+        let parsed_expr: Atom = parse!(&string_expr).unwrap();
+        let new_term: Atom = &z_atom * &z_atom; // z^2
+        let modified_expr: Atom = &parsed_expr + &new_term;
 
         println!("Modified expression: {}", modified_expr);
     }
