@@ -186,6 +186,110 @@ where
     }
 }
 
+#[context_macro]
+pub struct FlatmapCounter<T: Clone> {
+    in_stream: Receiver<Elem<Tile<T>>>, // tile shape: [1,1]
+    out_stream: Sender<Elem<Tile<T>>>,  // tile shape: [1,1]
+    id: u32,
+}
+
+impl<T: Clone + TryInto<usize> + TryFrom<usize>> FlatmapCounter<T>
+where
+    Tile<T>: DAMType,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<Tile<T>>>,
+        out_stream: Sender<Elem<Tile<T>>>,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+
+    pub fn gen_stream(&self, scalar_tile: Tile<T>, stop_level: Option<u32>) {
+        let tile_value = &scalar_tile.underlying.as_ref().unwrap()[[0, 0]];
+        let data_usize: usize = tile_value.clone().try_into().unwrap_or_else(|_| {
+            panic!(
+                "[Counter {}] Failed to convert tile value to usize",
+                self.id
+            );
+        });
+        for i in 0..data_usize - 1 {
+            let t_value = <T>::try_from(i).unwrap_or_else(|_| {
+                panic!("[Counter {}] Failed to convert index to T", self.id);
+            });
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: Elem::Val(Tile::<T>::new(
+                            ndarray::arr2(&[[t_value]]).into_shared(),
+                            scalar_tile.bytes_per_elem,
+                            scalar_tile.read_from_mu,
+                        )),
+                    },
+                )
+                .unwrap();
+        }
+
+        let t_value = <T>::try_from(data_usize - 1).unwrap_or_else(|_| {
+            panic!("[Counter {}] Failed to convert index to T", self.id);
+        });
+        let stop_level = if stop_level.is_none() {
+            1
+        } else {
+            stop_level.unwrap() + 1
+        };
+        self.out_stream
+            .enqueue(
+                &self.time,
+                ChannelElement {
+                    time: self.time.tick(),
+                    data: Elem::ValStop(
+                        Tile::<T>::new(
+                            ndarray::arr2(&[[t_value]]).into_shared(),
+                            scalar_tile.bytes_per_elem,
+                            scalar_tile.read_from_mu,
+                        ),
+                        stop_level,
+                    ),
+                },
+            )
+            .unwrap();
+    }
+}
+
+impl<T: Clone + TryInto<usize> + TryFrom<usize>> Context for FlatmapCounter<T>
+where
+    Tile<T>: DAMType,
+{
+    fn run(&mut self) {
+        loop {
+            match self.in_stream.dequeue(&self.time) {
+                Ok(ChannelElement {
+                    time: _,
+                    data: data_enum,
+                }) => match data_enum {
+                    Elem::Val(data) => self.gen_stream(data, None),
+                    Elem::ValStop(data, s) => self.gen_stream(data, Some(s)),
+                },
+                Err(_) => {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -196,8 +300,8 @@ mod tests {
     };
     use ndarray::ArcArray;
 
-    use super::FlatmapFilterRowStreamify;
-    use crate::primitives::{buffer::Buffer, tile::Tile};
+    use super::{FlatmapCounter, FlatmapFilterRowStreamify};
+    use crate::primitives::{buffer::Buffer, elem::Elem, tile::Tile};
     use crate::{functions::accum_fn::retile_row, operator::accum::AccumConfig};
     use crate::{
         operator::{accum::Accum, reshape::ReshapePadStream},
@@ -350,6 +454,168 @@ mod tests {
             |x, y| x == y,
         ));
         // ctx.add_child(PrinterContext::new(out_rcv));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flatmap_counter_test() {
+        // Test that FlatmapCounter generates a sequence from 0 to N-1
+        // when given a scalar tile with value N
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+        const READ_FROM_MU: bool = false;
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // Test with count = 5, should generate 0, 1, 2, 3, 4
+        let count: u32 = 5;
+        ctx.add_child(GeneratorContext::new(
+            move || {
+                vec![Elem::ValStop(
+                    Tile::<VT>::new(
+                        ndarray::arr2(&[[count]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    ),
+                    0,
+                )]
+                .into_iter()
+            },
+            in_snd,
+        ));
+
+        ctx.add_child(FlatmapCounter::new(in_rcv, out_snd, 0));
+
+        // Expected output: 0, 1, 2, 3, 4 (last one with ValStop(1))
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                (0..count)
+                    .map(|i| {
+                        let tile = Tile::<VT>::new(
+                            ndarray::arr2(&[[i]]).into_shared(),
+                            BYTES_PER_ELEM,
+                            READ_FROM_MU,
+                        );
+                        if i == count - 1 {
+                            Elem::ValStop(tile, 1)
+                        } else {
+                            Elem::Val(tile)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flatmap_counter_multiple_inputs_test() {
+        // Test that FlatmapCounter correctly handles multiple input tiles
+        // and propagates stop levels correctly
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+        const READ_FROM_MU: bool = false;
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // Send multiple count values: 3, 2, 4
+        ctx.add_child(GeneratorContext::new(
+            move || {
+                vec![
+                    Elem::Val(Tile::<VT>::new(
+                        ndarray::arr2(&[[3u32]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    )),
+                    Elem::Val(Tile::<VT>::new(
+                        ndarray::arr2(&[[2u32]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    )),
+                    Elem::ValStop(
+                        Tile::<VT>::new(
+                            ndarray::arr2(&[[4u32]]).into_shared(),
+                            BYTES_PER_ELEM,
+                            READ_FROM_MU,
+                        ),
+                        0,
+                    ),
+                ]
+                .into_iter()
+            },
+            in_snd,
+        ));
+
+        ctx.add_child(FlatmapCounter::new(in_rcv, out_snd, 0));
+
+        // Expected output:
+        // From first input (3): 0, 1, 2 (last with stop_level=1)
+        // From second input (2): 0, 1 (last with stop_level=1)
+        // From third input (4): 0, 1, 2, 3 (last with stop_level=1)
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                let mut expected = vec![];
+
+                // First input (count=3): generates 0, 1, 2
+                for i in 0..3 {
+                    let tile = Tile::<VT>::new(
+                        ndarray::arr2(&[[i]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    );
+                    if i == 2 {
+                        expected.push(Elem::ValStop(tile, 1));
+                    } else {
+                        expected.push(Elem::Val(tile));
+                    }
+                }
+
+                // Second input (count=2): generates 0, 1
+                for i in 0..2 {
+                    let tile = Tile::<VT>::new(
+                        ndarray::arr2(&[[i]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    );
+                    if i == 1 {
+                        expected.push(Elem::ValStop(tile, 1));
+                    } else {
+                        expected.push(Elem::Val(tile));
+                    }
+                }
+
+                // Third input (count=4, with stop_level=0): generates 0, 1, 2, 3
+                for i in 0..4 {
+                    let tile = Tile::<VT>::new(
+                        ndarray::arr2(&[[i]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    );
+                    if i == 3 {
+                        expected.push(Elem::ValStop(tile, 1));
+                    } else {
+                        expected.push(Elem::Val(tile));
+                    }
+                }
+
+                expected.into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
 
         ctx.initialize(Default::default())
             .unwrap()
