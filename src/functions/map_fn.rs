@@ -1,5 +1,6 @@
 use ndarray::Array2;
 
+use crate::primitives::select::MultiHotN;
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 
@@ -399,6 +400,44 @@ pub fn set_offset<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
+pub fn mask_row<
+    T: Debug + Default + Clone + TryInto<usize>,
+    D: num_traits::Float + Debug + Default + Clone,
+>(
+    in_data: &Tile<T>,
+    write_back_mu: bool,
+    row: usize,
+    col: usize,
+) -> (u64, Tile<D>) {
+    assert_eq!(in_data.shape, vec![1, 1]);
+
+    // Extract the index value from in_data
+    let i = match &in_data.underlying {
+        Some(arr) => {
+            let val = arr[[0, 0]].clone();
+            val.try_into()
+                .unwrap_or_else(|_| panic!("Failed to convert value to usize"))
+        }
+        None => panic!("in_data must have underlying data"),
+    };
+
+    // Create a zero-filled array of shape [row, col]
+    let mut out_arr = Array2::<D>::default((row, col));
+
+    // Set the i-th row to 1.0
+    if i < row {
+        for j in 0..col {
+            out_arr[[i, j]] = D::one();
+        }
+    }
+
+    // Return the result
+    (
+        1,
+        Tile::new(out_arr.to_shared(), std::mem::size_of::<D>(), write_back_mu),
+    )
+}
+
 pub fn row_wise_append<T: Debug + Default + Clone>(
     in_data: &Tile<T>,
     data_to_append: &Tile<T>,
@@ -471,6 +510,60 @@ pub fn cache_write_addr_gen(
         ),
     )
 }
+
+pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy>(
+    in1: &Tile<T>,
+    in2: &Tile<T>,
+    write_back_mu: bool,
+) -> (u64, MultiHotN) {
+    // Check if shapes match first
+    assert_eq!(in1.shape, vec![1, 1]);
+    assert_eq!(in2.shape, vec![1, 1]);
+
+    let in1_val = in1.underlying.as_ref().unwrap()[[0, 0]];
+    let in2_val = in2.underlying.as_ref().unwrap()[[0, 0]];
+
+    // Compare underlying data
+    let is_equal = in1_val == in2_val;
+
+    // Return [1, 0] if equal, [0, 1] if not equal
+    if is_equal {
+        (1, MultiHotN::new(vec![true, false], write_back_mu))
+    } else {
+        (1, MultiHotN::new(vec![false, true], write_back_mu))
+    }
+}
+
+pub fn mul_constant<T: Debug + ndarray::LinalgScalar + Default>(
+    in1: &Tile<T>,
+    constant: T,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+
+    match &in1.underlying {
+        Some(arr1) => {
+            // Multiply all elements by the constant
+            let out_arr = arr1.mapv(|x| x * constant);
+            (
+                div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+            )
+        }
+        None => (
+            div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank(
+                vec![in1_shape_0, in1_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +599,92 @@ mod tests {
         println!("output arr: {:?}", out_data.underlying.as_ref().unwrap());
         assert_eq!(out_data.offset, 4);
         assert_eq!(flop_count, 1);
+    }
+
+    #[test]
+    fn test_mask_row() {
+        // Test case 1: Create a mask for row index 2 in a 5x3 matrix
+        let idx_arr = Array2::from_shape_vec((1, 1), vec![2u64]).unwrap();
+        let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+
+        let (cycles, out_data) = mask_row::<u64, f32>(&in_data, false, 5, 3);
+
+        println!("output arr:\n{:?}", out_data.underlying.as_ref().unwrap());
+
+        // Check the cycle count
+        assert_eq!(cycles, 1);
+
+        // Check the output shape
+        assert_eq!(out_data.shape, vec![5, 3]);
+
+        // Verify the output array
+        let result = out_data.underlying.as_ref().unwrap();
+        for i in 0..5 {
+            for j in 0..3 {
+                if i == 2 {
+                    assert_eq!(result[[i, j]], 1.0, "Row {} col {} should be 1.0", i, j);
+                } else {
+                    assert_eq!(result[[i, j]], 0.0, "Row {} col {} should be 0.0", i, j);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_row_first_row() {
+        // Test case 2: Mask the first row (index 0)
+        let idx_arr = Array2::from_shape_vec((1, 1), vec![0u32]).unwrap();
+        let in_data = Tile::new(idx_arr.to_shared(), 4, false);
+
+        let (cycles, out_data) = mask_row::<u32, f64>(&in_data, false, 3, 4);
+
+        println!(
+            "output arr (first row):\n{:?}",
+            out_data.underlying.as_ref().unwrap()
+        );
+
+        assert_eq!(cycles, 1);
+        assert_eq!(out_data.shape, vec![3, 4]);
+
+        let result = out_data.underlying.as_ref().unwrap();
+        // First row should be all 1.0
+        for j in 0..4 {
+            assert_eq!(result[[0, j]], 1.0);
+        }
+        // Other rows should be all 0.0
+        for i in 1..3 {
+            for j in 0..4 {
+                assert_eq!(result[[i, j]], 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_row_last_row() {
+        // Test case 3: Mask the last row
+        let idx_arr = Array2::from_shape_vec((1, 1), vec![4u64]).unwrap();
+        let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+
+        let (cycles, out_data) = mask_row::<u64, f32>(&in_data, false, 5, 2);
+
+        println!(
+            "output arr (last row):\n{:?}",
+            out_data.underlying.as_ref().unwrap()
+        );
+
+        assert_eq!(cycles, 1);
+        assert_eq!(out_data.shape, vec![5, 2]);
+
+        let result = out_data.underlying.as_ref().unwrap();
+        // Last row should be all 1.0
+        for j in 0..2 {
+            assert_eq!(result[[4, j]], 1.0);
+        }
+        // Other rows should be all 0.0
+        for i in 0..4 {
+            for j in 0..2 {
+                assert_eq!(result[[i, j]], 0.0);
+            }
+        }
     }
 }
