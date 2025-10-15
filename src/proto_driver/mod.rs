@@ -203,6 +203,50 @@ fn build_from_proto<'a>(
                         operation.id,
                     ));
                 }
+                (Type::U64(_), Type::F32(_)) => {
+                    let rcv = channel_map_collection.tile_u64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<u64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::MaskRow(mask_row) => {
+                            let mock_bf16 = sim_config.mock_bf16.clone();
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mask_row(
+                                    tile,
+                                    unarymap.write_back_mu,
+                                    mask_row.row as usize,
+                                    mask_row.col as usize,
+                                    mock_bf16,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    builder.add_child(UnaryMap::<SimpleEvent, _, _>::new(
+                        rcv,
+                        snd,
+                        map_fn,
+                        UnaryMapConfig {
+                            compute_bw: unarymap.compute_bw as u64,
+                            write_back_mu: unarymap.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
                 (_, _) => panic!("Unsupported data types for UnaryMap operation yet"),
             },
             OpType::Binarymap(binary_map) => match (
@@ -286,8 +330,13 @@ fn build_from_proto<'a>(
                                 functions::map_fn::div(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
-                        _ => {
-                            panic!("Unsupported binary map function type")
+                        elemto_elem_func::ElemElemFn::Add(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
                     builder.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
@@ -342,8 +391,8 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
-                        _ => {
-                            panic!("Unsupported binary map function type")
+                        e => {
+                            panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
                     builder.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
@@ -392,8 +441,8 @@ fn build_from_proto<'a>(
                                 functions::map_fn::set_offset(tile1, tile2, write_back_mu)
                             })
                         }
-                        _ => {
-                            panic!("Unsupported binary map function type")
+                        e => {
+                            panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
                     builder.add_child(BinaryMap::<SimpleEvent, _, _, _>::new(
@@ -406,7 +455,10 @@ fn build_from_proto<'a>(
                         operation.id,
                     ));
                 }
-                _ => panic!("Unsupported data types for BinaryMap operation"),
+                data_types => panic!(
+                    "Unsupported data types for BinaryMap operation {:?}",
+                    data_types
+                ),
             },
             OpType::BinarymapAccum(binary_map_accum) => match (
                 binary_map_accum
@@ -483,8 +535,8 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
-                        _ => {
-                            panic!("Unsupported binary map accumulation function type",)
+                        e => {
+                            panic!("Unsupported binary map accumulation function type {:?}", e)
                         }
                     };
 
@@ -855,7 +907,7 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for ExpandRef operation"),
+                    e => panic!("Unsupported data type for ExpandRef operation {:?}", e),
                 }
             }
             OpType::RepeatStatic(repeat_static) => {
@@ -883,7 +935,10 @@ fn build_from_proto<'a>(
                             snd,
                         ));
                     }
-                    _ => panic!("Unsupported data type for RepeatStatic operation"),
+                    dtype => panic!(
+                        "Unsupported data type for RepeatStatic operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::Broadcast(broadcast) => {
@@ -940,7 +995,7 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
-                    _ => panic!("Unsupported data type for Broadcast operation"),
+                    dtype => panic!("Unsupported data type for Broadcast operation {:?}", dtype),
                 }
             }
             OpType::FlatPartition(flat_partition) => {
@@ -1004,7 +1059,7 @@ fn build_from_proto<'a>(
                                     operation.id,
                                 ))
                             }
-                            _ => panic!("Unsupported data type"),
+                            dtype => panic!("Unsupported data type {:?}", dtype),
                         }
                     }
                     Type::U64(_) => {
@@ -1059,7 +1114,7 @@ fn build_from_proto<'a>(
                                     operation.id,
                                 ))
                             }
-                            _ => panic!("Unsupported data type"),
+                            dtype => panic!("Unsupported data type {:?}", dtype),
                         }
                     }
                     Type::MultiHot(_) => {
@@ -1114,10 +1169,10 @@ fn build_from_proto<'a>(
                                     operation.id,
                                 ))
                             }
-                            _ => panic!("Unsupported data type"),
+                            dtype => panic!("Unsupported data type {:?}", dtype),
                         }
                     }
-                    _ => panic!("Unsupported data type"),
+                    dtype => panic!("Unsupported data type {:?}", dtype),
                 }
             }
             OpType::FlatReassemble(reassemble) => {
@@ -1186,7 +1241,7 @@ fn build_from_proto<'a>(
                                     operation.id,
                                 ))
                             }
-                            _ => panic!("Unsupported data type"),
+                            dtype => panic!("Unsupported data type {:?}", dtype),
                         }
                     }
                     Type::MultiHot(_) => {
@@ -1246,10 +1301,10 @@ fn build_from_proto<'a>(
                                     operation.id,
                                 ))
                             }
-                            _ => panic!("Unsupported data type"),
+                            dtype => panic!("Unsupported data type {:?}", dtype),
                         }
                     }
-                    _ => panic!("Unsupported data type"),
+                    dtype => panic!("Unsupported data type {:?}", dtype),
                 }
             }
             OpType::Parallelize(parallelize) => {
@@ -1366,7 +1421,7 @@ fn build_from_proto<'a>(
                             operation.id,
                         ))
                     }
-                    _ => panic!("Unsupported data type"),
+                    dtype => panic!("Unsupported data type {:?}", dtype),
                 }
             }
             OpType::Promote(promote) => {
@@ -1390,7 +1445,7 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(Promote::new(rcv, snd, promote.promote_rank));
                     }
-                    _ => panic!("Unsupported data type"),
+                    dtype => panic!("Unsupported data type {:?}", dtype),
                 }
             }
             OpType::PromoteOuter(promote_outer) => {
@@ -1433,7 +1488,7 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(PromoteOuter::new(rcv, snd));
                     }
-                    _ => panic!("Unsupported data type"),
+                    dtype => panic!("Unsupported data type {:?}", dtype),
                 }
             }
             OpType::ConsumerContext(consumer_context) => {
@@ -1490,7 +1545,10 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
-                    _ => panic!("Unsupported data type for ConsumerContext operation"),
+                    dtype => panic!(
+                        "Unsupported data type for ConsumerContext operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::PrinterContext(printer_context) => {
@@ -1529,7 +1587,10 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(PrinterContext::new(rcv));
                     }
-                    _ => panic!("Unsupported data type for PrinterContext operation"),
+                    dtype => panic!(
+                        "Unsupported data type for PrinterContext operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::Bufferize(bufferize) => {
@@ -1558,7 +1619,7 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for Bufferize operation"),
+                    dtype => panic!("Unsupported data type for Bufferize operation {:?}", dtype),
                 }
             }
             OpType::Streamify(streamify) => {
@@ -1588,7 +1649,7 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for Streamify operation"),
+                    dtype => panic!("Unsupported data type for Streamify operation {:?}", dtype),
                 }
             }
             OpType::DynStreamify(dyn_streamify) => {
@@ -1644,7 +1705,10 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for DynStreamify operation"),
+                    dtype => panic!(
+                        "Unsupported data type for DynStreamify operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::LinearOffChipLoadRef(linear_offchip_load_ref) => {
@@ -1711,7 +1775,10 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
-                    _ => panic!("Unsupported data type for LinearOffChipLoadRef operation"),
+                    dtype => panic!(
+                        "Unsupported data type for LinearOffChipLoadRef operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::Flatten(flatten) => {
@@ -1813,7 +1880,7 @@ fn build_from_proto<'a>(
                         ));
                     }
 
-                    _ => panic!("Unsupported data type for Flatten operation"),
+                    dtype => panic!("Unsupported data type for Flatten operation {:?}", dtype),
                 }
             }
             OpType::SelectGen(select_gen) => match select_gen.is_multihot {
@@ -2058,7 +2125,10 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for RetileStreamify operation"),
+                    dtype => panic!(
+                        "Unsupported data type for RetileStreamify operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::FlatmapFilterRowStreamify(flatmap_filter_row_streamify) => {
@@ -2104,7 +2174,10 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for FlatmapFilterRowStreamify operation"),
+                    dtype => panic!(
+                        "Unsupported data type for FlatmapFilterRowStreamify operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::MetadataGen(metadata_gen) => {
@@ -2129,7 +2202,10 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for MetadataGen operation"),
+                    dtype => panic!(
+                        "Unsupported data type for MetadataGen operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::ExpertAddrGen(expert_addr_gen) => {
@@ -2166,7 +2242,10 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for ExpertAddrGen operation"),
+                    dtype => panic!(
+                        "Unsupported data type for ExpertAddrGen operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::CacheReadAddrGen(cache_read_addr_gen) => {
@@ -2293,7 +2372,7 @@ fn build_from_proto<'a>(
                             }
                         }
                     }
-                    _ => panic!("Unsupported data type for Reshape operation"),
+                    dtype => panic!("Unsupported data type for Reshape operation {:?}", dtype),
                 }
             }
             OpType::ReshapePadStream(reshape) => {
@@ -2397,7 +2476,10 @@ fn build_from_proto<'a>(
                             }
                         }
                     }
-                    _ => panic!("Unsupported data type for ReshapePadStream operation"),
+                    dtype => panic!(
+                        "Unsupported data type for ReshapePadStream operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::EagerMerge(eager_merge) => {
@@ -2482,7 +2564,7 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
-                    _ => panic!("Unsupported data type for EagerMerge operation"),
+                    dtype => panic!("Unsupported data type for EagerMerge operation {:?}", dtype),
                 }
             }
             _ => todo!(),

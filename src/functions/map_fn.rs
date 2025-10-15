@@ -408,6 +408,7 @@ pub fn mask_row<
     write_back_mu: bool,
     row: usize,
     col: usize,
+    mock_bf16: bool,
 ) -> (u64, Tile<D>) {
     assert_eq!(in_data.shape, vec![1, 1]);
 
@@ -434,7 +435,15 @@ pub fn mask_row<
     // Return the result
     (
         1,
-        Tile::new(out_arr.to_shared(), std::mem::size_of::<D>(), write_back_mu),
+        Tile::new(
+            out_arr.to_shared(),
+            if mock_bf16 {
+                2
+            } else {
+                std::mem::size_of::<D>()
+            },
+            write_back_mu,
+        ),
     )
 }
 
@@ -607,7 +616,7 @@ mod tests {
         let idx_arr = Array2::from_shape_vec((1, 1), vec![2u64]).unwrap();
         let in_data = Tile::new(idx_arr.to_shared(), 8, false);
 
-        let (cycles, out_data) = mask_row::<u64, f32>(&in_data, false, 5, 3);
+        let (cycles, out_data) = mask_row::<u64, f32>(&in_data, false, 5, 3, false);
 
         println!("output arr:\n{:?}", out_data.underlying.as_ref().unwrap());
 
@@ -636,7 +645,7 @@ mod tests {
         let idx_arr = Array2::from_shape_vec((1, 1), vec![0u32]).unwrap();
         let in_data = Tile::new(idx_arr.to_shared(), 4, false);
 
-        let (cycles, out_data) = mask_row::<u32, f64>(&in_data, false, 3, 4);
+        let (cycles, out_data) = mask_row::<u32, f64>(&in_data, false, 3, 4, false);
 
         println!(
             "output arr (first row):\n{:?}",
@@ -665,7 +674,7 @@ mod tests {
         let idx_arr = Array2::from_shape_vec((1, 1), vec![4u64]).unwrap();
         let in_data = Tile::new(idx_arr.to_shared(), 8, false);
 
-        let (cycles, out_data) = mask_row::<u64, f32>(&in_data, false, 5, 2);
+        let (cycles, out_data) = mask_row::<u64, f32>(&in_data, false, 5, 2, false);
 
         println!(
             "output arr (last row):\n{:?}",
