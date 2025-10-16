@@ -297,6 +297,16 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::SubConstant(sub_constant) => {
+                            Arc::new(move |tile1, comp_bw, write_back_mu| {
+                                functions::map_fn::sub_constant(
+                                    tile1,
+                                    sub_constant.constant.unwrap() as u64,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }
