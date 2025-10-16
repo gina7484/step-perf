@@ -258,6 +258,35 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
+pub fn add_constant<T: Debug + ndarray::LinalgScalar + Default>(
+    in1: &Tile<T>,
+    constant: T,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+
+    match &in1.underlying {
+        Some(arr1) => {
+            // Multiply all elements by the constant
+            let out_arr = arr1.mapv(|x| x * constant);
+            (
+                div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+            )
+        }
+        None => (
+            div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank(
+                vec![in1_shape_0, in1_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+    }
+}
 // SiLU(x)= x / (1 + e^-x)
 // We will count this as 8 FLOPs per element
 pub fn silu<T: Debug + ndarray::LinalgScalar + num_traits::Float + Copy>(
@@ -520,11 +549,11 @@ pub fn cache_write_addr_gen(
     )
 }
 
-pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy>(
+pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy + From<u64>>(
     in1: &Tile<T>,
     in2: &Tile<T>,
     write_back_mu: bool,
-) -> (u64, MultiHotN) {
+) -> (u64, Tile<T>) {
     // Check if shapes match first
     assert_eq!(in1.shape, vec![1, 1]);
     assert_eq!(in2.shape, vec![1, 1]);
@@ -537,9 +566,27 @@ pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy>(
 
     // Return [1, 0] if equal, [0, 1] if not equal
     if is_equal {
-        (1, MultiHotN::new(vec![true, false], write_back_mu))
+        (
+            1,
+            Tile::new(
+                Array2::from_shape_vec((1, 1), vec![T::from(1u64)])
+                    .unwrap()
+                    .to_shared(),
+                in1.bytes_per_elem,
+                write_back_mu,
+            ),
+        )
     } else {
-        (1, MultiHotN::new(vec![false, true], write_back_mu))
+        (
+            1,
+            Tile::new(
+                Array2::from_shape_vec((1, 1), vec![T::from(0u64)])
+                    .unwrap()
+                    .to_shared(),
+                in1.bytes_per_elem,
+                write_back_mu,
+            ),
+        )
     }
 }
 

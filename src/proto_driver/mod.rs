@@ -10,7 +10,7 @@ use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
-use crate::operator::flatmap_decomp::FlatmapFilterRowStreamify;
+use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify};
 use crate::operator::parallelize::Parallelize;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -55,6 +55,20 @@ use crate::utils::{
 };
 
 // channel_depth will be set from sim_config.channel_depth
+macro_rules! make_flatmap_counter {
+    ($collection:expr, $operation: expr, $flatmap_counter: expr, $type:ident, $builder:expr, $channel_depth:expr) => {
+        let rcv = $collection.$type.get_receiver(
+            $flatmap_counter.input_id,
+            $flatmap_counter.stream_idx,
+            $builder,
+            $channel_depth,
+        );
+        let snd = $collection
+            .$type
+            .get_sender($operation.id, None, $builder, $channel_depth);
+        $builder.add_child(FlatmapCounter::new(rcv, snd, $operation.id));
+    };
+}
 
 macro_rules! make_broadcast {
     ($collection:expr, $operation: expr, $broadcast: expr, $type:ident, $builder:expr, $channel_depth:expr) => {
@@ -247,6 +261,58 @@ fn build_from_proto<'a>(
                         operation.id,
                     ));
                 }
+                (Type::U64(_), Type::U64(_)) => {
+                    let rcv = channel_map_collection.tile_u64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_u64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::MulConstant(mul_constant) => {
+                            Arc::new(move |tile1, comp_bw, write_back_mu| {
+                                functions::map_fn::mul_constant(
+                                    tile1,
+                                    mul_constant.constant.unwrap() as u64,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::AddConstant(add_constant) => {
+                            Arc::new(move |tile1, comp_bw, write_back_mu| {
+                                functions::map_fn::add_constant(
+                                    tile1,
+                                    add_constant.constant.unwrap() as u64,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    builder.add_child(UnaryMap::<SimpleEvent, _, _>::new(
+                        rcv,
+                        snd,
+                        map_fn,
+                        UnaryMapConfig {
+                            compute_bw: unarymap.compute_bw as u64,
+                            write_back_mu: unarymap.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
                 (_, _) => panic!("Unsupported data types for UnaryMap operation yet"),
             },
             OpType::Binarymap(binary_map) => match (
@@ -389,6 +455,11 @@ fn build_from_proto<'a>(
                                     comp_bw,
                                     write_back_mu,
                                 )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::IsEqual(is_equal) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::is_equal_scalar(tile1, tile2, write_back_mu)
                             })
                         }
                         e => {
@@ -590,6 +661,38 @@ fn build_from_proto<'a>(
                             linear_off_chip_load.tile_row as usize,
                             linear_off_chip_load.tile_col as usize,
                             f32_bytes,
+                            0,
+                            hbm_config.addr_offset,
+                            linear_off_chip_load.par_dispatch as usize,
+                            addr_snd,
+                            resp_rcv,
+                            on_chip_snd,
+                            operation.id,
+                        ));
+
+                        mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    Type::U64(_) => {
+                        let on_chip_snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        builder.add_child(LinearOffChipLoad::<SimpleEvent, _>::new(
+                            to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
+                            to_usize_vec(linear_off_chip_load.stride),
+                            to_usize_vec(linear_off_chip_load.out_shape_tiled),
+                            linear_off_chip_load.npy_path,
+                            linear_off_chip_load.tile_row as usize,
+                            linear_off_chip_load.tile_col as usize,
+                            std::mem::size_of::<u64>(),
                             0,
                             hbm_config.addr_offset,
                             linear_off_chip_load.par_dispatch as usize,
@@ -2565,6 +2668,31 @@ fn build_from_proto<'a>(
                         ));
                     }
                     dtype => panic!("Unsupported data type for EagerMerge operation {:?}", dtype),
+                }
+            }
+            OpType::FlatmapCounter(flatmap_counter) => {
+                match flatmap_counter
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::U64(_) => {
+                        make_flatmap_counter!(
+                            channel_map_collection,
+                            operation,
+                            flatmap_counter,
+                            tile_u64,
+                            builder,
+                            channel_depth
+                        );
+                    }
+                    dtype => panic!(
+                        "Unsupported data type for FlatmapCounter operation {:?}",
+                        dtype
+                    ),
                 }
             }
             _ => todo!(),
