@@ -471,39 +471,49 @@ pub fn mask_row<
 ) -> (u64, Tile<D>) {
     assert_eq!(in_data.shape, vec![1, 1]);
 
-    // Extract the index value from in_data
-    let i = match &in_data.underlying {
+    match &in_data.underlying {
         Some(arr) => {
+            // Extract the index value from in_data
             let val = arr[[0, 0]].clone();
-            val.try_into()
-                .unwrap_or_else(|_| panic!("Failed to convert value to usize"))
+            let i = val
+                .try_into()
+                .unwrap_or_else(|_| panic!("Failed to convert value to usize"));
+            // Create a zero-filled array of shape [row, col]
+            let mut out_arr = Array2::<D>::default((row, col));
+
+            // Set the i-th row to 1.0
+            if i < row {
+                for j in 0..col {
+                    out_arr[[i, j]] = D::one();
+                }
+            }
+
+            (
+                1,
+                Tile::new(
+                    out_arr.to_shared(),
+                    if mock_bf16 {
+                        2
+                    } else {
+                        std::mem::size_of::<D>()
+                    },
+                    write_back_mu,
+                ),
+            )
         }
-        None => panic!("in_data must have underlying data"),
-    };
-
-    // Create a zero-filled array of shape [row, col]
-    let mut out_arr = Array2::<D>::default((row, col));
-
-    // Set the i-th row to 1.0
-    if i < row {
-        for j in 0..col {
-            out_arr[[i, j]] = D::one();
-        }
-    }
-
-    // Return the result
-    (
-        1,
-        Tile::new(
-            out_arr.to_shared(),
-            if mock_bf16 {
-                2
-            } else {
-                std::mem::size_of::<D>()
-            },
-            write_back_mu,
+        None => (
+            1,
+            Tile::new_blank(
+                vec![row, col],
+                if mock_bf16 {
+                    2
+                } else {
+                    std::mem::size_of::<D>()
+                },
+                write_back_mu,
+            ),
         ),
-    )
+    }
 }
 
 pub fn row_wise_append<T: Debug + Default + Clone>(
@@ -596,9 +606,9 @@ pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy + From<u64>
 
     // Return [1, 0] if equal, [0, 1] if not equal
     if is_equal {
-        (1, MultiHotN::new(vec![false, true], write_back_mu)) // 1
+        (1, MultiHotN::new(vec![true, false], write_back_mu)) // 1
     } else {
-        (1, MultiHotN::new(vec![true, false], write_back_mu)) // 0
+        (1, MultiHotN::new(vec![false, true], write_back_mu)) // 0
     }
 }
 

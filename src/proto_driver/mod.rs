@@ -468,6 +468,11 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Add(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
                         e => {
                             panic!("Unsupported binary map function type {:?}", e)
                         }
@@ -1054,6 +1059,41 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(ExpandRef::<_, _>::new(
+                            in_rcv,
+                            ref_rcv,
+                            expand_ref.expand_rank,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    (Type::U64(_), Type::U64(_)) => {
+                        let in_rcv = channel_map_collection.tile_u64.get_receiver(
+                            expand_ref.input_id,
+                            expand_ref.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expand_ref.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let ref_rcv = channel_map_collection.tile_u64.get_receiver(
+                            expand_ref.ref_id,
+                            expand_ref.ref_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expand_ref.ref_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
                             operation.id,
                             None,
                             builder,
@@ -2614,6 +2654,105 @@ fn build_from_proto<'a>(
                             }
                             false => {
                                 let snd = channel_map_collection.tile_f32.get_sender(
+                                    operation.id,
+                                    None,
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+                                builder.add_child(ReshapeNoPadStream::new(
+                                    rcv,
+                                    snd,
+                                    reshape.split_dim as usize,
+                                    reshape.chunk_size as usize,
+                                    padding_value,
+                                    reshape.input_stream_rank,
+                                    false,
+                                    operation.id,
+                                ));
+                            }
+                        }
+                    }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            reshape.input_id,
+                            reshape.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                reshape.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let padding_value = match reshape.pad_func {
+                            Some(pad_func) => {
+                                let tile_row = reshape.tile_row.unwrap() as usize;
+                                let tile_col = reshape.tile_col.unwrap() as usize;
+
+                                let pad_val = match pad_func.init_fn.unwrap() {
+                                    init_func::InitFn::Zero(_zero) => {
+                                        if sim_config.functional_sim {
+                                            Tile::new_zero_padded(
+                                                [tile_row, tile_col],
+                                                8,
+                                                reshape.write_back_mu,
+                                                0,
+                                            )
+                                        } else {
+                                            Tile::new_blank_padded(
+                                                vec![tile_row, tile_col],
+                                                8,
+                                                reshape.write_back_mu,
+                                                0,
+                                            )
+                                        }
+                                    }
+                                    _ => todo!(),
+                                };
+                                Some(pad_val)
+                            }
+                            None => None,
+                        };
+                        match reshape.have_pad_stream {
+                            true => {
+                                let mask_snd = channel_map_collection.tile_bool.get_sender(
+                                    operation.id,
+                                    Some(1),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+                                let snd = channel_map_collection.tile_u64.get_sender(
+                                    operation.id,
+                                    Some(0),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+
+                                builder.add_child(ReshapePadStream::new(
+                                    rcv,
+                                    snd,
+                                    mask_snd,
+                                    reshape.split_dim as usize,
+                                    reshape.chunk_size as usize,
+                                    padding_value,
+                                    reshape.input_stream_rank,
+                                    false,
+                                    operation.id,
+                                ));
+                            }
+                            false => {
+                                let snd = channel_map_collection.tile_u64.get_sender(
                                     operation.id,
                                     None,
                                     builder,
