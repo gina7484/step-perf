@@ -12,6 +12,7 @@ use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
 use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify};
 use crate::operator::parallelize::Parallelize;
+use crate::primitives::select::MultiHotN;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -21,7 +22,7 @@ use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
 use crate::operator::flatmap::{CacheReadAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify};
 use crate::operator::flatten::Flatten;
-use crate::operator::map::{UnaryMap, UnaryMapConfig};
+use crate::operator::map::{BinaryMapMultiHot, UnaryMap, UnaryMapConfig};
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
@@ -467,11 +468,6 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
-                        elemto_elem_func::ElemElemFn::IsEqual(is_equal) => {
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::is_equal_scalar(tile1, tile2, write_back_mu)
-                            })
-                        }
                         e => {
                             panic!("Unsupported binary map function type {:?}", e)
                         }
@@ -486,6 +482,57 @@ fn build_from_proto<'a>(
                         operation.id,
                     ));
                 }
+                (Type::U64(_), Type::U64(_), Type::MultiHot(_)) => {
+                    // create
+                    let rcv1 = channel_map_collection.tile_u64.get_receiver(
+                        binary_map.input_id1,
+                        binary_map.stream_idx1,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
+                    );
+                    let rcv2 = channel_map_collection.tile_u64.get_receiver(
+                        binary_map.input_id2,
+                        binary_map.stream_idx2,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
+                    );
+                    let snd = channel_map_collection.multihot.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<u64>, &Tile<u64>, u64, bool) -> (u64, MultiHotN) + Send + Sync,
+                    > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::IsEqual(is_equal) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::is_equal_scalar(tile1, tile2, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported binary map function type {:?}", e)
+                        }
+                    };
+                    builder.add_child(BinaryMapMultiHot::<SimpleEvent, _, _>::new(
+                        rcv1,
+                        rcv2,
+                        snd,
+                        map_fn,
+                        binary_map.compute_bw as u64,
+                        binary_map.write_back_mu,
+                        operation.id,
+                    ));
+                }
+
                 (Type::F32(_), Type::U64(_), Type::F32(_)) => {
                     // create
                     let rcv1 = channel_map_collection.tile_f32.get_receiver(

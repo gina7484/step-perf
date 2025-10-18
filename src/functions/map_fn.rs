@@ -583,7 +583,7 @@ pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy + From<u64>
     in1: &Tile<T>,
     in2: &Tile<T>,
     write_back_mu: bool,
-) -> (u64, Tile<T>) {
+) -> (u64, MultiHotN) {
     // Check if shapes match first
     assert_eq!(in1.shape, vec![1, 1]);
     assert_eq!(in2.shape, vec![1, 1]);
@@ -596,27 +596,9 @@ pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy + From<u64>
 
     // Return [1, 0] if equal, [0, 1] if not equal
     if is_equal {
-        (
-            1,
-            Tile::new(
-                Array2::from_shape_vec((1, 1), vec![T::from(1u64)])
-                    .unwrap()
-                    .to_shared(),
-                in1.bytes_per_elem,
-                write_back_mu,
-            ),
-        )
+        (1, MultiHotN::new(vec![false, true], write_back_mu)) // 1
     } else {
-        (
-            1,
-            Tile::new(
-                Array2::from_shape_vec((1, 1), vec![T::from(0u64)])
-                    .unwrap()
-                    .to_shared(),
-                in1.bytes_per_elem,
-                write_back_mu,
-            ),
-        )
+        (1, MultiHotN::new(vec![true, false], write_back_mu)) // 0
     }
 }
 
