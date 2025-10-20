@@ -938,12 +938,20 @@ fn build_from_proto<'a>(
                                 channel_depth,
                             ),
                         );
-                        let wack = channel_map_collection.bool.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
+
+                        let wack = match random_off_chip_store.has_done_stream {
+                            true => Some(channel_map_collection.bool.get_sender(
+                                operation.id,
+                                None,
+                                builder,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
+                            )),
+                            false => None,
+                        };
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 

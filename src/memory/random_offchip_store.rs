@@ -30,7 +30,7 @@ pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     // Channel facing on-chip memory
     pub waddr: Receiver<Elem<Tile<u64>>>,
     pub wdata: Receiver<Elem<Tile<T>>>,
-    pub wack: Sender<Elem<bool>>,
+    pub wack: Option<Sender<Elem<bool>>>,
     pub ack_based_on_waddr: bool, // if true, the ack stream's shape will be based on the waddr,
     // otherwise it is based on the wdata.
     pub id: u32,
@@ -60,7 +60,7 @@ where
         // On-chip memory facing the channels
         waddr: Receiver<Elem<Tile<u64>>>,
         wdata: Receiver<Elem<Tile<T>>>,
-        wack: Sender<Elem<bool>>,
+        wack: Option<Sender<Elem<bool>>>,
         id: u32,
         ack_based_on_waddr: bool,
     ) -> Self {
@@ -121,7 +121,9 @@ where
         ctx.wdata.attach_receiver(&ctx);
         ctx.addr_snd.attach_sender(&ctx);
         ctx.ack_rcv.attach_receiver(&ctx);
-        ctx.wack.attach_sender(&ctx);
+        if ctx.wack.is_some() {
+            ctx.wack.as_ref().unwrap().attach_sender(&ctx);
+        }
         ctx
     }
 
@@ -247,15 +249,19 @@ where
                             // Update the tensor if underlying is not None
                             self.update_underlying(waddr, wdata);
 
-                            self.wack
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::Val(true),
-                                    },
-                                )
-                                .unwrap();
+                            if self.wack.is_some() {
+                                self.wack
+                                    .as_ref()
+                                    .unwrap()
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::Val(true),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         }
                         (
                             Elem::ValStop(waddr_tile, waddr_stop),
@@ -274,15 +280,19 @@ where
                                 wdata_stop
                             };
 
-                            self.wack
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::ValStop(true, stop_level),
-                                    },
-                                )
-                                .unwrap();
+                            if self.wack.is_some() {
+                                self.wack
+                                    .as_ref()
+                                    .unwrap()
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(true, stop_level),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         }
                         (Elem::Val(waddr_tile), Elem::ValStop(wdata, wdata_stop)) => {
                             let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
@@ -298,15 +308,19 @@ where
                                 Elem::ValStop(true, wdata_stop)
                             };
 
-                            self.wack
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: out_elem,
-                                    },
-                                )
-                                .unwrap();
+                            if self.wack.is_some() {
+                                self.wack
+                                    .as_ref()
+                                    .unwrap()
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: out_elem,
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         }
                         (Elem::ValStop(waddr_tile, waddr_stop), Elem::Val(wdata)) => {
                             let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
@@ -321,16 +335,19 @@ where
                             } else {
                                 Elem::Val(true)
                             };
-
-                            self.wack
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: out_elem,
-                                    },
-                                )
-                                .unwrap();
+                            if self.wack.is_some() {
+                                self.wack
+                                    .as_ref()
+                                    .unwrap()
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: out_elem,
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         }
                     }
                 }
