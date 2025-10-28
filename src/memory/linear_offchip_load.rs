@@ -158,12 +158,6 @@ where
         // Create a vector to hold all the addresses
         let mut addrs: Vec<HbmAddrEnum<T>> = vec![];
 
-        if self.id == 20 {
-            println!("self.transposed: {}", self.transposed);
-            println!("self.tile_row: {}", self.tile_row);
-            println!("self.tile_col: {}", self.tile_col);
-        }
-
         for flat_idx in 0..total_tiles {
             // Convert flat index to multi-dimensional indices
             let mut remaining = flat_idx;
