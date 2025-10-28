@@ -30,6 +30,7 @@ pub struct LinearOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub transposed: bool,
     pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
@@ -55,6 +56,7 @@ where
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
+        transposed: bool,
         id: u32,
     ) -> Self {
         let underlying = match npy_path {
@@ -99,6 +101,7 @@ where
             addr_snd,
             resp_addr_rcv,
             on_chip_snd,
+            transposed,
             id,
             context_info: Default::default(),
             _phantom: PhantomData,
@@ -131,14 +134,19 @@ where
                 // Remaining dimensions keep size/stride of 1 (as you suggested)
 
                 for tile_i in arr.windows_with_stride(IxDyn(&window_size), IxDyn(&stride)) {
-                    tile_data.push(Tile::new(
-                        tile_i
-                            .to_shared()
-                            .into_shape_with_order((self.tile_row, self.tile_col))
-                            .unwrap(),
-                        self.n_byte,
-                        true,
-                    ))
+                    let reshaped = tile_i
+                        .to_shared()
+                        .into_shape_with_order((self.tile_row, self.tile_col))
+                        .unwrap();
+
+                    // Transpose the tile if needed
+                    let final_tile = if self.transposed {
+                        reshaped.t().to_owned().to_shared()
+                    } else {
+                        reshaped
+                    };
+
+                    tile_data.push(Tile::new(final_tile, self.n_byte, true))
                 }
             }
             None => {}
@@ -149,6 +157,12 @@ where
 
         // Create a vector to hold all the addresses
         let mut addrs: Vec<HbmAddrEnum<T>> = vec![];
+
+        if self.id == 20 {
+            println!("self.transposed: {}", self.transposed);
+            println!("self.tile_row: {}", self.tile_row);
+            println!("self.tile_col: {}", self.tile_col);
+        }
 
         for flat_idx in 0..total_tiles {
             // Convert flat index to multi-dimensional indices
@@ -236,7 +250,11 @@ where
                             addrs.push(HbmAddrEnum::ADDRSTOP(
                                 tile_addrs,
                                 Tile::new_blank(
-                                    vec![self.tile_row, self.tile_col],
+                                    if self.transposed {
+                                        vec![self.tile_col, self.tile_row]
+                                    } else {
+                                        vec![self.tile_row, self.tile_col]
+                                    },
                                     self.n_byte,
                                     true,
                                 ),
@@ -247,7 +265,11 @@ where
                             addrs.push(HbmAddrEnum::ADDR(
                                 tile_addrs,
                                 Tile::new_blank(
-                                    vec![self.tile_row, self.tile_col],
+                                    if self.transposed {
+                                        vec![self.tile_col, self.tile_row]
+                                    } else {
+                                        vec![self.tile_row, self.tile_col]
+                                    },
                                     self.n_byte,
                                     true,
                                 ),

@@ -92,6 +92,7 @@ mod test {
             addr_snd1,
             resp_addr_rcv1,
             repeat_snd1,
+            false,
             0,
         );
 
@@ -127,6 +128,7 @@ mod test {
             addr_snd2,
             resp_addr_rcv2,
             on_chip_snd2,
+            false,
             1,
         );
 

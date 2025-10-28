@@ -729,6 +729,7 @@ fn build_from_proto<'a>(
                             addr_snd,
                             resp_rcv,
                             on_chip_snd,
+                            linear_off_chip_load.transposed,
                             operation.id,
                         ));
 
@@ -761,6 +762,7 @@ fn build_from_proto<'a>(
                             addr_snd,
                             resp_rcv,
                             on_chip_snd,
+                            linear_off_chip_load.transposed,
                             operation.id,
                         ));
 
@@ -1023,6 +1025,7 @@ fn build_from_proto<'a>(
                             resp_rcv,
                             raddr,
                             on_chip_snd,
+                            random_off_chip_load.transposed,
                             operation.id,
                         ));
 

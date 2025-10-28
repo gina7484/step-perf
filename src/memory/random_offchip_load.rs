@@ -30,6 +30,7 @@ pub struct RandomOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     // Channel facing on-chip memory
     pub raddr: Receiver<Elem<Tile<u64>>>,
     pub rdata: Sender<Elem<Tile<T>>>,
+    pub transposed: bool,
     pub id: u32,
     // Phantom data for the event type
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
@@ -55,6 +56,7 @@ where
         resp_addr_rcv: Receiver<u64>,
         raddr: Receiver<Elem<Tile<u64>>>,
         rdata: Sender<Elem<Tile<T>>>,
+        transposed: bool,
         id: u32,
     ) -> Self {
         let underlying = match npy_path {
@@ -106,14 +108,19 @@ where
                     .windows_with_stride(IxDyn(&window_size), IxDyn(&stride))
                     .into_iter()
                     .map(|tile_data| {
-                        Tile::new(
-                            tile_data
-                                .to_shared()
-                                .into_shape_with_order((tile_row, tile_col))
-                                .unwrap(),
-                            n_byte,
-                            true,
-                        )
+                        let reshaped = tile_data
+                            .to_shared()
+                            .into_shape_with_order((tile_row, tile_col))
+                            .unwrap();
+
+                        // Transpose the tile if needed
+                        let final_tile = if transposed {
+                            reshaped.t().to_owned().to_shared()
+                        } else {
+                            reshaped
+                        };
+
+                        Tile::new(final_tile, n_byte, true)
                     })
                     .collect();
 
@@ -136,6 +143,7 @@ where
             resp_addr_rcv,
             raddr,
             rdata,
+            transposed,
             id,
             context_info: Default::default(),
             _phantom: PhantomData,
@@ -177,12 +185,28 @@ where
                     tiles[tile_idx_usize].clone()
                 } else {
                     // Fallback to blank tile if index is out of bounds
-                    Tile::new_blank(vec![self.tile_row, self.tile_col], self.n_byte, true)
+                    Tile::new_blank(
+                        if self.transposed {
+                            vec![self.tile_col, self.tile_row]
+                        } else {
+                            vec![self.tile_row, self.tile_col]
+                        },
+                        self.n_byte,
+                        true,
+                    )
                 }
             }
             None => {
                 // Create blank tile when no underlying data is available
-                Tile::new_blank(vec![self.tile_row, self.tile_col], self.n_byte, true)
+                Tile::new_blank(
+                    if self.transposed {
+                        vec![self.tile_col, self.tile_row]
+                    } else {
+                        vec![self.tile_row, self.tile_col]
+                    },
+                    self.n_byte,
+                    true,
+                )
             }
         }
     }
