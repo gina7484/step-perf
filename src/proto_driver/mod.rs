@@ -2399,6 +2399,13 @@ fn build_from_proto<'a>(
                     get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                 );
                 match metadata_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::U64(_) => {
+                        builder.add_child(MetadataGen::<u64>::new(
+                            metadata_gen.npy_path,
+                            snd,
+                            operation.id,
+                        ));
+                    }
                     Type::ScalarU64(_) => {
                         builder.add_child(MetadataGen::<u64>::new(
                             metadata_gen.npy_path,
