@@ -126,6 +126,7 @@ macro_rules! make_linear_offchip_load_ref {
             addr_snd,
             resp_rcv,
             snd,
+            $dyn_offchip_load.transposed,
             $operation.id,
         ));
         $mem_context.add_reader(ReadBundle {
@@ -161,11 +162,9 @@ fn build_from_proto<'a>(
     let f32_bytes: usize = if sim_config.mock_bf16 { 2 } else { 4 }; // we will use this to mimic bfloat16
 
     for operation in step_graph.operators {
-        // if operation.id == 336 || operation.id == 272 || operation.id == 721 {
-        //     println!("processing {:?}\n", operation);
-        // }
-        // println!("processing {:?}\n", operation);
-
+        if operation.id == 23 || operation.id == 24 || operation.id == 25 {
+            println!("processing {:?}\n", operation);
+        }
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
                 unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
@@ -2771,6 +2770,84 @@ fn build_from_proto<'a>(
                             }
                             false => {
                                 let snd = channel_map_collection.tile_u64.get_sender(
+                                    operation.id,
+                                    None,
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+                                builder.add_child(ReshapeNoPadStream::new(
+                                    rcv,
+                                    snd,
+                                    reshape.split_dim as usize,
+                                    reshape.chunk_size as usize,
+                                    padding_value,
+                                    reshape.input_stream_rank,
+                                    false,
+                                    operation.id,
+                                ));
+                            }
+                        }
+                    }
+                    Type::MultiHot(multihot) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            reshape.input_id,
+                            reshape.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                reshape.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let padding_value = match reshape.pad_func {
+                            Some(pad_func) => {
+                                panic!(
+                                    "Padding value not supported for MultiHot in ReshapePadStream"
+                                )
+                            }
+                            None => None,
+                        };
+                        match reshape.have_pad_stream {
+                            true => {
+                                let mask_snd = channel_map_collection.tile_bool.get_sender(
+                                    operation.id,
+                                    Some(1),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+                                let snd = channel_map_collection.multihot.get_sender(
+                                    operation.id,
+                                    Some(0),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                );
+
+                                builder.add_child(ReshapePadStream::new(
+                                    rcv,
+                                    snd,
+                                    mask_snd,
+                                    reshape.split_dim as usize,
+                                    reshape.chunk_size as usize,
+                                    padding_value,
+                                    reshape.input_stream_rank,
+                                    false,
+                                    operation.id,
+                                ));
+                            }
+                            false => {
+                                let snd = channel_map_collection.multihot.get_sender(
                                     operation.id,
                                     None,
                                     builder,
