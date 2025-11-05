@@ -94,3 +94,250 @@ impl<T: DAMType> Context for RepeatStatic<T> {
         }
     }
 }
+
+#[context_macro]
+pub struct RepeatRef<T: Clone, R: Clone> {
+    in_stream: Receiver<Elem<T>>,
+    ref_stream: Receiver<Elem<R>>,
+    out_stream: Sender<Elem<T>>,
+    id: u32,
+}
+
+impl<T: DAMType, R: DAMType> RepeatRef<T, R>
+where
+    Self: Context,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<T>>,
+        ref_stream: Receiver<Elem<R>>,
+        out_stream: Sender<Elem<T>>,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            ref_stream,
+            out_stream,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.ref_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+        ctx
+    }
+}
+
+impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
+    fn run(&mut self) {
+        loop {
+            // 1. Dequeue from in_stream
+            match self.in_stream.dequeue(&self.time) {
+                Ok(ChannelElement {
+                    time: _,
+                    data: in_data,
+                }) => {
+                    // 2. Dequeue from ref_stream and enqueue until we see a stop token
+                    loop {
+                        match self.ref_stream.dequeue(&self.time) {
+                            Ok(ChannelElement {
+                                time: _,
+                                data: ref_data,
+                            }) => {
+                                match ref_data {
+                                    Elem::Val(_) => {
+                                        // Not a stop token, enqueue the input element
+                                        self.out_stream
+                                            .enqueue(
+                                                &self.time,
+                                                ChannelElement {
+                                                    time: self.time.tick(),
+                                                    data: match &in_data {
+                                                        Elem::Val(x) => Elem::Val(x.clone()),
+                                                        Elem::ValStop(x, _) => Elem::Val(x.clone()),
+                                                    },
+                                                },
+                                            )
+                                            .unwrap();
+                                    }
+                                    Elem::ValStop(_, s) => {
+                                        // 3. Stop token: enqueue with stop token + 1
+                                        self.out_stream
+                                            .enqueue(
+                                                &self.time,
+                                                ChannelElement {
+                                                    time: self.time.tick(),
+                                                    data: match &in_data {
+                                                        Elem::Val(x) => {
+                                                            Elem::ValStop(x.clone(), 0 + 1)
+                                                        }
+                                                        Elem::ValStop(x, in_s) => {
+                                                            assert_eq!(in_s + 1, s,
+                                                                "RepeatRef {}: mismatch between input stop count {} and reference stop count {}",
+                                                                self.id, in_s + 1, s);
+                                                            Elem::ValStop(x.clone(), s)
+                                                        }
+                                                    },
+                                                },
+                                            )
+                                            .unwrap();
+                                        break; // Move to next element in in_stream
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                panic!(
+                                    "RepeatRef {}: reference stream ended before input stream",
+                                    self.id
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(_) => return, // End of in_stream
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dam::{
+        simulation::ProgramBuilder,
+        utility_contexts::{ApproxCheckerContext, GeneratorContext},
+    };
+
+    use crate::primitives::elem::Elem;
+
+    use super::RepeatRef;
+
+    #[test]
+    fn repeat_ref_simple() {
+        // cargo test --package step_perf --lib -- operator::repeat::tests::repeat_ref_simple --exact --show-output
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (ref_snd, ref_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // Input: [1, 2, 3]
+        ctx.add_child(GeneratorContext::new(
+            || vec![Elem::Val(1), Elem::Val(2), Elem::Val(3)].into_iter(),
+            in_snd,
+        ));
+
+        // Reference: repeat 1 three times, repeat 2 two times, repeat 3 four times
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(0),
+                    Elem::Val(0),
+                    Elem::ValStop(0, 1), // 3 elements
+                    Elem::Val(0),
+                    Elem::ValStop(0, 1), // 2 elements
+                    Elem::Val(0),
+                    Elem::Val(0),
+                    Elem::Val(0),
+                    Elem::ValStop(0, 1), // 4 elements
+                ]
+                .into_iter()
+            },
+            ref_snd,
+        ));
+
+        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 0));
+
+        // Expected output: [1, 1, 1(stop), 2, 2(stop), 3, 3, 3, 3(stop)]
+        ctx.add_child(ApproxCheckerContext::new(
+            || {
+                vec![
+                    Elem::Val(1),
+                    Elem::Val(1),
+                    Elem::ValStop(1, 1),
+                    Elem::Val(2),
+                    Elem::ValStop(2, 1),
+                    Elem::Val(3),
+                    Elem::Val(3),
+                    Elem::Val(3),
+                    Elem::ValStop(3, 1),
+                ]
+                .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn repeat_ref_2d() {
+        // cargo test --package step_perf --lib -- operator::repeat::tests::repeat_ref_2d --exact --show-output
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (ref_snd, ref_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(1),
+                    Elem::ValStop(2, 1),
+                    Elem::Val(3),
+                    Elem::ValStop(4, 2),
+                ]
+                .into_iter()
+            },
+            in_snd,
+        ));
+
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(0),
+                    Elem::Val(0),
+                    Elem::ValStop(0, 1), // 3 elements
+                    Elem::Val(0),
+                    Elem::ValStop(0, 2), // 2 elements
+                    Elem::Val(0),
+                    Elem::Val(0),
+                    Elem::Val(0),
+                    Elem::ValStop(0, 1), // 4 elements
+                    Elem::Val(0),
+                    Elem::ValStop(0, 3), // 4 elements
+                ]
+                .into_iter()
+            },
+            ref_snd,
+        ));
+
+        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 0));
+
+        ctx.add_child(ApproxCheckerContext::new(
+            || {
+                vec![
+                    Elem::Val(1),
+                    Elem::Val(1),
+                    Elem::ValStop(1, 1),
+                    Elem::Val(2),
+                    Elem::ValStop(2, 2),
+                    Elem::Val(3),
+                    Elem::Val(3),
+                    Elem::Val(3),
+                    Elem::ValStop(3, 1),
+                    Elem::Val(4),
+                    Elem::ValStop(4, 3),
+                ]
+                .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+}
