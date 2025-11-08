@@ -131,6 +131,7 @@ macro_rules! make_linear_offchip_load_ref {
             snd,
             $dyn_offchip_load.transposed,
             $operation.id,
+            $dyn_offchip_load.trigger_rank,
         ));
         $mem_context.add_reader(ReadBundle {
             addr: addr_rcv,

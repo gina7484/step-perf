@@ -33,6 +33,7 @@ pub struct LinearOffChipLoadRef<E: LoggableEventSimple, T: DAMType, R: DAMType> 
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
     pub transposed: bool,
     pub id: u32,
+    pub trigger_rank: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -62,6 +63,7 @@ where
         on_chip_snd: Sender<Elem<Tile<T>>>,
         transposed: bool,
         id: u32,
+        trigger_rank: u32,
     ) -> Self {
         let underlying = match npy_path {
             Some(file_path) => {
@@ -107,6 +109,7 @@ where
             on_chip_snd,
             transposed,
             id,
+            trigger_rank,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -376,10 +379,17 @@ where
                     data: ref_elem,
                 }) => match ref_elem {
                     Elem::Val(_) => {
-                        self.stream_tiles(None);
+                        if self.trigger_rank == 0 {
+                            self.stream_tiles(None);
+                        }
                     }
                     Elem::ValStop(_, s) => {
-                        self.stream_tiles(Some(s));
+                        if s > self.trigger_rank {
+                            self.stream_tiles(Some(s - self.trigger_rank));
+                        } else if s == self.trigger_rank {
+                            // Finished streaming all tiles
+                            self.stream_tiles(None);
+                        }
                     }
                 },
                 Err(_) => return,
@@ -470,6 +480,104 @@ mod tests {
             snd,
             false,
             0,
+            0, // trigger_rank
+        ));
+
+        const READ_FROM_MU: bool = true;
+        const DUMMY_CREATION_TIME: u64 = 0;
+        let tile_vec =
+            vec![
+                Tile::<VT>::new_blank(vec![TILE_ROW, TILE_COL], BYTES_PER_ELEM, READ_FROM_MU);
+                2 * 3 * 2 * 2
+            ];
+
+        // =============== Input [2,2] ================
+        // Create 2x2 Buffers (each are a buffer of 2x2 tiles)
+        let arr = Arc::new(
+            ArcArray::from_vec(tile_vec)
+                .into_shape_with_order((2, 3, 2, 2))
+                .unwrap(),
+        );
+        let buff = Buffer::new((*arr).clone().into_dyn(), DUMMY_CREATION_TIME);
+
+        // =============== Output Stream [2,3,2,2] ================
+        ctx.add_child(ApproxCheckerContext::new(
+            move || buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
+            rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_4d_trigger_rank() {
+        // matrix: [2,2]
+        // [2,3,2] (ref)
+        // output = [2,3,2,2]
+        type VT = u32;
+
+        const BYTES_PER_ELEM: usize = 4;
+        const TILE_ROW: usize = 16;
+        const TILE_COL: usize = 16;
+
+        const ADDR_OFFSET: u64 = 64; // The number of bytes to read per request
+
+        let mut ctx = ProgramBuilder::default();
+        let (addr_snd, addr_rcv) = ctx.unbounded();
+        let (resp_snd, resp_rcv) = ctx.unbounded();
+        let (ref_snd, ref_rcv) = ctx.unbounded();
+        let (snd, rcv) = ctx.unbounded();
+
+        let ref_arr = Arc::new(
+            ArcArray::from_vec(vec![MultiHotN::new(vec![true, false], false); 2 * 3 * 2])
+                .into_shape_with_order((2, 3, 2))
+                .unwrap(),
+        );
+        let ref_buff = Buffer::new((*ref_arr).clone().into_dyn(), DUMMY_CREATION_TIME);
+
+        let mut mem_context = HBMContext::new(
+            &mut ctx,
+            HBMConfig {
+                addr_offset: ADDR_OFFSET,
+                channel_num: 8,
+                per_channel_init_interval: 2,
+                per_channel_latency: 2,
+                per_channel_outstanding: 1,
+                per_channel_start_up_time: 14,
+            },
+        );
+        mem_context.add_reader(ReadBundle {
+            addr: addr_rcv,
+            resp: resp_snd,
+        });
+
+        ctx.add_child(mem_context);
+
+        ctx.add_child(GeneratorContext::new(
+            move || ref_buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
+            ref_snd,
+        ));
+        ctx.add_child(LinearOffChipLoadRef::<SimpleEvent, VT, _>::new(
+            vec![2, 2],
+            vec![2, 1],
+            vec![2, 2],
+            None,
+            TILE_ROW,
+            TILE_COL,
+            BYTES_PER_ELEM,
+            0,
+            ADDR_OFFSET,
+            4,
+            ref_rcv,
+            addr_snd,
+            resp_rcv,
+            snd,
+            false,
+            0,
+            1, // trigger_rank
         ));
 
         const READ_FROM_MU: bool = true;
