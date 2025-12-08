@@ -118,21 +118,49 @@ pub fn retile_col<T: Debug + Clone>(
 ) -> (u64, Tile<T>) {
     assert_eq!(in_data.shape.len(), 2);
     assert_eq!(accumulator.shape.len(), 2);
-    let in_arr = in_data.underlying.clone().unwrap();
-    let cur_arr = accumulator.underlying.clone().unwrap();
 
-    (
-        0,
-        ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
-            .map(|arr| {
-                Tile::new(
-                    arr.to_shared(),
+    let accum_offset = accumulator.offset;
+    let in_offset = in_data.offset;
+    // This won't be used as the offset field was for a syntactic sugar.
+    // We will move on to deprecating the offset field in the future.
+
+    match &in_data.underlying {
+        Some(in_arr) => {
+            let cur_arr = accumulator.underlying.clone().unwrap();
+
+            (
+                0, // TODO: Add cycles it took for grouping smaller tiles into larger tiles
+                ndarray::concatenate(ndarray::Axis(1), &[cur_arr.view(), in_arr.view()])
+                    .map(|arr| {
+                        Tile::new_padded(
+                            arr.to_shared(),
+                            in_data.bytes_per_elem,
+                            in_data.read_from_mu,
+                            in_offset,
+                        )
+                    })
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to concatenate input data and accumulator data")
+                    }),
+            )
+        }
+        None => {
+            assert_eq!(in_data.shape[0], accumulator.shape[0]);
+
+            (
+                0,
+                Tile::new_blank_padded(
+                    vec![
+                        accumulator.shape[0],
+                        in_data.shape[1] + accumulator.shape[1],
+                    ],
                     in_data.bytes_per_elem,
                     in_data.read_from_mu,
-                )
-            })
-            .unwrap_or_else(|_| panic!("Failed to concatenate input data and accumulator data")),
-    )
+                    in_offset,
+                ),
+            )
+        }
+    }
 }
 
 pub fn retile_row<T: Debug + Clone>(

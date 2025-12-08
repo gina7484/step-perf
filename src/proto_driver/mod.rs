@@ -1841,6 +1841,15 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
+                    Type::Bool(_) => {
+                        let rcv = channel_map_collection.tile_bool.get_receiver(
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
                     dtype => panic!(
                         "Unsupported data type for ConsumerContext operation {:?}",
                         dtype
@@ -1876,6 +1885,15 @@ fn build_from_proto<'a>(
                     }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(PrinterContext::new(rcv));
+                    }
+                    Type::Bool(_) => {
+                        let rcv = channel_map_collection.tile_bool.get_receiver(
                             printer_context.input_id,
                             printer_context.stream_idx,
                             builder,
@@ -2231,6 +2249,16 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        accum_func::AccumFn::RetileCol(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::retile_col(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => todo!(),
                     };
 
@@ -2352,25 +2380,42 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        accum_func::AccumFn::RetileCol(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::retile_col(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => todo!(),
                     };
 
                     let tile_row = accum.tile_row as usize;
                     let tile_col = accum.tile_col as usize;
 
+                    // As the boolean tiles are used for masking, we need to functionally simulate them.
                     let init_accum: Arc<dyn Fn() -> Tile<bool> + Send + Sync> =
-                        if sim_config.functional_sim {
-                            match accum.init_func.unwrap().init_fn.unwrap() {
-                                init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                                    Tile::new_empty([tile_row, tile_col], 1, accum.write_back_mu)
-                                }),
-                                _ => todo!(),
-                            }
-                        } else {
-                            Arc::new(move || {
-                                Tile::new_blank(vec![tile_row, tile_col], 1, accum.write_back_mu)
-                            })
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                Tile::new_empty([tile_row, tile_col], 1, accum.write_back_mu)
+                            }),
+                            _ => todo!(),
                         };
+                    // if sim_config.functional_sim {
+                    //     match accum.init_func.unwrap().init_fn.unwrap() {
+                    //         init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                    //             Tile::new_empty([tile_row, tile_col], 1, accum.write_back_mu)
+                    //         }),
+                    //         _ => todo!(),
+                    //     }
+                    // } else {
+                    //     Arc::new(move || {
+                    //         Tile::new_blank(vec![tile_row, tile_col], 1, accum.write_back_mu)
+                    //     })
+                    // };
 
                     builder.add_child(Accum::<SimpleEvent, _, _>::new(
                         rcv,
