@@ -2279,6 +2279,11 @@ fn build_from_proto<'a>(
                                     accum.write_back_mu,
                                 )
                             }),
+                            init_func::InitFn::DynEmpty(_) => Arc::new(move || {
+                                // DynEmpty means the row or the column size is known at run-time.
+                                // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
+                                Tile::new_empty([0, 0], f32_bytes, accum.write_back_mu)
+                            }),
                             _ => todo!(),
                         }
                     } else {
@@ -2401,6 +2406,11 @@ fn build_from_proto<'a>(
                         match accum.init_func.unwrap().init_fn.unwrap() {
                             init_func::InitFn::Empty(_empty) => Arc::new(move || {
                                 Tile::new_empty([tile_row, tile_col], 1, accum.write_back_mu)
+                            }),
+                            init_func::InitFn::DynEmpty(_) => Arc::new(move || {
+                                // DynEmpty means the row or the column size is known at run-time.
+                                // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
+                                Tile::new_empty([0, 0], 1, accum.write_back_mu)
                             }),
                             _ => todo!(),
                         };

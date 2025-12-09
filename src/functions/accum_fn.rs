@@ -127,6 +127,14 @@ pub fn retile_col<T: Debug + Clone>(
     match &in_data.underlying {
         Some(in_arr) => {
             let cur_arr = accumulator.underlying.clone().unwrap();
+            let cur_arr = if cur_arr.shape() == [0, 0] {
+                // Initial accumulation
+                Array2::from_shape_vec((in_arr.shape()[0], 0), vec![])
+                    .unwrap()
+                    .to_shared()
+            } else {
+                cur_arr
+            };
 
             (
                 0, // TODO: Add cycles it took for grouping smaller tiles into larger tiles
@@ -145,15 +153,16 @@ pub fn retile_col<T: Debug + Clone>(
             )
         }
         None => {
-            assert_eq!(in_data.shape[0], accumulator.shape[0]);
+            if accumulator.shape != vec![0, 0] {
+                // In the initial accumulation, the accumulator's shape is [0,0]. Therefore we use in_data's shape[0].
+                // However, afterwards, we need to make sure the number of rows match.
+                assert_eq!(in_data.shape[0], accumulator.shape[0]);
+            }
 
             (
                 0,
                 Tile::new_blank_padded(
-                    vec![
-                        accumulator.shape[0],
-                        in_data.shape[1] + accumulator.shape[1],
-                    ],
+                    vec![in_data.shape[0], in_data.shape[1] + accumulator.shape[1]],
                     in_data.bytes_per_elem,
                     in_data.read_from_mu,
                     in_offset,
