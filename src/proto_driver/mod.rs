@@ -22,7 +22,7 @@ use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
 use crate::operator::flatmap::{CacheReadAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify};
 use crate::operator::flatten::Flatten;
-use crate::operator::map::{BinaryMapMultiHot, UnaryMap, UnaryMapConfig};
+use crate::operator::map::{BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot};
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
@@ -311,12 +311,62 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::ToConstInt(to_const_int) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::to_const_int(
+                                    tile,
+                                    to_const_int.constant as u64,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }
                     };
 
                     builder.add_child(UnaryMap::<SimpleEvent, _, _>::new(
+                        rcv,
+                        snd,
+                        map_fn,
+                        UnaryMapConfig {
+                            compute_bw: unarymap.compute_bw as u64,
+                            write_back_mu: unarymap.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
+                (Type::MultiHot(_), Type::U64(_)) => {
+                    let rcv = channel_map_collection.multihot.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_u64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&MultiHotN, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::SelectToScalar(select_to_scalar) => {
+                            Arc::new(move |multihot, comp_bw, write_back_mu| {
+                                functions::map_fn::select_to_scalar(
+                                    multihot,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    builder.add_child(UnaryMapMultiHot::<SimpleEvent, _>::new(
                         rcv,
                         snd,
                         map_fn,
@@ -1138,6 +1188,29 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(RepeatStatic::<_>::new(
+                            rcv,
+                            repeat_static.repeat_factor as usize,
+                            snd,
+                        ));
+                    }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            repeat_static.input_id,
+                            repeat_static.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_static.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
                             operation.id,
                             None,
                             builder,

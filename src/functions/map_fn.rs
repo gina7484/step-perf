@@ -1,8 +1,9 @@
 use ndarray::Array2;
 
-use crate::primitives::select::MultiHotN;
+use crate::primitives::select::{MultiHotN, SelectAdapter};
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
+use dam::types::DAMType;
 
 /// matmul
 /// - `write_back_mu`: Whether the output is written to a memory unit. <br/>
@@ -640,6 +641,42 @@ pub fn mul_constant<T: Debug + ndarray::LinalgScalar + Default>(
             ),
         ),
     }
+}
+
+pub fn select_to_scalar<SEL: SelectAdapter>(
+    in_data: &SEL,
+    _comp_bw: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<u64>) {
+    let sel_vec = in_data.to_sel_vec();
+    let val = if sel_vec.is_empty() {
+        0
+    } else {
+        sel_vec[0] as u64
+    };
+    (
+        1,
+        Tile::new(
+            Array2::from_shape_vec((1, 1), vec![val])
+                .unwrap()
+                .to_shared(),
+            8,
+            write_back_mu,
+        ),
+    )
+}
+
+pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
+    (
+        1,
+        Tile::new(
+            Array2::from_shape_vec((1, 1), vec![constant])
+                .unwrap()
+                .to_shared(),
+            8,
+            write_back_mu,
+        ),
+    )
 }
 
 #[cfg(test)]
