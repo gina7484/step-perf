@@ -82,7 +82,7 @@ mod test {
             vec![B / tile_m_gen_q, H / tile_k_gen_q], // As we don't tile K, the second element is 1
             vec![H / tile_k_gen_q, 1],
             vec![B / tile_m_gen_q, H / tile_k_gen_q],
-            None, //Some("/home/ginasohn/step_tl/step-perf/input.npy".to_string()),
+            None, //Some("./step-perf/input.npy".to_string()),
             tile_m_gen_q,
             tile_k_gen_q,
             n_byte as usize,
@@ -117,7 +117,7 @@ mod test {
             vec![H / tile_k_gen_q, H / tile_n_gen_q], // As we don't tile K, the second element is 1
             mat2_stride,
             vec![B / tile_m_gen_q, H / tile_k_gen_q, H / tile_n_gen_q],
-            None, //Some("/home/ginasohn/step_tl/step-perf/w_q.npy".to_string()),
+            None, //Some("./step-perf/w_q.npy".to_string()),
             tile_k_gen_q,
             tile_n_gen_q,
             n_byte as usize,
@@ -171,7 +171,7 @@ mod test {
             vec![B / tile_m_gen_q, H / tile_n_gen_q],
             tile_m_gen_q,
             tile_n_gen_q,
-            None, //Some("/home/ginasohn/step_tl/step-perf/output.npy".to_string()),
+            None, //Some("./step-perf/output.npy".to_string()),
             tensor_addrs.get("Output").unwrap().clone() as u64,
             ADDR_OFFSET,
             PAR_DISPATCH,

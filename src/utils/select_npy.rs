@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn test_conversion() {
-        let file_path = "/home/ginasohn/step_tl/step-perf/select.npy";
+        let file_path = "./step-perf/select.npy";
 
         let mut ctx = ProgramBuilder::default();
         let (sel_snd, sel_rcv) = ctx.unbounded::<Elem<MultiHotN>>();
