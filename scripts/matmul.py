@@ -67,4 +67,4 @@ def check_gold(sim_out_path, gold_path):
 check_gold(
     "./step-perf/output", "./step-perf/gold"
 )
-# print(np.load("/home/ginasohn/step-perf/gold.npy"))
+# print(np.load("step-perf/gold.npy"))
