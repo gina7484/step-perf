@@ -13,6 +13,7 @@ pub struct RetileStreamify<T: Clone> {
     out_stream: Sender<Elem<Tile<T>>>,
     split_row: bool,
     filter_mask: bool,
+    chunk: usize,
     id: u32,
 }
 
@@ -25,6 +26,7 @@ where
         out_stream: Sender<Elem<Tile<T>>>,
         split_row: bool,
         filter_mask: bool,
+        chunk: usize,
         id: u32,
     ) -> Self {
         let ctx = Self {
@@ -32,6 +34,7 @@ where
             out_stream,
             split_row,
             filter_mask,
+            chunk,
             id,
             context_info: Default::default(),
         };
@@ -45,24 +48,57 @@ where
             Some(arr) => {
                 let offset = data.offset;
 
-                let vec_iter = if self.split_row {
-                    arr.rows().into_iter()
+                let split_dim_size = if self.split_row {
+                    arr.shape()[0]
                 } else {
-                    arr.columns().into_iter()
+                    arr.shape()[1]
                 };
 
-                let vec_iter_len = vec_iter.len();
-                for (idx, row) in vec_iter.enumerate() {
+                let num_chunks = (split_dim_size + self.chunk - 1) / self.chunk;
+
+                for chunk_idx in 0..num_chunks {
+                    let start = chunk_idx * self.chunk;
+                    let end = std::cmp::min(start + self.chunk, split_dim_size);
+
+                    let chunk_slice = if self.split_row {
+                        arr.slice(ndarray::s![start..end, ..]).to_shared()
+                    } else {
+                        arr.slice(ndarray::s![.., start..end]).to_shared()
+                    };
+
+                    // Calculate output offset:
+                    // - For row split: offset is min(chunk_size, remaining valid rows from input offset)
+                    // - For column split: offset stays the same (number of valid rows)
+                    let out_offset = if self.split_row {
+                        let rows_before = start;
+                        let chunk_rows = end - start;
+                        if offset <= rows_before {
+                            0
+                        } else if offset >= end {
+                            chunk_rows
+                        } else {
+                            offset - rows_before
+                        }
+                    } else {
+                        // Column split doesn't change the row-based offset
+                        offset
+                    };
+
                     let out_data = Tile::<T>::new_padded(
-                        row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
+                        chunk_slice,
                         data.bytes_per_elem,
                         data.read_from_mu,
-                        if idx + 1 <= offset { 1 } else { 0 },
+                        out_offset,
                     );
+
+                    // For filter_mask: check if this chunk contains the last valid data
+                    // (only relevant for row split where offset represents valid rows)
+                    let is_last_valid_chunk = self.filter_mask && self.split_row && offset <= end && offset > start;
+                    let is_last_chunk = chunk_idx + 1 == num_chunks;
 
                     // check whether this is the last value and set the stop level if needed
                     let elem = if stop_level.is_some() {
-                        if (self.filter_mask && idx + 1 == offset) || (idx + 1 == vec_iter_len) {
+                        if is_last_valid_chunk || is_last_chunk {
                             Elem::ValStop(out_data, stop_level.unwrap())
                         } else {
                             Elem::Val(out_data)
@@ -80,7 +116,7 @@ where
                             },
                         )
                         .unwrap();
-                    if self.filter_mask && idx + 1 == offset {
+                    if is_last_valid_chunk {
                         break;
                     }
                 }
@@ -88,29 +124,64 @@ where
             None => {
                 let offset = data.offset;
 
-                let num_tiles = if self.split_row {
+                let split_dim_size = if self.split_row {
                     data.shape[0]
                 } else {
                     data.shape[1]
                 };
 
-                let row_size = if self.split_row {
+                let other_dim_size = if self.split_row {
                     data.shape[1]
                 } else {
                     data.shape[0]
                 };
 
-                for idx in 0..num_tiles {
+                let num_chunks = (split_dim_size + self.chunk - 1) / self.chunk;
+
+                for chunk_idx in 0..num_chunks {
+                    let start = chunk_idx * self.chunk;
+                    let end = std::cmp::min(start + self.chunk, split_dim_size);
+                    let chunk_size = end - start;
+
+                    // Output shape depends on split direction
+                    let out_shape = if self.split_row {
+                        vec![chunk_size, other_dim_size]
+                    } else {
+                        vec![other_dim_size, chunk_size]
+                    };
+
+                    // Calculate output offset:
+                    // - For row split: offset is min(chunk_size, remaining valid rows from input offset)
+                    // - For column split: offset stays the same (number of valid rows)
+                    let out_offset = if self.split_row {
+                        let rows_before = start;
+                        if offset <= rows_before {
+                            0
+                        } else if offset >= end {
+                            chunk_size
+                        } else {
+                            offset - rows_before
+                        }
+                    } else {
+                        // Column split doesn't change the row-based offset
+                        offset
+                    };
+
                     let out_data = Tile::<T>::new_blank_padded(
-                        vec![1, row_size],
+                        out_shape,
                         data.bytes_per_elem,
                         data.read_from_mu,
-                        if idx + 1 <= offset { 1 } else { 0 },
+                        out_offset,
                     );
+
+                    // For filter_mask: check if this chunk contains the last valid data
+                    // (only relevant for row split where offset represents valid rows)
+                    let is_last_valid_chunk = self.filter_mask && self.split_row && offset <= end && offset > start;
+                    let is_last_chunk = chunk_idx + 1 == num_chunks;
 
                     // check whether this is the last value and set the stop level if needed
                     let elem = if stop_level.is_some() {
-                        if (self.filter_mask && idx + 1 == offset) || (idx + 1 == num_tiles) {
+                        if is_last_valid_chunk || is_last_chunk {
                             Elem::ValStop(out_data, stop_level.unwrap())
                         } else {
                             Elem::Val(out_data)
@@ -128,7 +199,7 @@ where
                             },
                         )
                         .unwrap();
-                    if self.filter_mask && idx + 1 == offset {
+                    if is_last_valid_chunk {
                         break;
                     }
                 }
@@ -590,12 +661,14 @@ mod retile_tests {
             ground_truth_data
         }
 
-        // Step 1: Create 9 different ndarray::ArcArray2<T> with shape 2x2
+        // Step 1: Create 9 different ndarray::ArcArray2<T> with shape [4,1]
+        // Input: 3 tiles of [4,3] (concatenated along columns)
+        // Output: 9 tiles of [4,1] (split by columns)
         let arrays_input: Vec<Array2<i32>> = (0..9)
             .map(|i| Array2::from_shape_vec((4, 1), vec![i as i32; 4]).unwrap())
             .collect();
         let arrays_output: Vec<Array2<i32>> = (0..9)
-            .map(|i| Array2::from_shape_vec((1, 4), vec![i as i32; 4]).unwrap())
+            .map(|i| Array2::from_shape_vec((4, 1), vec![i as i32; 4]).unwrap())
             .collect();
         let read_from_mu = true;
         // Step 2: Create a 3x3 rank-2 data stream from these arrays
@@ -617,6 +690,7 @@ mod retile_tests {
             out_data_snd,
             false,
             false,
+            1, // chunk size
             0, // id
         ));
         ctx.add_child(ApproxCheckerContext::new(
@@ -701,6 +775,7 @@ mod retile_tests {
             out_data_snd,
             true,
             false,
+            1, // chunk size
             0, // id
         ));
         ctx.add_child(ApproxCheckerContext::new(
@@ -788,6 +863,7 @@ mod retile_tests {
             out_data_snd,
             true,
             true,
+            1, // chunk size
             0, // id
         ));
         ctx.add_child(ApproxCheckerContext::new(

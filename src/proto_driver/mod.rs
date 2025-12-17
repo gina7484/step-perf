@@ -2546,6 +2546,7 @@ fn build_from_proto<'a>(
                             snd,
                             retile_streamify.split_row,
                             retile_streamify.filter_mask,
+                            retile_streamify.chunk as usize, // chunk size (default: 1 for backward compatibility)
                             operation.id,
                         ));
                     }
