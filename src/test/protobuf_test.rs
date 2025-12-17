@@ -54,8 +54,8 @@ mod test {
             },
             SimConfig {
                 channel_depth: Some(16),
-                functional_sim: false,
-                mock_bf16: false,
+                functional_sim: true,
+                mock_bf16: true,
                 config_dict: HashMap::new(),
             },
             db_name,

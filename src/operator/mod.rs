@@ -15,6 +15,7 @@ pub mod partition;
 pub mod promote;
 pub mod reassemble;
 pub mod repeat;
+pub mod static_reassemble;
 pub mod reshape;
 pub mod streamify;
 

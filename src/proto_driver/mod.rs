@@ -28,6 +28,7 @@ use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::{Reshape, ReshapeNoPadStream, ReshapePadStream};
+use crate::operator::static_reassemble::StaticReassemble;
 use crate::operator::streamify::Streamify;
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
@@ -200,13 +201,43 @@ fn build_from_proto<'a>(
                                 functions::map_fn::exp(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Pow2(pow2) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::pow2(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Rsqrt(rsqrt) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::rsqrt(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::RowWiseSum(row_wise_sum) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::row_wise_sum(tile, comp_bw, write_back_mu)
                             })
                         }
-                        _ => {
-                            panic!("Unsupported unary map function type")
+                        elemto_elem_func::ElemElemFn::MulConstant(mul_constant) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mul_constant(
+                                    tile,
+                                    mul_constant.constant_float.unwrap() as f32,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::AddConstant(add_constant) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::add_constant(
+                                    tile,
+                                    add_constant.constant_float.unwrap() as f32,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
                         }
                     };
 
@@ -1674,6 +1705,132 @@ fn build_from_proto<'a>(
                         }
                     }
                     dtype => panic!("Unsupported data type {:?}", dtype),
+                }
+            }
+            OpType::StaticReassemble(static_reassemble) => {
+                match static_reassemble
+                    .input_dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in static_reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(static_reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_f32.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(StaticReassemble::<SimpleEvent, _>::new(
+                            rcv_list,
+                            snd,
+                            static_reassemble.merge_rank,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                write_back_mu: static_reassemble.write_back_mu,
+                            },
+                            operation.id,
+                        ));
+                    }
+                    Type::U64(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in static_reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(static_reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_u64.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(StaticReassemble::<SimpleEvent, _>::new(
+                            rcv_list,
+                            snd,
+                            static_reassemble.merge_rank,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                write_back_mu: static_reassemble.write_back_mu,
+                            },
+                            operation.id,
+                        ));
+                    }
+                    Type::MultiHot(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in static_reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(static_reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.multihot.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(StaticReassemble::<SimpleEvent, _>::new(
+                            rcv_list,
+                            snd,
+                            static_reassemble.merge_rank,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                write_back_mu: static_reassemble.write_back_mu,
+                            },
+                            operation.id,
+                        ));
+                    }
+                    dtype => panic!(
+                        "Unsupported data type for StaticReassemble operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::Parallelize(parallelize) => {
