@@ -28,11 +28,20 @@ pub enum ChannelMapEntry<T: DAMType> {
     Broadcast(HashMap<u32, ChanType<T>>),
 }
 
-pub fn inspect_sender<T: DAMType>(snd: &Sender<T>, target_id: u32) {
+pub fn inspect_sender<T: DAMType>(
+    snd: &Sender<T>,
+    target_id: u32,
+    id: u32,
+    idx: Option<u32>,
+    location: &str,
+) {
     let target_id = format!("Channel({})", target_id);
     let curr_id = format!("{}", snd.id());
     if target_id == curr_id {
-        panic!("{} sender found here", target_id);
+        panic!(
+            "{} sender found {} (op id({}), stream idx({:?}))",
+            target_id, location, id, idx
+        );
     }
 }
 
@@ -113,13 +122,14 @@ where
                             match capacity {
                                 Some(cap) => {
                                     let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
-                                    //inspect_sender(&snd, 24);
+                                    // inspect_sender(&snd, 617, id, idx, "L125");
                                     x.insert(stream_idx, ChanType::Sender(snd));
                                     rcv
                                 }
                                 None => {
                                     // Default capacity
                                     let (snd, rcv) = builder.bounded::<Elem<T>>(DEFAULT_CHAN_SIZE);
+                                    // inspect_sender(&snd, 617, id, idx, "L133");
                                     x.insert(stream_idx, ChanType::Sender(snd));
                                     rcv
                                 }
@@ -131,7 +141,7 @@ where
                         match capacity {
                             Some(cap) => {
                                 let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
-                                //inspect_sender(&snd, 24);
+                                // inspect_sender(&snd, 617, id, idx, "L144");
                                 let mut broadcast_map = HashMap::new();
                                 broadcast_map.insert(stream_idx, ChanType::Sender(snd));
                                 chan_map.insert(id, ChannelMapEntry::Broadcast(broadcast_map));
@@ -140,7 +150,7 @@ where
                             None => {
                                 // Default capacity
                                 let (snd, rcv) = builder.bounded::<Elem<T>>(DEFAULT_CHAN_SIZE);
-                                //inspect_sender(&snd, 24);
+                                // inspect_sender(&snd, 617, id, idx, "L153");
                                 let mut broadcast_map = HashMap::new();
                                 broadcast_map.insert(stream_idx, ChanType::Sender(snd));
                                 chan_map.insert(id, ChannelMapEntry::Broadcast(broadcast_map));
@@ -160,14 +170,14 @@ where
                         match capacity {
                             Some(cap) => {
                                 let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
-                                // inspect_sender(&snd, 24);
+                                // inspect_sender(&snd, 617, id, idx, "L173");
                                 chan_map.insert(id, ChannelMapEntry::Single(ChanType::Sender(snd)));
                                 rcv
                             }
                             None => {
                                 // Default capacity
                                 let (snd, rcv) = builder.bounded::<Elem<T>>(DEFAULT_CHAN_SIZE);
-                                // inspect_sender(&snd, 24);
+                                // inspect_sender(&snd, 617, id, idx, "L180");
                                 chan_map.insert(id, ChannelMapEntry::Single(ChanType::Sender(snd)));
                                 rcv
                             }
