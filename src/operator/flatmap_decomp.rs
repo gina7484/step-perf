@@ -377,7 +377,7 @@ mod tests {
             out_rcv,
             accum_data_snd,
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                retile_row(tile1, tile2, comp_bw, write_back_mu)
+                retile_row(tile1, tile2, comp_bw, write_back_mu,0)
             }),
             Arc::new(move || Tile::new_empty([0, 4], BYTES_PER_ELEM, false)),
             1,
@@ -392,7 +392,7 @@ mod tests {
             mask_rcv,
             accum_mask_snd,
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                retile_row(tile1, tile2, comp_bw, write_back_mu)
+                retile_row(tile1, tile2, comp_bw, write_back_mu,0)
             }),
             Arc::new(move || Tile::new_empty([0, 1], BYTES_PER_ELEM, false)),
             1,

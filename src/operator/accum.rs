@@ -270,7 +270,9 @@ mod tests {
         ctx.add_child(Accum::<SimpleEvent, _, _>::new(
             in_data_rcv,
             out_data_snd,
-            Arc::new(accum_fn::retile_col),
+            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                accum_fn::retile_row(tile1, tile2, comp_bw, write_back_mu, 0)
+            }),
             Arc::new(move || Tile::new_empty([2, 0], 4, read_from_mu)),
             1, // rank
             AccumConfig {
@@ -363,7 +365,9 @@ mod tests {
         ctx.add_child(Accum::<SimpleEvent, _, _>::new(
             in_data_rcv,
             out_data_snd,
-            Arc::new(accum_fn::retile_row),
+            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                accum_fn::retile_row(tile1, tile2, comp_bw, write_back_mu, 0)
+            }),
             Arc::new(move || Tile::new_empty([0, 4], 4, read_from_mu)),
             1, // rank
             AccumConfig {

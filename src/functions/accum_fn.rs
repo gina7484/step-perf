@@ -17,6 +17,7 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
     in2: &Tile<T>,
     flop_per_cycle: u64,
     write_back_mu: bool,
+    id: u32,
 ) -> (u64, Tile<T>) {
     assert_eq!(in1.shape.len(), 2);
     assert_eq!(in2.shape.len(), 2);
@@ -66,6 +67,7 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     in2: &Tile<T>,
     flop_per_cycle: u64,
     write_back_mu: bool,
+    id: u32,
 ) -> (u64, Tile<T>) {
     assert_eq!(in1.shape.len(), 2);
     assert_eq!(in2.shape.len(), 2);
@@ -115,6 +117,7 @@ pub fn retile_col<T: Debug + Clone>(
     accumulator: &Tile<T>,
     flop_per_cycle: u64,
     write_back_mu: bool,
+    id: u32,
 ) -> (u64, Tile<T>) {
     assert_eq!(in_data.shape.len(), 2);
     assert_eq!(accumulator.shape.len(), 2);
@@ -148,7 +151,10 @@ pub fn retile_col<T: Debug + Clone>(
                         )
                     })
                     .unwrap_or_else(|_| {
-                        panic!("Failed to concatenate input data and accumulator data")
+                        panic!(
+                            "Failed to concatenate input data and accumulator data (Accum_{})",
+                            id
+                        )
                     }),
             )
         }
@@ -177,6 +183,7 @@ pub fn retile_row<T: Debug + Clone>(
     accumulator: &Tile<T>,
     flop_per_cycle: u64,
     write_back_mu: bool,
+    id: u32,
 ) -> (u64, Tile<T>) {
     assert_eq!(in_data.shape.len(), 2);
     assert_eq!(accumulator.shape.len(), 2);
@@ -200,16 +207,19 @@ pub fn retile_row<T: Debug + Clone>(
                         )
                     })
                     .unwrap_or_else(|_| {
-                        panic!("Failed to concatenate input data and accumulator data")
+                        panic!(
+                            "Failed to concatenate input data and accumulator data (Accum_{})",
+                            id
+                        )
                     }),
             )
         }
         None => {
-            assert_eq!(in_data.shape[1], accumulator.shape[1]);
+            assert_eq!(in_data.shape[1], accumulator.shape[1], "Accum_{}", id);
             let new_rows = if (in_data.shape[0] == in_offset) || (in_offset == 0) {
                 in_offset
             } else {
-                panic!("Invalid offset for input data");
+                panic!("Invalid offset for input data (Accum_{})", id);
             };
 
             (
@@ -232,6 +242,7 @@ pub fn signal_req_all_read<T: Debug>(
     in_data: &Tile<T>,
     _: &Tile<u64>,
     write_back_mu: bool,
+    id: u32,
 ) -> (u64, Tile<u64>) {
     match &in_data.underlying {
         Some(_) => (
