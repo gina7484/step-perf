@@ -4,11 +4,18 @@ use dam::context_tools::*;
 use dam::logging::LogEvent;
 use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
+use serde::Serialize;
 
 use crate::primitives::elem::Elem;
 use crate::primitives::tile::Tile;
 use crate::ramulator::hbm_context::ParAddrs;
 use crate::utils::events::LoggableEventSimple;
+
+#[derive(Serialize)]
+struct TrafficStats {
+    id: u32,
+    total_bytes_read: u64,
+}
 
 #[context_macro]
 pub struct RandomOffChipLoad<E: LoggableEventSimple, T: DAMType> {
@@ -32,6 +39,9 @@ pub struct RandomOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub rdata: Sender<Elem<Tile<T>>>,
     pub transposed: bool,
     pub id: u32,
+    // Traffic tracking
+    pub track_traffic: bool,
+    pub total_bytes_read: u64,
     // Phantom data for the event type
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
@@ -58,6 +68,7 @@ where
         rdata: Sender<Elem<Tile<T>>>,
         transposed: bool,
         id: u32,
+        track_traffic: bool,
     ) -> Self {
         let underlying = match npy_path {
             Some(file_path) => {
@@ -145,6 +156,8 @@ where
             rdata,
             transposed,
             id,
+            track_traffic,
+            total_bytes_read: 0,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -210,6 +223,22 @@ where
             }
         }
     }
+
+    /// Save traffic statistics to a JSON file
+    fn save_traffic_stats(&self) {
+        if !self.track_traffic {
+            return;
+        }
+
+        let stats = TrafficStats {
+            id: self.id,
+            total_bytes_read: self.total_bytes_read,
+        };
+
+        let filename = format!("RandomOffChipLoad_{}.json", self.id);
+        let json_string = serde_json::to_string_pretty(&stats).unwrap();
+        std::fs::write(&filename, json_string).unwrap();
+    }
 }
 
 impl<
@@ -255,6 +284,12 @@ where
                     }
 
                     let read_finish_time = self.time.tick();
+
+                    // Track traffic if enabled
+                    if self.track_traffic {
+                        let bytes_read = (self.tile_row * self.tile_col * self.n_byte) as u64;
+                        self.total_bytes_read += bytes_read;
+                    }
 
                     // Log the event
                     dam::logging::log_event(&E::new(
@@ -313,6 +348,12 @@ where
 
                     let read_finish_time = self.time.tick();
 
+                    // Track traffic if enabled
+                    if self.track_traffic {
+                        let bytes_read = (self.tile_row * self.tile_col * self.n_byte) as u64;
+                        self.total_bytes_read += bytes_read;
+                    }
+
                     // Log the event
                     dam::logging::log_event(&E::new(
                         "RandomOffChipLoad".to_string(),
@@ -339,5 +380,8 @@ where
                 }
             }
         }
+
+        // Save traffic statistics to JSON file before returning
+        self.save_traffic_stats();
     }
 }

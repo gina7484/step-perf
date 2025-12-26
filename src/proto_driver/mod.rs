@@ -1111,6 +1111,7 @@ fn build_from_proto<'a>(
                             on_chip_snd,
                             random_off_chip_load.transposed,
                             operation.id,
+                            random_off_chip_load.track_traffic,
                         ));
 
                         mem_context.add_reader(ReadBundle {
@@ -2466,7 +2467,13 @@ fn build_from_proto<'a>(
                     > = match accum.func.unwrap().accum_fn.unwrap() {
                         accum_func::AccumFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::accum_fn::add(tile1, tile2, comp_bw, write_back_mu,operation.id)
+                                functions::accum_fn::add(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    operation.id,
+                                )
                             })
                         }
                         accum_func::AccumFn::RetileRow(_) => {
@@ -2476,7 +2483,7 @@ fn build_from_proto<'a>(
                                     tile2,
                                     comp_bw,
                                     write_back_mu,
-                                    operation.id
+                                    operation.id,
                                 )
                             })
                         }
@@ -2487,7 +2494,7 @@ fn build_from_proto<'a>(
                                     tile2,
                                     comp_bw,
                                     write_back_mu,
-                                    operation.id
+                                    operation.id,
                                 )
                             })
                         }
@@ -2615,7 +2622,7 @@ fn build_from_proto<'a>(
                                     tile2,
                                     comp_bw,
                                     write_back_mu,
-                                    operation.id
+                                    operation.id,
                                 )
                             })
                         }
@@ -2626,7 +2633,7 @@ fn build_from_proto<'a>(
                                     tile2,
                                     comp_bw,
                                     write_back_mu,
-                                    operation.id
+                                    operation.id,
                                 )
                             })
                         }
