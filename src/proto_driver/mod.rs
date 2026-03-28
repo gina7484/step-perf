@@ -1302,6 +1302,7 @@ fn build_from_proto<'a>(
                             in_rcv,
                             ref_rcv,
                             snd,
+                            repeat_ref.rank,
                             operation.id,
                         ));
                     }
@@ -1336,6 +1337,7 @@ fn build_from_proto<'a>(
                             in_rcv,
                             ref_rcv,
                             snd,
+                            repeat_ref.rank,
                             operation.id,
                         ));
                     }

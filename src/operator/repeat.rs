@@ -1,4 +1,4 @@
-use crate::primitives::elem::Elem;
+use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
 
 #[context_macro]
@@ -100,6 +100,7 @@ pub struct RepeatRef<T: Clone, R: Clone> {
     in_stream: Receiver<Elem<T>>,
     ref_stream: Receiver<Elem<R>>,
     out_stream: Sender<Elem<T>>,
+    rank: StopType,
     id: u32,
 }
 
@@ -111,12 +112,14 @@ where
         in_stream: Receiver<Elem<T>>,
         ref_stream: Receiver<Elem<R>>,
         out_stream: Sender<Elem<T>>,
+        rank: StopType,
         id: u32,
     ) -> Self {
         let ctx = Self {
             in_stream,
             ref_stream,
             out_stream,
+            rank,
             id,
             context_info: Default::default(),
         };
@@ -136,52 +139,63 @@ impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
                     time: _,
                     data: in_data,
                 }) => {
-                    // 2. Dequeue from ref_stream and enqueue until we see a stop token
+                    // 2. Inner loop: dequeue from ref_stream
                     loop {
                         match self.ref_stream.dequeue(&self.time) {
                             Ok(ChannelElement {
                                 time: _,
                                 data: ref_data,
                             }) => {
-                                match ref_data {
-                                    Elem::Val(_) => {
-                                        // Not a stop token, enqueue the input element
-                                        self.out_stream
-                                            .enqueue(
-                                                &self.time,
-                                                ChannelElement {
-                                                    time: self.time.tick(),
-                                                    data: match &in_data {
-                                                        Elem::Val(x) => Elem::Val(x.clone()),
-                                                        Elem::ValStop(x, _) => Elem::Val(x.clone()),
-                                                    },
+                                let ref_stop_level: StopType = match &ref_data {
+                                    Elem::Val(_) => 0,
+                                    Elem::ValStop(_, s) => *s,
+                                };
+
+                                if ref_stop_level < self.rank {
+                                    // Sub-rank boundary: consume silently
+                                    continue;
+                                } else if ref_stop_level == self.rank {
+                                    // At-rank: output current in_data value (stripped of stop)
+                                    self.out_stream
+                                        .enqueue(
+                                            &self.time,
+                                            ChannelElement {
+                                                time: self.time.tick(),
+                                                data: match &in_data {
+                                                    Elem::Val(x) => Elem::Val(x.clone()),
+                                                    Elem::ValStop(x, _) => Elem::Val(x.clone()),
                                                 },
-                                            )
-                                            .unwrap();
-                                    }
-                                    Elem::ValStop(_, s) => {
-                                        // 3. Stop token: enqueue with stop token + 1
-                                        self.out_stream
-                                            .enqueue(
-                                                &self.time,
-                                                ChannelElement {
-                                                    time: self.time.tick(),
-                                                    data: match &in_data {
-                                                        Elem::Val(x) => {
-                                                            Elem::ValStop(x.clone(), 0 + 1)
-                                                        }
-                                                        Elem::ValStop(x, in_s) => {
-                                                            assert_eq!(in_s + 1, s,
-                                                                "RepeatRef {}: mismatch between input stop count {} and reference stop count {}",
-                                                                self.id, in_s + 1, s);
-                                                            Elem::ValStop(x.clone(), s)
-                                                        }
-                                                    },
+                                            },
+                                        )
+                                        .unwrap();
+                                } else {
+                                    // ref_stop_level > self.rank: terminal stop
+                                    self.out_stream
+                                        .enqueue(
+                                            &self.time,
+                                            ChannelElement {
+                                                time: self.time.tick(),
+                                                data: match &in_data {
+                                                    Elem::Val(x) => {
+                                                        Elem::ValStop(
+                                                            x.clone(),
+                                                            ref_stop_level - self.rank,
+                                                        )
+                                                    }
+                                                    Elem::ValStop(x, in_s) => {
+                                                        assert_eq!(
+                                                            in_s + 1,
+                                                            ref_stop_level - self.rank,
+                                                            "RepeatRef {}: mismatch between input stop count {} and reference stop count {} (rank={})",
+                                                            self.id, in_s + 1, ref_stop_level - self.rank, self.rank
+                                                        );
+                                                        Elem::ValStop(x.clone(), in_s + 1)
+                                                    }
                                                 },
-                                            )
-                                            .unwrap();
-                                        break; // Move to next element in in_stream
-                                    }
+                                            },
+                                        )
+                                        .unwrap();
+                                    break; // Move to next element in in_stream
                                 }
                             }
                             Err(_) => {
@@ -244,7 +258,7 @@ mod tests {
             ref_snd,
         ));
 
-        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 0));
+        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 0, 0));
 
         // Expected output: [1, 1, 1(stop), 2, 2(stop), 3, 3, 3, 3(stop)]
         ctx.add_child(ApproxCheckerContext::new(
@@ -313,7 +327,7 @@ mod tests {
             ref_snd,
         ));
 
-        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 0));
+        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 0, 0));
 
         ctx.add_child(ApproxCheckerContext::new(
             || {
@@ -329,6 +343,78 @@ mod tests {
                     Elem::ValStop(3, 1),
                     Elem::Val(4),
                     Elem::ValStop(4, 3),
+                ]
+                .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn repeat_ref_rank1() {
+        // cargo test --package step_perf --lib -- operator::repeat::tests::repeat_ref_rank1 --exact --show-output
+        let mut ctx = ProgramBuilder::default();
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (ref_snd, ref_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // in_stream: 1 2 3 S1
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(1),
+                    Elem::Val(2),
+                    Elem::ValStop(3, 1),
+                ]
+                .into_iter()
+            },
+            in_snd,
+        ));
+
+        // ref_stream: 9 9 S1 9 9 S2 9 9 9 S1 9 S2 9 S1 9 S3
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(9),
+                    Elem::Val(9),
+                    Elem::ValStop(9, 1),
+                    Elem::Val(9),
+                    Elem::Val(9),
+                    Elem::ValStop(9, 2),
+                    Elem::Val(9),
+                    Elem::Val(9),
+                    Elem::Val(9),
+                    Elem::ValStop(9, 1),
+                    Elem::Val(9),
+                    Elem::ValStop(9, 2),
+                    Elem::Val(9),
+                    Elem::ValStop(9, 1),
+                    Elem::Val(9),
+                    Elem::ValStop(9, 3),
+                ]
+                .into_iter()
+            },
+            ref_snd,
+        ));
+
+        ctx.add_child(RepeatRef::new(in_rcv, ref_rcv, out_snd, 1, 0));
+
+        // output: 1 1S1 2 2S1 3 3S2
+        ctx.add_child(ApproxCheckerContext::new(
+            || {
+                vec![
+                    Elem::Val(1),
+                    Elem::ValStop(1, 1),
+                    Elem::Val(2),
+                    Elem::ValStop(2, 1),
+                    Elem::Val(3),
+                    Elem::ValStop(3, 2),
                 ]
                 .into_iter()
             },
