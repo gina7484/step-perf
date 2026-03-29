@@ -167,9 +167,9 @@ fn build_from_proto<'a>(
     let f32_bytes: usize = if sim_config.mock_bf16 { 2 } else { 4 }; // we will use this to mimic bfloat16
 
     for operation in step_graph.operators {
-        if operation.id == 23 || operation.id == 24 || operation.id == 25 {
-            println!("processing {:?}\n", operation);
-        }
+        // if operation.id == 23 || operation.id == 24 || operation.id == 25 {
+        //     println!("processing {:?}\n", operation);
+        // }
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
                 unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
@@ -1254,6 +1254,31 @@ fn build_from_proto<'a>(
                             snd,
                         ));
                     }
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_)),
+                    }) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
+                            repeat_static.input_id,
+                            repeat_static.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_static.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.buff_tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(RepeatStatic::<_>::new(
+                            rcv,
+                            repeat_static.repeat_factor as usize,
+                            snd,
+                        ));
+                    }
                     dtype => panic!(
                         "Unsupported data type for RepeatStatic operation {:?}",
                         dtype
@@ -2167,6 +2192,17 @@ fn build_from_proto<'a>(
                     }
                     Type::Bool(_) => {
                         let rcv = channel_map_collection.tile_bool.get_receiver(
+                            printer_context.input_id,
+                            printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(PrinterContext::new(rcv));
+                    }
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_)),
+                    }) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             printer_context.input_id,
                             printer_context.stream_idx,
                             builder,

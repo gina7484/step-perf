@@ -193,7 +193,12 @@ where
                     }
                     (Elem::ValStop(data1, lev1), Elem::ValStop(data2, lev2)) => {
                         if lev1 != lev2 {
-                            panic!("The two input streams' shape don't match!");
+                            panic!(
+                                "The two input streams' shape don't match! ({} != {})! BinaryMapAccum id: {}",
+                                lev1,
+                                lev2,
+                                self.id
+                            );
                         }
 
                         if lev1 < self.rank {
@@ -237,7 +242,11 @@ where
                                 .unwrap();
                         }
                     }
-                    (_, _) => panic!("The two input streams' shape don't match!"),
+                    (a, b) => panic!(
+                        "The two input streams' shape don't match ({:?} != {:?})! BinaryMapAccum id: {}",
+                        a,b,
+                        self.id
+                    ),
                 },
                 (Ok(_), Err(_)) => panic!("One stream closed earlier"),
                 (Err(_), Ok(_)) => panic!("One stream closed earlier"),
