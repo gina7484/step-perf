@@ -2148,6 +2148,17 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(ConsumerContext::new(rcv));
                     }
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_)),
+                    }) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        builder.add_child(ConsumerContext::new(rcv));
+                    }
                     dtype => panic!(
                         "Unsupported data type for ConsumerContext operation {:?}",
                         dtype
