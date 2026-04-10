@@ -554,6 +554,115 @@ where
     }
 }
 
+#[context_macro]
+pub struct UnaryMapToMultiHot<E, IT: DAMType> {
+    in_stream: Receiver<Elem<Tile<IT>>>,
+    out_stream: Sender<Elem<MultiHotN>>,
+    func: Arc<dyn Fn(&Tile<IT>, u64, bool) -> (u64, MultiHotN) + Send + Sync>,
+    config: UnaryMapConfig,
+    id: u32,
+    _phantom: PhantomData<E>,
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        IT: DAMType,
+    > UnaryMapToMultiHot<E, IT>
+where
+    Elem<Tile<IT>>: DAMType,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<Tile<IT>>>,
+        out_stream: Sender<Elem<MultiHotN>>,
+        func: Arc<dyn Fn(&Tile<IT>, u64, bool) -> (u64, MultiHotN) + Send + Sync>,
+        config: UnaryMapConfig,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            func,
+            config,
+            id,
+            context_info: Default::default(),
+            _phantom: PhantomData,
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+}
+
+impl<
+        E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
+        IT: DAMType,
+    > Context for UnaryMapToMultiHot<E, IT>
+where
+    Elem<Tile<IT>>: DAMType,
+{
+    fn run(&mut self) {
+        loop {
+            let in_elem = self.in_stream.peek_next(&self.time);
+            let (in_tile, stop_lev) = match in_elem {
+                Ok(ChannelElement {
+                    time: _,
+                    data: data_enum,
+                }) => match data_enum {
+                    Elem::Val(data) => (data, None),
+                    Elem::ValStop(data, lev) => (data, Some(lev)),
+                },
+                Err(_) => {
+                    return;
+                }
+            };
+
+            let start_time = self.time.tick().time();
+            let load_cycles = if in_tile.read_from_mu {
+                div_ceil(in_tile.size_in_bytes() as u64, PMU_BW)
+            } else {
+                0
+            };
+
+            let (comp_cycles, out_multihot) =
+                (self.func)(&in_tile, self.config.compute_bw, self.config.write_back_mu);
+            let store_cycles = if self.config.write_back_mu {
+                div_ceil(out_multihot.size_in_bytes() as u64, PMU_BW)
+            } else {
+                0
+            };
+
+            let roofline_cycles = [load_cycles, comp_cycles, store_cycles]
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            self.time.incr_cycles(roofline_cycles);
+            let data = match stop_lev {
+                Some(level) => Elem::ValStop(out_multihot, level),
+                None => Elem::Val(out_multihot),
+            };
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: data,
+                    },
+                )
+                .unwrap();
+            dam::logging::log_event(&E::new(
+                "UnaryMapToMultiHot".to_string(),
+                self.id,
+                start_time,
+                self.time.tick().time(),
+                stop_lev != None,
+            ))
+            .unwrap();
+            self.in_stream.dequeue(&self.time).unwrap();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{

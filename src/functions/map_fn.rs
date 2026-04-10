@@ -768,6 +768,27 @@ pub fn multihot_to_u64(
     )
 }
 
+pub fn u64_to_multihot(
+    in_data: &Tile<u64>,
+    width: usize,
+    _comp_bw: u64,
+    write_back_mu: bool,
+) -> (u64, MultiHotN) {
+    match &in_data.underlying {
+        Some(arr) => {
+            let mut hot = vec![false; width];
+            for &val in arr.iter() {
+                let idx = val as usize;
+                if idx < width {
+                    hot[idx] = true;
+                }
+            }
+            (1, MultiHotN::new(hot, write_back_mu))
+        }
+        None => (1, MultiHotN::new(vec![false; width], write_back_mu)),
+    }
+}
+
 pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
     (
         1,
@@ -923,6 +944,46 @@ mod tests {
         assert_eq!(arr[[0, 0]], 0);
         assert_eq!(arr[[0, 1]], 1);
         assert_eq!(arr[[0, 2]], 2);
+    }
+
+    #[test]
+    fn test_u64_to_multihot_single() {
+        let arr = Array2::from_shape_vec((1, 1), vec![2u64]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 8, false);
+        let (cycles, mh) = u64_to_multihot(&tile, 4, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 4);
+        assert_eq!(*mh, vec![false, false, true, false]);
+    }
+
+    #[test]
+    fn test_u64_to_multihot_multiple() {
+        let arr = Array2::from_shape_vec((1, 3), vec![0u64, 2, 3]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 8, false);
+        let (cycles, mh) = u64_to_multihot(&tile, 5, 1, true);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 5);
+        assert_eq!(*mh, vec![true, false, true, true, false]);
+        assert!(mh.read_from_mu());
+    }
+
+    #[test]
+    fn test_u64_to_multihot_empty() {
+        // All indices out of range
+        let arr = Array2::from_shape_vec((1, 1), vec![10u64]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 8, false);
+        let (cycles, mh) = u64_to_multihot(&tile, 3, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(*mh, vec![false, false, false]);
+    }
+
+    #[test]
+    fn test_u64_to_multihot_roundtrip() {
+        // multihot -> u64 -> multihot should reproduce the original
+        let original = MultiHotN::new(vec![true, false, true, false, true], false);
+        let (_, tile) = multihot_to_u64(&original, 1, false);
+        let (_, reconstructed) = u64_to_multihot(&tile, 5, 1, false);
+        assert_eq!(*original, *reconstructed);
     }
 
     #[test]

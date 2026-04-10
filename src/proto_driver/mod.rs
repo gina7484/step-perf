@@ -24,7 +24,7 @@ use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
 use crate::operator::flatmap::{CacheReadAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify};
 use crate::operator::flatten::Flatten;
-use crate::operator::map::{BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot};
+use crate::operator::map::{BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot, UnaryMapToMultiHot};
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
@@ -409,6 +409,49 @@ fn build_from_proto<'a>(
                     };
 
                     builder.add_child(UnaryMapMultiHot::<SimpleEvent, _>::new(
+                        rcv,
+                        snd,
+                        map_fn,
+                        UnaryMapConfig {
+                            compute_bw: unarymap.compute_bw as u64,
+                            write_back_mu: unarymap.write_back_mu,
+                        },
+                        operation.id,
+                    ));
+                }
+                (Type::U64(_), Type::MultiHot(_)) => {
+                    let rcv = channel_map_collection.tile_u64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.multihot.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<u64>, u64, bool) -> (u64, MultiHotN) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::U64ToMultihot(u64_to_multihot) => {
+                            let width = u64_to_multihot.width as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::u64_to_multihot(
+                                    tile,
+                                    width,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    builder.add_child(UnaryMapToMultiHot::<SimpleEvent, _>::new(
                         rcv,
                         snd,
                         map_fn,
