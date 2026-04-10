@@ -736,6 +736,38 @@ pub fn select_to_scalar<SEL: SelectAdapter>(
     )
 }
 
+pub fn multihot_to_u64(
+    in_data: &MultiHotN,
+    _comp_bw: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<u64>) {
+    let sel_vec = in_data.to_sel_vec();
+    let n = sel_vec.len();
+    if n == 0 {
+        return (
+            1,
+            Tile::new(
+                Array2::from_shape_vec((1, 1), vec![0])
+                    .unwrap()
+                    .to_shared(),
+                8,
+                write_back_mu,
+            ),
+        );
+    }
+    let vals: Vec<u64> = sel_vec.into_iter().map(|x| x as u64).collect();
+    (
+        1,
+        Tile::new(
+            Array2::from_shape_vec((1, n), vals)
+                .unwrap()
+                .to_shared(),
+            8,
+            write_back_mu,
+        ),
+    )
+}
+
 pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
     (
         1,
@@ -842,6 +874,55 @@ mod tests {
                 assert_eq!(result[[i, j]], 0.0);
             }
         }
+    }
+
+    #[test]
+    fn test_multihot_to_u64_single() {
+        // MultiHot with a single true at index 2
+        let mh = MultiHotN::new(vec![false, false, true, false], false);
+        let (cycles, tile) = multihot_to_u64(&mh, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(tile.shape, vec![1, 1]);
+        let arr = tile.underlying.as_ref().unwrap();
+        assert_eq!(arr[[0, 0]], 2);
+    }
+
+    #[test]
+    fn test_multihot_to_u64_multiple() {
+        // MultiHot with true at indices 0, 2, 3
+        let mh = MultiHotN::new(vec![true, false, true, true, false], false);
+        let (cycles, tile) = multihot_to_u64(&mh, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(tile.shape, vec![1, 3]);
+        let arr = tile.underlying.as_ref().unwrap();
+        assert_eq!(arr[[0, 0]], 0);
+        assert_eq!(arr[[0, 1]], 2);
+        assert_eq!(arr[[0, 2]], 3);
+    }
+
+    #[test]
+    fn test_multihot_to_u64_none_selected() {
+        // MultiHot with no true values
+        let mh = MultiHotN::new(vec![false, false, false], false);
+        let (cycles, tile) = multihot_to_u64(&mh, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(tile.shape, vec![1, 1]);
+        let arr = tile.underlying.as_ref().unwrap();
+        assert_eq!(arr[[0, 0]], 0);
+    }
+
+    #[test]
+    fn test_multihot_to_u64_all_selected() {
+        // MultiHot with all true
+        let mh = MultiHotN::new(vec![true, true, true], false);
+        let (cycles, tile) = multihot_to_u64(&mh, 1, true);
+        assert_eq!(cycles, 1);
+        assert_eq!(tile.shape, vec![1, 3]);
+        assert!(tile.read_from_mu);
+        let arr = tile.underlying.as_ref().unwrap();
+        assert_eq!(arr[[0, 0]], 0);
+        assert_eq!(arr[[0, 1]], 1);
+        assert_eq!(arr[[0, 2]], 2);
     }
 
     #[test]

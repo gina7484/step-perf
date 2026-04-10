@@ -295,6 +295,7 @@ pub struct ChannelMapCollection<'a> {
     pub tile_bool: ChannelMap<'a, Tile<bool>>,
     // buffered data types
     pub buff_tile_f32: ChannelMap<'a, Buffer<Tile<f32>>>,
+    pub buff_tile_u64: ChannelMap<'a, Buffer<Tile<u64>>>,
     // select
     pub multihot: ChannelMap<'a, MultiHotN>,
     pub u64: ChannelMap<'a, u64>,

@@ -394,6 +394,15 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::MultihotToU64(_) => {
+                            Arc::new(move |multihot, comp_bw, write_back_mu| {
+                                functions::map_fn::multihot_to_u64(
+                                    multihot,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }
@@ -1281,6 +1290,29 @@ fn build_from_proto<'a>(
                             snd,
                         ));
                     }
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            repeat_static.input_id,
+                            repeat_static.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_static.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(RepeatStatic::<_>::new(
+                            rcv,
+                            repeat_static.repeat_factor as usize,
+                            snd,
+                        ));
+                    }
                     dtype => panic!(
                         "Unsupported data type for RepeatStatic operation {:?}",
                         dtype
@@ -2065,6 +2097,25 @@ fn build_from_proto<'a>(
                         );
                         builder.add_child(PromoteOuter::new(rcv, snd));
                     }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            promote_outer.input_id,
+                            promote_outer.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                promote_outer.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(PromoteOuter::new(rcv, snd));
+                    }
                     Type::Bool(_) => {
                         let rcv = channel_map_collection.tile_bool.get_receiver(
                             promote_outer.input_id,
@@ -2255,6 +2306,30 @@ fn build_from_proto<'a>(
                             operation.id,
                         ));
                     }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            bufferize.input_id,
+                            bufferize.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                bufferize.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.buff_tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(Bufferize::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            bufferize.rank,
+                            operation.id,
+                        ));
+                    }
                     dtype => panic!("Unsupported data type for Bufferize operation {:?}", dtype),
                 }
             }
@@ -2272,6 +2347,31 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(Streamify::<SimpleEvent, _>::new(
+                            to_usize_vec(streamify.repeat_factor),
+                            streamify.rank,
+                            rcv,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.buff_tile_u64.get_receiver(
+                            streamify.input_id,
+                            streamify.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                streamify.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
                             operation.id,
                             None,
                             builder,
