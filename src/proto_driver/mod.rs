@@ -10,7 +10,9 @@ use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
-use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify};
+use crate::operator::flatmap_decomp::{
+    FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRowStreamify,
+};
 use crate::operator::parallelize::Parallelize;
 use crate::primitives::select::MultiHotN;
 use std::collections::HashMap;
@@ -2834,28 +2836,32 @@ fn build_from_proto<'a>(
                                 channel_depth,
                             ),
                         );
-                        let mask_rcv = channel_map_collection.tile_bool.get_receiver(
-                            flatmap_filter_row_streamify.mask_id,
-                            flatmap_filter_row_streamify.mask_stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                flatmap_filter_row_streamify.mask_id,
-                                channel_depth,
-                            ),
-                        );
                         let snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        builder.add_child(FlatmapFilterRowStreamify::<_>::new(
-                            rcv,
-                            mask_rcv,
-                            snd,
-                            operation.id,
-                        ));
+                        if let Some(mask_id) = flatmap_filter_row_streamify.mask_id {
+                            let mask_rcv = channel_map_collection.tile_bool.get_receiver(
+                                mask_id,
+                                flatmap_filter_row_streamify.mask_stream_idx,
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, mask_id, channel_depth),
+                            );
+                            builder.add_child(FlatmapFilterRowStreamify::<_>::new(
+                                rcv,
+                                mask_rcv,
+                                snd,
+                                operation.id,
+                            ));
+                        } else {
+                            builder.add_child(FlatmapRowStreamify::<_>::new(
+                                rcv,
+                                snd,
+                                operation.id,
+                            ));
+                        }
                     }
                     dtype => panic!(
                         "Unsupported data type for FlatmapFilterRowStreamify operation {:?}",

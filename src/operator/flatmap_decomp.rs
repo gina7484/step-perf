@@ -187,6 +187,119 @@ where
 }
 
 #[context_macro]
+pub struct FlatmapRowStreamify<T: Clone> {
+    in_stream: Receiver<Elem<Tile<T>>>, // tile shape: [R,C]
+    out_stream: Sender<Elem<Tile<T>>>,  // tile shape: [1,C]
+    id: u32,
+}
+
+impl<T: Clone> FlatmapRowStreamify<T>
+where
+    Tile<T>: DAMType,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<Tile<T>>>,
+        out_stream: Sender<Elem<Tile<T>>>,
+        id: u32,
+    ) -> Self {
+        let ctx = Self {
+            in_stream,
+            out_stream,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+
+        ctx
+    }
+
+    fn streamify(&mut self, data: &Tile<T>, stop_level: Option<StopType>) {
+        let num_rows = data.shape[0];
+
+        match &data.underlying {
+            Some(arr) => {
+                let vec_iter = arr.rows().into_iter(); // [C] x R
+
+                for (idx, row) in vec_iter.enumerate() {
+                    let out_data = Tile::<T>::new_padded(
+                        row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
+                        data.bytes_per_elem,
+                        data.read_from_mu,
+                        1,
+                    );
+
+                    let elem = if stop_level.is_some() && (idx + 1 == num_rows) {
+                        Elem::ValStop(out_data, stop_level.unwrap())
+                    } else {
+                        Elem::Val(out_data)
+                    };
+
+                    self.out_stream
+                        .enqueue(
+                            &self.time,
+                            ChannelElement {
+                                time: self.time.tick(),
+                                data: elem,
+                            },
+                        )
+                        .unwrap();
+                }
+            }
+            None => {
+                let vec_size = data.shape[1];
+
+                for idx in 0..num_rows {
+                    let out_data = Tile::<T>::new_blank(
+                        vec![1, vec_size],
+                        data.bytes_per_elem,
+                        data.read_from_mu,
+                    );
+
+                    let elem = if stop_level.is_some() && (idx + 1 == num_rows) {
+                        Elem::ValStop(out_data, stop_level.unwrap())
+                    } else {
+                        Elem::Val(out_data)
+                    };
+
+                    self.out_stream
+                        .enqueue(
+                            &self.time,
+                            ChannelElement {
+                                time: self.time.tick(),
+                                data: elem,
+                            },
+                        )
+                        .unwrap();
+                }
+            }
+        }
+    }
+}
+
+impl<T: Clone> Context for FlatmapRowStreamify<T>
+where
+    Tile<T>: DAMType,
+{
+    fn run(&mut self) {
+        loop {
+            match self.in_stream.dequeue(&self.time) {
+                Ok(ChannelElement {
+                    time: _,
+                    data: data_enum,
+                }) => match data_enum {
+                    Elem::Val(data) => self.streamify(&data, None),
+                    Elem::ValStop(data, s) => self.streamify(&data, Some(s)),
+                },
+                Err(_) => {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[context_macro]
 pub struct FlatmapCounter<T: Clone> {
     in_stream: Receiver<Elem<Tile<T>>>, // tile shape: [1,1]
     out_stream: Sender<Elem<Tile<T>>>,  // tile shape: [1,1]
@@ -300,7 +413,7 @@ mod tests {
     };
     use ndarray::ArcArray;
 
-    use super::{FlatmapCounter, FlatmapFilterRowStreamify};
+    use super::{FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRowStreamify};
     use crate::primitives::{buffer::Buffer, elem::Elem, tile::Tile};
     use crate::{functions::accum_fn::retile_row, operator::accum::AccumConfig};
     use crate::{
@@ -377,7 +490,7 @@ mod tests {
             out_rcv,
             accum_data_snd,
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                retile_row(tile1, tile2, comp_bw, write_back_mu,0)
+                retile_row(tile1, tile2, comp_bw, write_back_mu, 0)
             }),
             Arc::new(move || Tile::new_empty([0, 4], BYTES_PER_ELEM, false)),
             1,
@@ -392,7 +505,7 @@ mod tests {
             mask_rcv,
             accum_mask_snd,
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                retile_row(tile1, tile2, comp_bw, write_back_mu,0)
+                retile_row(tile1, tile2, comp_bw, write_back_mu, 0)
             }),
             Arc::new(move || Tile::new_empty([0, 1], BYTES_PER_ELEM, false)),
             1,
@@ -612,6 +725,182 @@ mod tests {
                 }
 
                 expected.into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flatmap_row_streamify_with_data_test() {
+        // Test that FlatmapRowStreamify outputs all rows from a [3,4] tile
+        // as three [1,4] tiles
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+        const READ_FROM_MU: bool = false;
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // Input: a single [3,4] tile with actual data, wrapped in ValStop
+        let input_arr = ndarray::arr2(&[[1u32, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]);
+        let input_tile = Tile::<VT>::new(input_arr.into_shared(), BYTES_PER_ELEM, READ_FROM_MU);
+
+        ctx.add_child(GeneratorContext::new(
+            move || vec![Elem::ValStop(input_tile.clone(), 0)].into_iter(),
+            in_snd,
+        ));
+
+        ctx.add_child(FlatmapRowStreamify::new(in_rcv, out_snd, 0));
+
+        // Expected: three [1,4] tiles; last one carries the stop level
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                vec![
+                    Elem::Val(Tile::<VT>::new_padded(
+                        ndarray::arr2(&[[1u32, 2, 3, 4]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                        1,
+                    )),
+                    Elem::Val(Tile::<VT>::new_padded(
+                        ndarray::arr2(&[[5u32, 6, 7, 8]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                        1,
+                    )),
+                    Elem::ValStop(
+                        Tile::<VT>::new_padded(
+                            ndarray::arr2(&[[9u32, 10, 11, 12]]).into_shared(),
+                            BYTES_PER_ELEM,
+                            READ_FROM_MU,
+                            1,
+                        ),
+                        0,
+                    ),
+                ]
+                .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flatmap_row_streamify_blank_test() {
+        // Test that FlatmapRowStreamify handles blank tiles (no underlying data)
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+        const READ_FROM_MU: bool = false;
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // Input: a blank [2,5] tile
+        let input_tile = Tile::<VT>::new_blank(vec![2, 5], BYTES_PER_ELEM, READ_FROM_MU);
+
+        ctx.add_child(GeneratorContext::new(
+            move || vec![Elem::ValStop(input_tile.clone(), 0)].into_iter(),
+            in_snd,
+        ));
+
+        ctx.add_child(FlatmapRowStreamify::new(in_rcv, out_snd, 0));
+
+        // Expected: two blank [1,5] tiles; last carries stop level
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                vec![
+                    Elem::Val(Tile::<VT>::new_blank(
+                        vec![1, 5],
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                    )),
+                    Elem::ValStop(
+                        Tile::<VT>::new_blank(vec![1, 5], BYTES_PER_ELEM, READ_FROM_MU),
+                        0,
+                    ),
+                ]
+                .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flatmap_row_streamify_multiple_inputs_test() {
+        // Test with multiple input tiles (Val then ValStop)
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+        const READ_FROM_MU: bool = false;
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+
+        // Two input tiles: a [2,3] Val, then a [2,3] ValStop
+        let arr1 = ndarray::arr2(&[[1u32, 2, 3], [4, 5, 6]]);
+        let tile1 = Tile::<VT>::new(arr1.into_shared(), BYTES_PER_ELEM, READ_FROM_MU);
+
+        let arr2 = ndarray::arr2(&[[7u32, 8, 9], [10, 11, 12]]);
+        let tile2 = Tile::<VT>::new(arr2.into_shared(), BYTES_PER_ELEM, READ_FROM_MU);
+
+        ctx.add_child(GeneratorContext::new(
+            move || vec![Elem::Val(tile1.clone()), Elem::ValStop(tile2.clone(), 0)].into_iter(),
+            in_snd,
+        ));
+
+        ctx.add_child(FlatmapRowStreamify::new(in_rcv, out_snd, 0));
+
+        // Expected: 4 row tiles total
+        // From tile1 (Val, no stop): [1,2,3] Val, [4,5,6] Val
+        // From tile2 (ValStop(0)): [7,8,9] Val, [10,11,12] ValStop(0)
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                vec![
+                    Elem::Val(Tile::<VT>::new_padded(
+                        ndarray::arr2(&[[1u32, 2, 3]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                        1,
+                    )),
+                    Elem::Val(Tile::<VT>::new_padded(
+                        ndarray::arr2(&[[4u32, 5, 6]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                        1,
+                    )),
+                    Elem::Val(Tile::<VT>::new_padded(
+                        ndarray::arr2(&[[7u32, 8, 9]]).into_shared(),
+                        BYTES_PER_ELEM,
+                        READ_FROM_MU,
+                        1,
+                    )),
+                    Elem::ValStop(
+                        Tile::<VT>::new_padded(
+                            ndarray::arr2(&[[10u32, 11, 12]]).into_shared(),
+                            BYTES_PER_ELEM,
+                            READ_FROM_MU,
+                            1,
+                        ),
+                        0,
+                    ),
+                ]
+                .into_iter()
             },
             out_rcv,
             |x, y| x == y,
