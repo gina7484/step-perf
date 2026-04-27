@@ -2476,6 +2476,17 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        accum_func::AccumFn::Max(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::max(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    operation.id,
+                                )
+                            })
+                        }
                         accum_func::AccumFn::RetileRow(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::accum_fn::retile_row(
