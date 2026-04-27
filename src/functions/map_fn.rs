@@ -424,6 +424,41 @@ pub fn pow2<T: Debug + num_traits::Float + Copy>(
     }
 }
 
+// square(x) = x * x (1 FLOP per element)
+pub fn square<T: Debug + ndarray::LinalgScalar + Default>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| x * x).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
 // rsqrt(x) = 1/sqrt(x) (~ 4 FLOPs per element)
 pub fn rsqrt<T: Debug + num_traits::Float + Copy>(
     in_data: &Tile<T>,

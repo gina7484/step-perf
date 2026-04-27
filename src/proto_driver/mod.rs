@@ -211,6 +211,11 @@ fn build_from_proto<'a>(
                                 functions::map_fn::rsqrt(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Square(square) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::square(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::RowWiseSum(row_wise_sum) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::row_wise_sum(tile, comp_bw, write_back_mu)
