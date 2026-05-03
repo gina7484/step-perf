@@ -2192,8 +2192,8 @@ fn build_from_proto<'a>(
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
                         builder.add_child(Streamify::<SimpleEvent, _>::new(
-                            to_usize_vec(streamify.repeat_factor),
-                            streamify.rank,
+                            to_usize_vec(streamify.stride),
+                            to_usize_vec(streamify.out_shape_tiled),
                             rcv,
                             snd,
                             operation.id,
