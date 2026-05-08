@@ -35,7 +35,7 @@ use crate::operator::streamify::Streamify;
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
 use dam::simulation::{
-    DotConvertible, LogFilterKind, LoggingOptions, MongoOptionsBuilder, ProgramBuilder,
+    DotConvertible, LogFilterKind, LoggingOptions, ProgramBuilder,
     RunOptionsBuilder,
 };
 use dam::utility_contexts::{ConsumerContext, GeneratorContext, PrinterContext};
@@ -3636,15 +3636,7 @@ pub fn parse_proto<'a>(
     let run_options = match logging {
         true => {
             let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
-                // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
                 dam::logging::LogFilter::AllowAll,
-            ));
-            let run_options = run_options.logging(LoggingOptions::Mongo(
-                MongoOptionsBuilder::default()
-                    .db(db_name.unwrap_or("sim_default_name".to_string()))
-                    .uri("mongodb://127.0.0.1:27017".to_string())
-                    .build()
-                    .unwrap(),
             ));
             run_options.build().unwrap()
         }
