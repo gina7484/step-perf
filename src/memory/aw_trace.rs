@@ -11,7 +11,8 @@ fn ensure_init() {
             if !path.is_empty() {
                 let file = std::fs::OpenOptions::new()
                     .create(true)
-                    .append(true)
+                    .write(true)
+                    .truncate(true)
                     .open(path)
                     .unwrap_or_else(|e| panic!("cannot open AW trace file {path}: {e}"));
                 *AW_TRACE_FILE.lock().unwrap() = Some(file);
