@@ -6,6 +6,7 @@ use dam::logging::LogEvent;
 use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
+use crate::memory::aw_trace::trace_aw_write;
 use crate::primitives::elem::{Bufferizable, Elem};
 use crate::primitives::tile::Tile;
 use crate::ramulator::hbm_context::ParAddrs;
@@ -127,7 +128,7 @@ where
         ctx
     }
 
-    fn send_write_request(&mut self, waddr: u64, wdata: &Tile<T>) {
+    fn send_write_request(&mut self, waddr: u64, wdata: &Tile<T>, st: u32) {
         // Calculate the write addresses for the given tile
         let n_bytes = wdata.bytes_per_elem;
 
@@ -178,6 +179,14 @@ where
             false,
         ))
         .unwrap();
+
+        trace_aw_write(
+            self.id,
+            read_finish_time.time(),
+            &self.tensor_shape_tiled,
+            st,
+            false,
+        );
     }
 
     fn update_underlying(&mut self, waddr: u64, wdata: Tile<T>) {
@@ -243,8 +252,7 @@ where
                     match (waddr_tile, wdata) {
                         (Elem::Val(waddr_tile), Elem::Val(wdata)) => {
                             let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
-                            // Send write request to HBM
-                            self.send_write_request(waddr, &wdata);
+                            self.send_write_request(waddr, &wdata, 0);
 
                             // Update the tensor if underlying is not None
                             self.update_underlying(waddr, wdata);
@@ -268,8 +276,8 @@ where
                             Elem::ValStop(wdata, wdata_stop),
                         ) => {
                             let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
-                            // Send write request to HBM
-                            self.send_write_request(waddr, &wdata);
+                            let st = if self.ack_based_on_waddr { waddr_stop } else { wdata_stop };
+                            self.send_write_request(waddr, &wdata, st);
 
                             // Update the tensor if underlying is not None
                             self.update_underlying(waddr, wdata);
@@ -296,8 +304,7 @@ where
                         }
                         (Elem::Val(waddr_tile), Elem::ValStop(wdata, wdata_stop)) => {
                             let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
-                            // Send write request to HBM
-                            self.send_write_request(waddr, &wdata);
+                            self.send_write_request(waddr, &wdata, if self.ack_based_on_waddr { 0 } else { wdata_stop });
 
                             // Update the tensor if underlying is not None
                             self.update_underlying(waddr, wdata);
@@ -324,8 +331,7 @@ where
                         }
                         (Elem::ValStop(waddr_tile, waddr_stop), Elem::Val(wdata)) => {
                             let waddr = waddr_tile.underlying.as_ref().unwrap()[[0, 0]];
-                            // Send write request to HBM
-                            self.send_write_request(waddr, &wdata);
+                            self.send_write_request(waddr, &wdata, if self.ack_based_on_waddr { waddr_stop } else { 0 });
 
                             // Update the tensor if underlying is not None
                             self.update_underlying(waddr, wdata);

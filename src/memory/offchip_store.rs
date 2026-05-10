@@ -13,6 +13,7 @@ use crate::{
 
 use crate::utils::events::LoggableEventSimple;
 
+use crate::memory::aw_trace::trace_aw_write;
 use crate::primitives::tile::Tile;
 
 #[context_macro]
@@ -106,6 +107,7 @@ where
         let mut tile_idx = 0;
         let mut n_bytes = None;
         loop {
+            let mut cur_st: u32 = 0;
             // Get the tile data and concatenate if you're simulating with actual values
             let tile_data = match self.on_chip_rcv.peek_next(&self.time) {
                 Ok(ChannelElement {
@@ -129,6 +131,7 @@ where
                         tile_data
                     }
                     Elem::ValStop(tile_data, s) => {
+                        cur_st = s;
                         if self.store_path.is_some() {
                             assert!(tile_data.underlying.is_some());
 
@@ -264,6 +267,14 @@ where
                 false,
             ))
             .unwrap();
+
+            trace_aw_write(
+                self.id,
+                read_finish_time.time(),
+                &self.tensor_shape_tiled,
+                cur_st,
+                false,
+            );
 
             // dequeue
             self.on_chip_rcv.dequeue(&self.time).unwrap();
