@@ -271,8 +271,8 @@ pub fn add_constant<T: Debug + ndarray::LinalgScalar + Default>(
 
     match &in1.underlying {
         Some(arr1) => {
-            // Multiply all elements by the constant
-            let out_arr = arr1.mapv(|x| x * constant);
+            // Add the constant to all elements
+            let out_arr = arr1.mapv(|x| x + constant);
             (
                 div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
                 Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
