@@ -211,6 +211,11 @@ fn build_from_proto<'a>(
                                 functions::map_fn::rsqrt(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Sqrt(sqrt) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::sqrt(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::Square(square) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::square(tile, comp_bw, write_back_mu)
@@ -499,6 +504,11 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Sub(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::sub(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         e => {
