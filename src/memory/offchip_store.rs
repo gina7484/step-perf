@@ -178,12 +178,21 @@ where
                             ),
                         }
 
-                        // save metadata as json file
+                        // Save metadata as json file. The accum is built as a
+                        // 2D matrix; the innermost stream dim fills horizontal
+                        // (cols), and the next-outer fills vertical (rows). If
+                        // tensor_shape_tiled has only one entry there is no
+                        // penultimate dim, so vertical multiplier is 1.
+                        let n = self.tensor_shape_tiled.len();
                         let total_cols = self.tile_col * self.tensor_shape_tiled.last().unwrap();
-                        let total_rows = self.tile_row
-                            * self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
-                        let mut shape =
-                            self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
+                        let (total_rows, mut shape) = if n >= 2 {
+                            (
+                                self.tile_row * self.tensor_shape_tiled[n - 2],
+                                self.tensor_shape_tiled[..n - 2].to_vec(),
+                            )
+                        } else {
+                            (self.tile_row, Vec::<usize>::new())
+                        };
                         shape.append(&mut vec![total_rows, total_cols]);
 
                         let meta_file_path: String =
@@ -428,12 +437,21 @@ where
                             Err(_) => panic!("Error while writing data to {}", data_file_path),
                         }
 
-                        // save metadata as json file
+                        // Save metadata as json file. The accum is built as a
+                        // 2D matrix; the innermost stream dim fills horizontal
+                        // (cols), and the next-outer fills vertical (rows). If
+                        // tensor_shape_tiled has only one entry there is no
+                        // penultimate dim, so vertical multiplier is 1.
+                        let n = self.tensor_shape_tiled.len();
                         let total_cols = self.tile_col * self.tensor_shape_tiled.last().unwrap();
-                        let total_rows = self.tile_row
-                            * self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
-                        let mut shape =
-                            self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
+                        let (total_rows, mut shape) = if n >= 2 {
+                            (
+                                self.tile_row * self.tensor_shape_tiled[n - 2],
+                                self.tensor_shape_tiled[..n - 2].to_vec(),
+                            )
+                        } else {
+                            (self.tile_row, Vec::<usize>::new())
+                        };
                         shape.append(&mut vec![total_rows, total_cols]);
 
                         let meta_file_path: String = format!("output.json");
