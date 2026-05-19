@@ -115,6 +115,15 @@ macro_rules! make_linear_offchip_load_ref {
         let (addr_snd, addr_rcv) = $builder.unbounded();
         let (resp_snd, resp_rcv) = $builder.unbounded();
 
+        // Mirror LinearOffChipLoad's lowering: a start_tile_idx of N shifts the
+        // base HBM address by N tiles' worth of bytes, so the per-tile address
+        // formula in linear_offchip_load_ref.rs (base_addr_byte + tile_idx*tile_offset)
+        // walks the same sub-range the functional sim sees.
+        let base_addr_byte = ($dyn_offchip_load.start_tile_idx as usize
+            * $dyn_offchip_load.tile_row as usize
+            * $dyn_offchip_load.tile_col as usize
+            * $n_bytes) as u64;
+
         $builder.add_child(LinearOffChipLoadRef::<SimpleEvent, _, _>::new(
             to_usize_vec($dyn_offchip_load.tensor_shape_tiled),
             to_usize_vec($dyn_offchip_load.stride),
@@ -123,7 +132,7 @@ macro_rules! make_linear_offchip_load_ref {
             $dyn_offchip_load.tile_row as usize,
             $dyn_offchip_load.tile_col as usize,
             $n_bytes,
-            0,
+            base_addr_byte,
             $hbm_config.addr_offset,
             $dyn_offchip_load.par_dispatch as usize,
             ref_rcv,
