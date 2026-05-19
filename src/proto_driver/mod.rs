@@ -814,6 +814,11 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
+                        let base_addr_byte = (linear_off_chip_load.start_tile_idx as usize
+                            * linear_off_chip_load.tile_row as usize
+                            * linear_off_chip_load.tile_col as usize
+                            * f32_bytes) as u64;
+
                         builder.add_child(LinearOffChipLoad::<SimpleEvent, _>::new(
                             to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
                             to_usize_vec(linear_off_chip_load.stride),
@@ -822,7 +827,7 @@ fn build_from_proto<'a>(
                             linear_off_chip_load.tile_row as usize,
                             linear_off_chip_load.tile_col as usize,
                             f32_bytes,
-                            0,
+                            base_addr_byte,
                             hbm_config.addr_offset,
                             linear_off_chip_load.par_dispatch as usize,
                             addr_snd,
@@ -847,6 +852,11 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
+                        let base_addr_byte = (linear_off_chip_load.start_tile_idx as usize
+                            * linear_off_chip_load.tile_row as usize
+                            * linear_off_chip_load.tile_col as usize
+                            * std::mem::size_of::<u64>()) as u64;
+
                         builder.add_child(LinearOffChipLoad::<SimpleEvent, _>::new(
                             to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
                             to_usize_vec(linear_off_chip_load.stride),
@@ -855,7 +865,7 @@ fn build_from_proto<'a>(
                             linear_off_chip_load.tile_row as usize,
                             linear_off_chip_load.tile_col as usize,
                             std::mem::size_of::<u64>(),
-                            0,
+                            base_addr_byte,
                             hbm_config.addr_offset,
                             linear_off_chip_load.par_dispatch as usize,
                             addr_snd,
