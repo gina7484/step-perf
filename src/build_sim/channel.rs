@@ -1,11 +1,19 @@
 use std::{collections::HashMap, fmt, marker::PhantomData};
 
 use crate::primitives::{buffer::Buffer, elem::Elem, select::MultiHotN, tile::Tile};
+use crate::trace::TracingSender;
 use dam::{
     channel::{Receiver, Sender},
     simulation::ProgramBuilder,
     types::DAMType,
 };
+
+fn wrap_sender<T>(snd: Sender<T>, producer_id: u32, stream_idx: u32) -> TracingSender<T>
+where
+    T: DAMType + Clone + std::fmt::Debug + crate::trace::TraceChannelPayload,
+{
+    TracingSender::wrap(snd, producer_id, stream_idx)
+}
 use derive_more::Constructor;
 
 pub enum ChanType<T: DAMType> {
@@ -199,27 +207,31 @@ where
         idx: Option<u32>,
         builder: &mut ProgramBuilder<'a>,
         capacity: Option<usize>,
-    ) -> Sender<Elem<T>> {
+    ) -> TracingSender<Elem<T>>
+    where
+        Elem<T>: DAMType + Clone + std::fmt::Debug + crate::trace::TraceChannelPayload,
+    {
+        let stream_idx = idx.unwrap_or(0);
         match &mut self.map {
             Some(chan_map) => match idx {
                 Some(stream_idx) => match chan_map.get_mut(&id) {
                     // Broadcast
                     Some(ChannelMapEntry::Broadcast(x)) => match x.remove(&stream_idx) {
-                        Some(ChanType::Sender(snd)) => snd,
+                        Some(ChanType::Sender(snd)) => wrap_sender(snd, id, stream_idx),
                         None => {
                             match capacity {
                                 Some(cap) => {
                                     let (snd, rcv) = builder.bounded::<Elem<T>>(cap);
                                     // inspect_receiver(&rcv, 229, id, idx, "203");
                                     x.insert(stream_idx, ChanType::Receiver(rcv));
-                                    snd
+                                    wrap_sender(snd, id, stream_idx)
                                 }
                                 None => {
                                     // Default capacity
                                     let (snd, rcv) = builder.bounded::<Elem<T>>(DEFAULT_CHAN_SIZE);
                                     // inspect_receiver(&rcv, 229, id, idx, "210");
                                     x.insert(stream_idx, ChanType::Receiver(rcv));
-                                    snd
+                                    wrap_sender(snd, id, stream_idx)
                                 }
                             }
                         }
@@ -233,7 +245,7 @@ where
                                 let mut broadcast_map = HashMap::new();
                                 broadcast_map.insert(stream_idx, ChanType::Receiver(rcv));
                                 chan_map.insert(id, ChannelMapEntry::Broadcast(broadcast_map));
-                                snd
+                                wrap_sender(snd, id, stream_idx)
                             }
                             None => {
                                 // Default capacity
@@ -242,7 +254,7 @@ where
                                 let mut broadcast_map = HashMap::new();
                                 broadcast_map.insert(stream_idx, ChanType::Receiver(rcv));
                                 chan_map.insert(id, ChannelMapEntry::Broadcast(broadcast_map));
-                                snd
+                                wrap_sender(snd, id, stream_idx)
                             }
                         }
                     }
@@ -250,7 +262,9 @@ where
                 },
                 None => match chan_map.remove(&id) {
                     // Single
-                    Some(ChannelMapEntry::Single(ChanType::Sender(x))) => x,
+                    Some(ChannelMapEntry::Single(ChanType::Sender(x))) => {
+                        wrap_sender(x, id, stream_idx)
+                    }
                     None => {
                         match capacity {
                             Some(cap) => {
@@ -258,7 +272,7 @@ where
                                 // inspect_receiver(&rcv, 229, id, idx, "L248");
                                 chan_map
                                     .insert(id, ChannelMapEntry::Single(ChanType::Receiver(rcv)));
-                                snd
+                                wrap_sender(snd, id, stream_idx)
                             }
                             None => {
                                 // Default capacity
@@ -266,7 +280,7 @@ where
                                 // inspect_receiver(&rcv, 229, id, idx, "L256");
                                 chan_map
                                     .insert(id, ChannelMapEntry::Single(ChanType::Receiver(rcv)));
-                                snd
+                                wrap_sender(snd, id, stream_idx)
                             }
                         }
                     }

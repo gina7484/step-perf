@@ -1,4 +1,5 @@
 pub mod build_sim;
+pub mod trace;
 pub mod functions;
 pub mod memory;
 pub mod operator;

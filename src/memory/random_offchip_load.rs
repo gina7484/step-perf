@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use crate::trace::TracingSender;
 
 use dam::context_tools::*;
 use dam::logging::LogEvent;
@@ -36,7 +37,7 @@ pub struct RandomOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub resp_addr_rcv: Receiver<u64>,
     // Channel facing on-chip memory
     pub raddr: Receiver<Elem<Tile<u64>>>,
-    pub rdata: Sender<Elem<Tile<T>>>,
+    pub rdata: TracingSender<Elem<Tile<T>>>,
     pub transposed: bool,
     pub id: u32,
     // Traffic tracking
@@ -65,7 +66,7 @@ where
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
         raddr: Receiver<Elem<Tile<u64>>>,
-        rdata: Sender<Elem<Tile<T>>>,
+        rdata: TracingSender<Elem<Tile<T>>>,
         transposed: bool,
         id: u32,
         track_traffic: bool,

@@ -1,4 +1,5 @@
 use std::fs::File;
+use crate::trace::TracingSender;
 use std::marker::PhantomData;
 
 use dam::context_tools::*;
@@ -31,7 +32,7 @@ pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     // Channel facing on-chip memory
     pub waddr: Receiver<Elem<Tile<u64>>>,
     pub wdata: Receiver<Elem<Tile<T>>>,
-    pub wack: Option<Sender<Elem<bool>>>,
+    pub wack: Option<TracingSender<Elem<bool>>>,
     pub ack_based_on_waddr: bool, // if true, the ack stream's shape will be based on the waddr,
     // otherwise it is based on the wdata.
     pub id: u32,
@@ -61,7 +62,7 @@ where
         // On-chip memory facing the channels
         waddr: Receiver<Elem<Tile<u64>>>,
         wdata: Receiver<Elem<Tile<T>>>,
-        wack: Option<Sender<Elem<bool>>>,
+        wack: Option<TracingSender<Elem<bool>>>,
         id: u32,
         ack_based_on_waddr: bool,
     ) -> Self {

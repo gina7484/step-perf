@@ -6,6 +6,7 @@ use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 
 pub struct AccumConfig {
     pub compute_bw: u64,

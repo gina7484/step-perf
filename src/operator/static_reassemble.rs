@@ -2,6 +2,7 @@ use crate::operator::partition::FlatPartitionConfig;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 use std::marker::PhantomData;
 
 #[context_macro]

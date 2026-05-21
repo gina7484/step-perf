@@ -1,4 +1,5 @@
 use crate::primitives::{elem::Elem, tile::Tile};
+use crate::trace::TracingSender;
 use dam::context_tools::*;
 
 use itertools::enumerate;
@@ -7,12 +8,12 @@ use ndarray::{Array2, IntoDimension, IxDyn, IxDynImpl};
 #[context_macro]
 pub struct MetadataGen<T: Clone> {
     pub underlying: ndarray::ArcArray<T, IxDyn>,
-    pub snd: Sender<Elem<Tile<u64>>>,
+    pub snd: TracingSender<Elem<Tile<u64>>>,
     pub id: u32,
 }
 
 impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> MetadataGen<T> {
-    pub fn new(npy_path: String, snd: Sender<Elem<Tile<u64>>>, id: u32) -> Self {
+    pub fn new(npy_path: String, snd: TracingSender<Elem<Tile<u64>>>, id: u32) -> Self {
         let mut file = std::fs::File::open(npy_path).unwrap();
 
         // Read the data and shape of the `.npy` file

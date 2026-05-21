@@ -1,18 +1,19 @@
 use dam::{
-    channel::{Receiver, Sender},
+    channel::Receiver,
     context::Context,
     dam_macros::context_macro,
     types::DAMType,
 };
 
 use crate::primitives::{elem::Elem, tile::Tile};
+use crate::trace::TracingSender;
 
 /// Since DAM channels are single-producer single-consumer, Broadcasts can be used to send from a single channel to multiple channels.
 
 #[context_macro]
 pub struct BroadcastContext<T: Clone> {
     receiver: Receiver<Elem<T>>,
-    targets: Vec<Sender<Elem<T>>>,
+    targets: Vec<TracingSender<Elem<T>>>,
 }
 
 impl<T: DAMType> Context for BroadcastContext<T>
@@ -54,7 +55,7 @@ where
     }
 
     /// Registers a target for the broadcast
-    pub fn add_target(&mut self, target: Sender<Elem<T>>) {
+    pub fn add_target(&mut self, target: TracingSender<Elem<T>>) {
         target.attach_sender(self);
         self.targets.push(target);
     }

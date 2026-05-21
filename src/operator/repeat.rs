@@ -1,5 +1,6 @@
 use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
+use crate::trace::TracingSender as Sender;
 
 #[context_macro]
 pub struct RepeatStatic<T: Clone> {

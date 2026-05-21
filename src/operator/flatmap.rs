@@ -4,6 +4,7 @@ use crate::primitives::elem::{Elem, StopType};
 use crate::primitives::select::{MultiHotN, SelectAdapter};
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
+use crate::trace::TracingSender as Sender;
 use dam::types::DAMType;
 use ndarray::Array2;
 

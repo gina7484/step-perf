@@ -6,6 +6,7 @@ use crate::utils::events::LoggableEventSimple;
 use core::panic;
 use dam::channel::PeekResult;
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 use std::marker::PhantomData;
 
 pub struct FlatReassembleConfig {

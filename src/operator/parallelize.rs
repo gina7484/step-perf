@@ -5,6 +5,7 @@ use crate::primitives::{select::SelectAdapter, tile::Tile};
 use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 use std::marker::PhantomData;
 use std::panic;
 

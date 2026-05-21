@@ -7,6 +7,7 @@ use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::dam_macros::event_type;
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 use serde::{Deserialize, Serialize};
 
 /// This is necesssary for operation patterns like matmul where the

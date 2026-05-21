@@ -2,6 +2,7 @@ use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::select::SelectAdapter;
 use dam::channel::PeekResult;
 use dam::context_tools::*;
+use crate::trace::TracingSender as Sender;
 
 #[context_macro]
 pub struct EagerMerge<A: DAMType, SELT: DAMType> {

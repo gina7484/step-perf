@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 
 use crate::{
     primitives::{

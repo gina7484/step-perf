@@ -7,6 +7,7 @@ use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
+use crate::trace::TracingSender as Sender;
 
 /// The function will be a binary function that returns the latency in cycles
 /// based on the size of the operands and allocated bandwidth.

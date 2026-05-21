@@ -156,7 +156,7 @@ fn get_chan_depth(
 }
 
 fn build_from_proto<'a>(
-    step_graph: ProgramGraph,
+    step_graph: &ProgramGraph,
     channel_map_collection: &mut ChannelMapCollection<'a>,
     builder: &mut ProgramBuilder<'a>,
     hbm_config: &HBMConfig,
@@ -168,7 +168,7 @@ fn build_from_proto<'a>(
     // Use a regular variable instead of a const, since sim_config.mock_bf16 is not a constant
     let f32_bytes: usize = if sim_config.mock_bf16 { 2 } else { 4 }; // we will use this to mimic bfloat16
 
-    for operation in step_graph.operators {
+    for operation in step_graph.operators.clone() {
         // if operation.id == 23 || operation.id == 24 || operation.id == 25 {
         //     println!("processing {:?}\n", operation);
         // }
@@ -2674,7 +2674,7 @@ fn build_from_proto<'a>(
                         move || {
                             read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path).unwrap()
                         },
-                        snd,
+                        snd.into_sender(),
                     ));
                 }
                 false => todo!("Add the same version for IndexN"),
@@ -3624,13 +3624,21 @@ pub fn parse_proto<'a>(
 ) -> (bool, u64, std::time::Duration) {
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
+    if std::env::var("STEP_PERF_TRACE").is_ok() || std::env::var("STEP_PERF_GRAPH_JSON").is_ok() {
+        crate::trace::reset_trace_registry();
+    }
+
     build_from_proto(
-        step_graph,
+        &step_graph,
         &mut channel_map_collection,
         &mut builder,
         &hbm_config,
         &sim_config,
     );
+
+    if let Err(e) = crate::trace::write_graph_json_if_requested(&step_graph) {
+        eprintln!("[step_perf] graph export failed: {e}");
+    }
 
     let initialized = builder.initialize(Default::default()).unwrap();
     let run_options = match logging {

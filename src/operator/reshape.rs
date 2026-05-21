@@ -3,6 +3,7 @@ use crate::primitives::{
     tile::Tile,
 };
 use dam::context_tools::*;
+use crate::trace::TracingSender as Sender;
 use ndarray::Array2;
 
 #[context_macro]

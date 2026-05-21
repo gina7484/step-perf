@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use crate::trace::TracingSender;
 
 use dam::context_tools::*;
 use dam::logging::LogEvent;
@@ -30,7 +31,7 @@ pub struct LinearOffChipLoadRef<E: LoggableEventSimple, T: DAMType, R: DAMType> 
     pub ref_rcv: Receiver<Elem<R>>,
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
-    pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub on_chip_snd: TracingSender<Elem<Tile<T>>>,
     pub transposed: bool,
     pub id: u32,
     pub trigger_rank: u32,
@@ -60,7 +61,7 @@ where
         ref_rcv: Receiver<Elem<R>>,
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
-        on_chip_snd: Sender<Elem<Tile<T>>>,
+        on_chip_snd: TracingSender<Elem<Tile<T>>>,
         transposed: bool,
         id: u32,
         trigger_rank: u32,

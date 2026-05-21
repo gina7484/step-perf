@@ -1,6 +1,7 @@
 use crate::primitives::elem::{Elem, StopType};
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
+use crate::trace::TracingSender as Sender;
 use dam::types::DAMType;
 
 #[context_macro]
