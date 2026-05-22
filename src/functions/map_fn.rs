@@ -418,6 +418,41 @@ pub fn silu<T: Debug + ndarray::LinalgScalar + num_traits::Float + Copy>(
     }
 }
 
+// tanh(x) = (e^x - e^-x) / (e^x + e^-x) (~ 6 FLOPs per element)
+pub fn tanh<T: Debug + num_traits::Float + Copy>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1 * 6) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| x.tanh()).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1 * 6) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
 // exp(x) (~ 4 FLOPs per element)
 pub fn exp<T: Debug + num_traits::Float + Copy>(
     in_data: &Tile<T>,
@@ -814,6 +849,63 @@ pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy + From<u64>
         (1, MultiHotN::new(vec![true, false], write_back_mu)) // 1
     } else {
         (1, MultiHotN::new(vec![false, true], write_back_mu)) // 0
+    }
+}
+
+// pow_imm with integer exponent: x ** n via fast exponentiation (~log2(|n|)+1 FLOPs)
+pub fn pow_imm_int<T: Debug + num_traits::Float + Copy>(
+    in_data: &Tile<T>,
+    exponent: i32,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let flops_per_elem: u64 =
+        ((exponent.unsigned_abs() as u64).max(2)).ilog2() as u64 + 1;
+    let total = div_ceil((shape_0 * shape_1) as u64 * flops_per_elem, flop_per_cycle);
+    match &in_data.underlying {
+        Some(arr) => (
+            total,
+            Tile::new(
+                arr.mapv(|x| x.powi(exponent)).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+        None => (
+            total,
+            Tile::new_blank(vec![shape_0, shape_1], in_data.bytes_per_elem, write_back_mu),
+        ),
+    }
+}
+
+// pow_imm with float exponent: x ** c via exp(c * ln(x)) (~ 12 FLOPs)
+pub fn pow_imm_float<T: Debug + num_traits::Float + Copy>(
+    in_data: &Tile<T>,
+    exponent: f32,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let exp_t = T::from(exponent).unwrap();
+    let total = div_ceil((shape_0 * shape_1 * 12) as u64, flop_per_cycle);
+    match &in_data.underlying {
+        Some(arr) => (
+            total,
+            Tile::new(
+                arr.mapv(|x| x.powf(exp_t)).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+        None => (
+            total,
+            Tile::new_blank(vec![shape_0, shape_1], in_data.bytes_per_elem, write_back_mu),
+        ),
     }
 }
 

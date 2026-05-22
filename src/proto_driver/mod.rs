@@ -205,6 +205,11 @@ fn build_from_proto<'a>(
                                 functions::map_fn::silu(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Tanh(tanh) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::tanh(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::Exp(exp) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::exp(tile, comp_bw, write_back_mu)
@@ -264,6 +269,20 @@ fn build_from_proto<'a>(
                                     write_back_mu,
                                 )
                             })
+                        }
+                        elemto_elem_func::ElemElemFn::PowImm(pow_imm) => {
+                            assert!(pow_imm.constant.is_some() ^ pow_imm.constant_float.is_some(),
+                                "PowImmediate needs exactly one of int / float constant");
+                            if let Some(n) = pow_imm.constant {
+                                Arc::new(move |tile, comp_bw, write_back_mu| {
+                                    functions::map_fn::pow_imm_int(tile, n, comp_bw, write_back_mu)
+                                })
+                            } else {
+                                let f = pow_imm.constant_float.unwrap();
+                                Arc::new(move |tile, comp_bw, write_back_mu| {
+                                    functions::map_fn::pow_imm_float(tile, f, comp_bw, write_back_mu)
+                                })
+                            }
                         }
                         e => {
                             panic!("Unsupported unary map function type {:?}", e)
