@@ -86,6 +86,26 @@ where
         let total_tiles: usize = self.tensor_shape_tiled.iter().product();
         total_tiles * self.tile_row * self.tile_col
     }
+
+    /// Untiled tensor shape; matches `OffChipStore.get_untiled_shape()` in step_py.
+    fn untiled_shape(&self) -> Vec<usize> {
+        untiled_shape_from_tiled(&self.tensor_shape_tiled, self.tile_row, self.tile_col)
+    }
+}
+
+fn untiled_shape_from_tiled(
+    tensor_shape_tiled: &[usize],
+    tile_row: usize,
+    tile_col: usize,
+) -> Vec<usize> {
+    if tensor_shape_tiled.len() == 1 {
+        vec![tensor_shape_tiled[0] * tile_row, tile_col]
+    } else {
+        let mut shape = tensor_shape_tiled[..tensor_shape_tiled.len() - 2].to_vec();
+        shape.push(tensor_shape_tiled[tensor_shape_tiled.len() - 2] * tile_row);
+        shape.push(tensor_shape_tiled[tensor_shape_tiled.len() - 1] * tile_col);
+        shape
+    }
 }
 
 impl<
@@ -182,12 +202,7 @@ where
                         }
 
                         // save metadata as json file
-                        let total_cols = self.tile_col * self.tensor_shape_tiled.last().unwrap();
-                        let total_rows = self.tile_row
-                            * self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
-                        let mut shape =
-                            self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
-                        shape.append(&mut vec![total_rows, total_cols]);
+                        let shape = self.untiled_shape();
 
                         let meta_file_path: String =
                             format!("{}.json", self.store_path.clone().unwrap());
@@ -349,6 +364,10 @@ where
         let total_tiles: usize = self.tensor_shape_tiled.iter().product();
         total_tiles * self.tile_row * self.tile_col
     }
+
+    fn untiled_shape(&self) -> Vec<usize> {
+        untiled_shape_from_tiled(&self.tensor_shape_tiled, self.tile_row, self.tile_col)
+    }
 }
 
 impl<
@@ -440,12 +459,11 @@ where
                         }
 
                         // save metadata as json file
-                        let total_cols = self.tile_col * self.tensor_shape_tiled.last().unwrap();
-                        let total_rows = self.tile_row
-                            * self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
-                        let mut shape =
-                            self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
-                        shape.append(&mut vec![total_rows, total_cols]);
+                        let shape = untiled_shape_from_tiled(
+                            &self.tensor_shape_tiled,
+                            self.tile_row,
+                            self.tile_col,
+                        );
 
                         let meta_file_path: String = format!("output.json");
                         let meta_file = File::create(meta_file_path.clone()).unwrap();
