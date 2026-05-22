@@ -817,6 +817,35 @@ pub fn is_equal_scalar<T: Default + Debug + Clone + PartialEq + Copy + From<u64>
     }
 }
 
+pub fn max_constant<T: Debug + Copy + Default + PartialOrd>(
+    in1: &Tile<T>,
+    constant: T,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+
+    match &in1.underlying {
+        Some(arr1) => {
+            let out_arr = arr1.mapv(|x| if x > constant { x } else { constant });
+            (
+                div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+            )
+        }
+        None => (
+            div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank(
+                vec![in1_shape_0, in1_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+    }
+}
+
 pub fn mul_constant<T: Debug + ndarray::LinalgScalar + Default>(
     in1: &Tile<T>,
     constant: T,

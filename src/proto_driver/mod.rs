@@ -255,6 +255,16 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::MaxConstant(max_constant) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::max_constant(
+                                    tile,
+                                    max_constant.constant_float.unwrap() as f32,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         e => {
                             panic!("Unsupported unary map function type {:?}", e)
                         }
