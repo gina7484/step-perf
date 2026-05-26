@@ -1,4 +1,5 @@
 use crate::primitives::elem::Elem;
+use std::sync::OnceLock;
 use dam::context_tools::*;
 
 #[context_macro]
@@ -103,6 +104,26 @@ pub struct RepeatRef<T: Clone, R: Clone> {
     id: u32,
 }
 
+fn traced_repeat_ref_ids() -> &'static Vec<u32> {
+    static IDS: OnceLock<Vec<u32>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        std::env::var("STEP_TRACE_REPEAT_REF_IDS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                s.trim()
+                    .parse::<u32>()
+                    .expect("STEP_TRACE_REPEAT_REF_IDS entries must be u32 op ids")
+            })
+            .collect()
+    })
+}
+
+fn trace_repeat_ref(id: u32) -> bool {
+    traced_repeat_ref_ids().contains(&id)
+}
+
 impl<T: DAMType, R: DAMType> RepeatRef<T, R>
 where
     Self: Context,
@@ -129,6 +150,10 @@ where
 
 impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
     fn run(&mut self) {
+        let trace = trace_repeat_ref(self.id);
+        let mut input_count = 0usize;
+        let mut ref_count = 0usize;
+        let mut output_count = 0usize;
         loop {
             // 1. Dequeue from in_stream
             match self.in_stream.dequeue(&self.time) {
@@ -136,6 +161,8 @@ impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
                     time: _,
                     data: in_data,
                 }) => {
+                    input_count += 1;
+                    let mut window_outputs = 0usize;
                     // 2. Dequeue from ref_stream and enqueue until we see a stop token
                     loop {
                         match self.ref_stream.dequeue(&self.time) {
@@ -143,9 +170,12 @@ impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
                                 time: _,
                                 data: ref_data,
                             }) => {
+                                ref_count += 1;
                                 match ref_data {
                                     Elem::Val(_) => {
                                         // Not a stop token, enqueue the input element
+                                        window_outputs += 1;
+                                        output_count += 1;
                                         self.out_stream
                                             .enqueue(
                                                 &self.time,
@@ -161,6 +191,19 @@ impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
                                     }
                                     Elem::ValStop(_, s) => {
                                         // 3. Stop token: enqueue with stop token + 1
+                                        window_outputs += 1;
+                                        output_count += 1;
+                                        if trace {
+                                            eprintln!(
+                                                "[repeat-ref-trace] id={} input={} window_outputs={} ref_count={} output_count={} ref_stop={}",
+                                                self.id,
+                                                input_count,
+                                                window_outputs,
+                                                ref_count,
+                                                output_count,
+                                                s
+                                            );
+                                        }
                                         self.out_stream
                                             .enqueue(
                                                 &self.time,
@@ -193,7 +236,15 @@ impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
                         }
                     }
                 }
-                Err(_) => return, // End of in_stream
+                Err(_) => {
+                    if trace {
+                        eprintln!(
+                            "[repeat-ref-trace] id={} input_closed input_count={} ref_count={} output_count={}",
+                            self.id, input_count, ref_count, output_count
+                        );
+                    }
+                    return;
+                } // End of in_stream
             }
         }
     }

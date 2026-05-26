@@ -3460,6 +3460,13 @@ pub fn parse_proto<'a>(
 ) -> (bool, u64, std::time::Duration) {
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
+    let progress = std::env::var("STEP_PERF_PROGRESS")
+        .map(|v| v != "0")
+        .unwrap_or(false);
+    let build_start = Instant::now();
+    if progress {
+        eprintln!("[step-perf-progress] build_from_proto start");
+    }
     build_from_proto(
         step_graph,
         &mut channel_map_collection,
@@ -3467,8 +3474,24 @@ pub fn parse_proto<'a>(
         &hbm_config,
         &sim_config,
     );
+    if progress {
+        eprintln!(
+            "[step-perf-progress] build_from_proto done after {:?}",
+            build_start.elapsed()
+        );
+    }
 
+    let init_start = Instant::now();
+    if progress {
+        eprintln!("[step-perf-progress] initialize start");
+    }
     let initialized = builder.initialize(Default::default()).unwrap();
+    if progress {
+        eprintln!(
+            "[step-perf-progress] initialize done after {:?}",
+            init_start.elapsed()
+        );
+    }
     let run_options = match logging {
         true => {
             let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
