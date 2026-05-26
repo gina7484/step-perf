@@ -112,19 +112,43 @@ where
                                 panic!("Error converting a stop token into a usize!")
                             });
 
-                            if st_as_usize == rank {
-                                shape_info[rank - 1] += 1;
-                                break;
-                            } else if st_as_usize > rank {
-                                shape_info[rank - 1] += 1;
-                                stop_level = Some(st_as_usize - rank);
+                            if st_as_usize >= rank {
+                                // Close the partial group at the current
+                                // outermost-tracked level. For non-degenerate
+                                // shapes this is `shape_info[rank - 1]`; for
+                                // shapes with size-1 outer dims, intermediate
+                                // stops never appeared and `shape_info` is
+                                // shorter than `rank`, so pad each missing dim
+                                // with 1 (one group at each collapsed level).
+                                let last = shape_info.len() - 1;
+                                shape_info[last] += 1;
+                                while shape_info.len() < rank {
+                                    shape_info.push(1);
+                                }
+                                if st_as_usize > rank {
+                                    stop_level = Some(st_as_usize - rank);
+                                }
                                 break;
                             }
 
-                            if shape_info.len() == st_as_usize {
-                                shape_info[st_as_usize - 1] += 1;
+                            if shape_info.len() <= st_as_usize {
+                                // shape_info.len() == st_as_usize is the
+                                // normal "first stop at this level" case;
+                                // shape_info.len() < st_as_usize is the
+                                // intermediate-degenerate case where the stop
+                                // skips over collapsed size-1 dims. Both close
+                                // the partial group at the deepest tracked
+                                // level, pad missing dims with 1, and start a
+                                // new counter above.
+                                let last = shape_info.len() - 1;
+                                shape_info[last] += 1;
+                                while shape_info.len() < st_as_usize {
+                                    shape_info.push(1);
+                                }
                                 shape_info.push(1);
-                                tracked_shape_info.push(true);
+                                while tracked_shape_info.len() < shape_info.len() - 1 {
+                                    tracked_shape_info.push(true);
+                                }
                             } else if shape_info.len() > st_as_usize
                                 && (tracked_shape_info.len() <= st_as_usize)
                             {
@@ -384,6 +408,185 @@ mod tests {
         rcv.attach_receiver(&output_check);
         output_check.set_run(move |time| {
             let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 2, DUMMY_ID).unwrap();
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_degenerate_outer_2d() {
+        // Shape [1, 12]: outer dim is size 1, so `to_elem_iter` emits 11 Vals
+        // followed by a single ValStop(_, 2) with no intermediate ValStop(_, 1).
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0..12)
+            .map(|_| Tile::<VT>::new_blank(vec![2, 2], 2, false))
+            .collect();
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((1, 12))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 2, DUMMY_ID).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_degenerate_outer_3d() {
+        // Shape [1, 1, 12]: both outer dims are size 1, so `to_elem_iter` emits
+        // 11 Vals followed by a single ValStop(_, 3) with no intermediate stops.
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0..12)
+            .map(|_| Tile::<VT>::new_blank(vec![2, 2], 2, false))
+            .collect();
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((1, 1, 12))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 3, DUMMY_ID).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_degenerate_middle_3d() {
+        // Shape [2, 1, 3]: middle dim is size 1, so `to_elem_iter` emits a
+        // `ValStop(_, 2)` between outer groups even though `shape_info` has
+        // not yet been extended past length 1.
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0..6)
+            .map(|_| Tile::<VT>::new_blank(vec![2, 2], 2, false))
+            .collect();
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 1, 3))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 3, DUMMY_ID).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_degenerate_middle_4d() {
+        // Shape [2, 1, 3, 4]: middle dim 2 is size 1; the transition between
+        // outer groups emits `ValStop(_, 3)` after `shape_info` has only been
+        // grown to length 2 (via Stop1s), requiring multi-step padding.
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0..24)
+            .map(|_| Tile::<VT>::new_blank(vec![2, 2], 2, false))
+            .collect();
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((2, 1, 3, 4))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 4, DUMMY_ID).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
+            assert_eq!(buffer, tensor);
+        });
+        ctx.add_child(output_check);
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn round_trip_test_degenerate_repeated_middle() {
+        // Shape [4, 1, 2]: degenerate middle that recurs many times. Exercises
+        // that subsequent Stop2s after the padded one correctly increment the
+        // outer counter (via the existing `> st_as_usize` branch) instead of
+        // re-incrementing the locked middle dim.
+        type VT = u32;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0..8)
+            .map(|_| Tile::<VT>::new_blank(vec![2, 2], 2, false))
+            .collect();
+
+        let arr = ArcArray::from_vec(tile_vec)
+            .into_shape_with_order((4, 1, 2))
+            .unwrap();
+        let tensor = Buffer::new(arr.into_dyn(), 0);
+        let input_stream = tensor.to_elem_iter().collect::<Vec<_>>();
+
+        let (snd, rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| input_stream.into_iter(), snd));
+
+        let mut output_check = FunctionContext::new();
+        rcv.attach_receiver(&output_check);
+        output_check.set_run(move |time| {
+            let buffer = Buffer::from_stream::<SimpleEvent>(&rcv, time, 3, DUMMY_ID).unwrap();
+            assert_eq!(buffer.shape(), tensor.shape());
             assert_eq!(buffer, tensor);
         });
         ctx.add_child(output_check);

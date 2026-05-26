@@ -158,7 +158,10 @@ where
                             }
                         }
                     }
-                    _ => panic!("Check whether your id or ChannelMap is correct"),
+                    e => panic!(
+                        "{:?} - Check whether your id or ChannelMap is correct: id={}, idx={:?}",
+                        e, id, idx
+                    ),
                 },
                 None => match chan_map.remove(&id) {
                     // Single
@@ -183,7 +186,10 @@ where
                             }
                         }
                     }
-                    _ => panic!("Check whether your id or ChannelMap is correct"),
+                    _ => panic!(
+                        "Check whether your id or ChannelMap is correct: id={}, idx={:?}",
+                        id, idx
+                    ),
                 },
             },
             None => {
