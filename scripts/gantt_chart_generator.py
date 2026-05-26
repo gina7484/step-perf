@@ -93,8 +93,12 @@ def parse_csv(csv_file):
     return all_data, sorted_name_ids, global_min_time, global_max_time
 
 
-def generate_html(data, name_id_list, min_time, max_time):
+def generate_html(
+    data, name_id_list, min_time, max_time, time_unit: str = "ns"
+):
     """Generate HTML for the Gantt chart visualization."""
+    operator_types = sorted({item["name"] for item in data})
+
     # Group data by file_id (which is now the name_id combination)
     file_data = defaultdict(list)
     for item in data:
@@ -138,10 +142,61 @@ def generate_html(data, name_id_list, min_time, max_time):
         }
         #container {
             width: 100%;
-            height: calc(100vh - 100px);
+            height: calc(100vh - 280px);
             overflow: auto;
             position: relative;
         }
+        .filters {
+            margin-bottom: 16px;
+            padding: 12px 14px;
+            background: #f6f8fa;
+            border: 1px solid #dde3ea;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .filters h2 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .filter-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .filter-row:last-child { margin-bottom: 0; }
+        .filter-ops {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            max-height: 120px;
+            overflow-y: auto;
+            padding: 4px 0;
+        }
+        .filter-ops label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #filter-text {
+            min-width: 280px;
+            padding: 5px 8px;
+            font-size: 13px;
+        }
+        #filter-status {
+            margin-left: auto;
+            color: #444;
+            font-size: 12px;
+        }
+        .filter-preset {
+            font-size: 12px;
+            padding: 4px 8px;
+        }
+        .filter-preset.only { font-weight: 600; }
         #timeline {
             position: relative;
             margin-top: 40px;
@@ -262,6 +317,17 @@ def generate_html(data, name_id_list, min_time, max_time):
         <input type="range" id="scale-slider" min="1" max="100" value="10">
         <span id="scale-value">1x</span>
     </div>
+    <div class="filters">
+        <h2>Filters</h2>
+        <div class="filter-row">
+            <button type="button" class="filter-preset" id="filter-all">All operators</button>
+            <button type="button" class="filter-preset" id="filter-none">None</button>
+            <input type="text" id="filter-text" placeholder="Search row label or node id…">
+            <span id="filter-status"></span>
+        </div>
+        <div class="filter-row filter-ops" id="filter-ops"></div>
+        <div class="filter-row" id="filter-presets"></div>
+    </div>
     <div class="legend">
         <div class="legend-item">
             <div class="legend-color event-normal"></div>
@@ -279,11 +345,14 @@ def generate_html(data, name_id_list, min_time, max_time):
 
     <script>
         // Data from Python
-        const data = """
+        const dataAll = """
         + json.dumps(visualization_data)
         + """;
-        const nameIdList = """
+        const nameIdListAll = """
         + json.dumps(name_id_list)
+        + """;
+        const operatorTypes = """
+        + json.dumps(operator_types)
         + """;
         const minTime = """
         + str(min_time)
@@ -291,6 +360,14 @@ def generate_html(data, name_id_list, min_time, max_time):
         const maxTime = """
         + str(max_time)
         + """;
+        const timeUnit = """
+        + json.dumps(time_unit)
+        + """;
+        
+        let filteredNameIdList = nameIdListAll.slice();
+        let filteredData = dataAll.slice();
+        let viewMin = minTime;
+        let viewMax = maxTime;
         
         // Visualization variables
         let scale = 0.1;
@@ -300,13 +377,101 @@ def generate_html(data, name_id_list, min_time, max_time):
         let scaleSlider = document.getElementById('scale-slider');
         let scaleValue = document.getElementById('scale-value');
         
+        function countByOperator() {
+            const counts = {};
+            dataAll.forEach(item => {
+                counts[item.name] = (counts[item.name] || 0) + 1;
+            });
+            return counts;
+        }
+        
+        function buildFilterControls() {
+            const opsEl = document.getElementById('filter-ops');
+            const presetsEl = document.getElementById('filter-presets');
+            const counts = countByOperator();
+            operatorTypes.forEach(op => {
+                const label = document.createElement('label');
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'op-cb';
+                cb.value = op;
+                cb.checked = true;
+                cb.addEventListener('change', applyFilters);
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(`${op} (${counts[op] || 0})`));
+                opsEl.appendChild(label);
+                
+                const onlyBtn = document.createElement('button');
+                onlyBtn.type = 'button';
+                onlyBtn.className = 'filter-preset only';
+                onlyBtn.textContent = `Only ${op}`;
+                onlyBtn.addEventListener('click', () => showOnlyOperator(op));
+                presetsEl.appendChild(onlyBtn);
+            });
+            document.getElementById('filter-all').addEventListener('click', () => {
+                document.querySelectorAll('.op-cb').forEach(cb => { cb.checked = true; });
+                applyFilters();
+            });
+            document.getElementById('filter-none').addEventListener('click', () => {
+                document.querySelectorAll('.op-cb').forEach(cb => { cb.checked = false; });
+                applyFilters();
+            });
+            document.getElementById('filter-text').addEventListener('input', applyFilters);
+        }
+        
+        function showOnlyOperator(op) {
+            document.querySelectorAll('.op-cb').forEach(cb => {
+                cb.checked = (cb.value === op);
+            });
+            applyFilters();
+        }
+        
+        function applyFilters() {
+            const checked = new Set(
+                [...document.querySelectorAll('.op-cb:checked')].map(el => el.value)
+            );
+            const q = document.getElementById('filter-text').value.trim().toLowerCase();
+            filteredNameIdList = nameIdListAll.filter(fileId => {
+                const item = dataAll.find(d => d.file_id === fileId);
+                if (!item) return false;
+                if (!checked.has(item.name)) return false;
+                if (q) {
+                    const hay = `${fileId} ${item.name} ${item.id}`.toLowerCase();
+                    if (!hay.includes(q)) return false;
+                }
+                return true;
+            });
+            filteredData = dataAll.filter(d => filteredNameIdList.includes(d.file_id));
+            if (filteredData.length > 0) {
+                viewMin = Math.min(...filteredData.map(d => d.start));
+                viewMax = Math.max(...filteredData.map(d => d.end));
+            } else {
+                viewMin = minTime;
+                viewMax = maxTime;
+            }
+            document.getElementById('filter-status').textContent =
+                `${filteredNameIdList.length} / ${nameIdListAll.length} rows visible`;
+            renderTimeline();
+        }
+        
         // Function to render the timeline
         function renderTimeline() {
             timelineEl.innerHTML = '';
-            const timelineWidth = (maxTime - minTime) * scale;
+            const range = Math.max(viewMax - viewMin, 1);
+            const timelineWidth = range * scale;
+            
+            if (filteredNameIdList.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.marginLeft = '320px';
+                empty.style.padding = '24px';
+                empty.style.color = '#666';
+                empty.textContent = 'No rows match the current filters.';
+                timelineEl.appendChild(empty);
+                return;
+            }
             
             // Create a row for each name_id combination
-            nameIdList.forEach(nameId => {
+            filteredNameIdList.forEach(nameId => {
                 const fileRow = document.createElement('div');
                 fileRow.className = 'file-row';
                 
@@ -324,7 +489,7 @@ def generate_html(data, name_id_list, min_time, max_time):
                 timelineEl.appendChild(fileRow);
                 
                 // Add blocks for this name_id combination
-                const fileDataItems = data.filter(item => item.file_id === nameId);
+                const fileDataItems = filteredData.filter(item => item.file_id === nameId);
                 fileDataItems.forEach(item => {
                     const block = document.createElement('div');
                     
@@ -332,7 +497,7 @@ def generate_html(data, name_id_list, min_time, max_time):
                     block.className = item.is_stop ? 'block event-stop' : 'block event-normal';
                     
                     // Position and size based on time values
-                    const left = (item.start - minTime) * scale;
+                    const left = (item.start - viewMin) * scale;
                     const width = (item.end - item.start) * scale;
                     
                     block.style.left = `${left}px`;
@@ -361,15 +526,15 @@ def generate_html(data, name_id_list, min_time, max_time):
             });
             
             // Add time markers
-            const stepSize = calculateStepSize(maxTime - minTime);
-            for (let t = minTime; t <= maxTime; t += stepSize) {
+            const stepSize = calculateStepSize(range);
+            for (let t = viewMin; t <= viewMax; t += stepSize) {
                 const marker = document.createElement('div');
                 marker.className = 'timeline-marker';
-                marker.style.left = `${(t - minTime) * scale + 320}px`;
+                marker.style.left = `${(t - viewMin) * scale + 320}px`;
                 
                 const label = document.createElement('div');
                 label.className = 'timeline-label';
-                label.textContent = t.toFixed(2) + 'ns';
+                label.textContent = t.toFixed(2) + ' ' + timeUnit;
                 
                 marker.appendChild(label);
                 timelineEl.appendChild(marker);
@@ -398,9 +563,9 @@ def generate_html(data, name_id_list, min_time, max_time):
                 Name: ${block.dataset.name}<br>
                 ID: ${block.dataset.id}<br>
                 Identifier: ${block.dataset.identifier}<br>
-                Start: ${parseFloat(block.dataset.start).toFixed(2)} ns<br>
-                End: ${parseFloat(block.dataset.end).toFixed(2)} ns<br>
-                Duration: ${(parseFloat(block.dataset.end) - parseFloat(block.dataset.start)).toFixed(2)} ns<br>
+                Start: ${parseFloat(block.dataset.start).toFixed(2)} ${timeUnit}<br>
+                End: ${parseFloat(block.dataset.end).toFixed(2)} ${timeUnit}<br>
+                Duration: ${(parseFloat(block.dataset.end) - parseFloat(block.dataset.start)).toFixed(2)} ${timeUnit}<br>
                 Type: ${block.dataset.isStop === 'true' ? 'Stop Event' : 'Normal Event'}
             `;
             tooltipEl.style.display = 'block';
@@ -448,8 +613,9 @@ def generate_html(data, name_id_list, min_time, max_time):
         }
         
         // Initial render
+        buildFilterControls();
         updateScale();
-        renderTimeline();
+        applyFilters();
     </script>
 </body>
 </html>
@@ -466,6 +632,11 @@ def main():
     parser.add_argument("--csv_file", required=True, help="Path to the input CSV file.")
     parser.add_argument(
         "--output_file", required=True, help="Path to the output HTML file."
+    )
+    parser.add_argument(
+        "--time-unit",
+        default="ns",
+        help="Time axis label (default: ns; use 'cycles' for trace-derived charts)",
     )
 
     args = parser.parse_args()
@@ -491,7 +662,9 @@ def main():
     print(f"Total events: {len(data)}")
 
     # Generate HTML content
-    html_content = generate_html(data, name_id_list, min_time, max_time)
+    html_content = generate_html(
+        data, name_id_list, min_time, max_time, time_unit=args.time_unit
+    )
 
     # Write to output file
     with open(args.output_file, "w") as f:
