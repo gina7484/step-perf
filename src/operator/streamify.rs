@@ -703,6 +703,67 @@ mod tests {
     }
 
     #[test]
+    fn static_streamify_test_transpose() {
+        // Buffer shape [12, 1], a column of t0..t11.
+        // stride = [1, 1], out_shape = [1, 12].
+        //
+        // For output position (i, j), buf_idx = i*1 + j*1 = j (since i is always 0).
+        // The outer dim has size 1, so the last element gets stop level 2 (full rank).
+        // Expected stream:
+        //   t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11 S(2)
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0u32..12)
+            .map(|v| {
+                Tile::<VT>::new(
+                    ndarray::ArcArray2::from_elem((1, 1), v),
+                    BYTES_PER_ELEM,
+                    false,
+                )
+            })
+            .collect();
+
+        let buffer_arr = ndarray::ArcArray::from_vec(tile_vec.clone())
+            .into_shape_with_order((12, 1))
+            .unwrap()
+            .into_dyn();
+        let buffer = super::Buffer::new(buffer_arr, 0);
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(
+            move || vec![Elem::Val(buffer)].into_iter(),
+            in_snd,
+        ));
+
+        let (out_snd, out_rcv) = ctx.unbounded();
+        ctx.add_child(super::StaticStreamify::<SimpleEvent, _>::new(
+            vec![1, 1],
+            vec![1, 12],
+            in_rcv,
+            out_snd,
+            DUMMY_ID,
+        ));
+
+        let mut expected: Vec<Elem<Tile<VT>>> = (0..11)
+            .map(|i| Elem::Val(tile_vec[i].clone()))
+            .collect();
+        expected.push(Elem::ValStop(tile_vec[11].clone(), 2));
+
+        ctx.add_child(ApproxCheckerContext::new(
+            move || expected.into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
     fn round_trip_test_0d() {
         // Tiled stream shape: [2, 2, 2] => [2, |2, 2] => [2, 2, 2]
         type VT = u32;
