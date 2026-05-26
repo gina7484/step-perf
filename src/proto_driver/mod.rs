@@ -24,14 +24,16 @@ use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
 use crate::operator::flatmap::{CacheReadAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify};
 use crate::operator::flatten::Flatten;
-use crate::operator::map::{BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot, UnaryMapToMultiHot};
+use crate::operator::map::{
+    BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot, UnaryMapToMultiHot,
+};
 use crate::operator::map_accum::BinaryMapAccum;
 use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::{Reshape, ReshapeNoPadStream, ReshapePadStream};
 use crate::operator::static_reassemble::StaticReassemble;
-use crate::operator::streamify::Streamify;
+use crate::operator::streamify::{StaticStreamify, Streamify};
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
 use dam::simulation::{
@@ -396,11 +398,7 @@ fn build_from_proto<'a>(
                         }
                         elemto_elem_func::ElemElemFn::MultihotToU64(_) => {
                             Arc::new(move |multihot, comp_bw, write_back_mu| {
-                                functions::map_fn::multihot_to_u64(
-                                    multihot,
-                                    comp_bw,
-                                    write_back_mu,
-                                )
+                                functions::map_fn::multihot_to_u64(multihot, comp_bw, write_back_mu)
                             })
                         }
                         _ => {
@@ -2429,6 +2427,46 @@ fn build_from_proto<'a>(
                         ));
                     }
                     dtype => panic!("Unsupported data type for Streamify operation {:?}", dtype),
+                }
+            }
+            OpType::StaticStreamify(static_streamify) => {
+                match static_streamify
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
+                            static_streamify.input_id,
+                            static_streamify.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                static_streamify.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        builder.add_child(StaticStreamify::<SimpleEvent, _>::new(
+                            to_usize_vec(static_streamify.stride),
+                            to_usize_vec(static_streamify.out_shape),
+                            rcv,
+                            snd,
+                            operation.id,
+                        ));
+                    }
+                    dtype => panic!(
+                        "Unsupported data type for StaticStreamify operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::DynStreamify(dyn_streamify) => {
