@@ -747,9 +747,7 @@ pub fn multihot_to_u64(
         return (
             1,
             Tile::new(
-                Array2::from_shape_vec((1, 1), vec![0])
-                    .unwrap()
-                    .to_shared(),
+                Array2::from_shape_vec((1, 1), vec![0]).unwrap().to_shared(),
                 8,
                 write_back_mu,
             ),
@@ -759,9 +757,7 @@ pub fn multihot_to_u64(
     (
         1,
         Tile::new(
-            Array2::from_shape_vec((1, n), vals)
-                .unwrap()
-                .to_shared(),
+            Array2::from_shape_vec((1, n), vals).unwrap().to_shared(),
             8,
             write_back_mu,
         ),
@@ -805,6 +801,7 @@ pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::elem::Bufferizable;
 
     #[test]
     fn test_row_wise_sum() {
