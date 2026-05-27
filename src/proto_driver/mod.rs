@@ -240,6 +240,33 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::BroadcastRows(broadcast_rows) => {
+                            let row_size = broadcast_rows.row_size as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::broadcast_rows(
+                                    tile,
+                                    row_size,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Pow(pow) => {
+                            let exponent = pow.exponent;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::pow(
+                                    tile,
+                                    exponent,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Tanh(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::tanh(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         e => {
                             panic!("Unsupported unary map function type {:?}", e)
                         }

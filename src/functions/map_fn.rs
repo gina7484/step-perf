@@ -424,6 +424,77 @@ pub fn pow2<T: Debug + num_traits::Float + Copy>(
     }
 }
 
+// tanh(x) (~ 4 FLOPs per element)
+pub fn tanh<T: Debug + num_traits::Float + Copy>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| x.tanh()).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+// pow(x, c) = x^c (~ 4 FLOPs per element)
+pub fn pow<T: Debug + num_traits::Float + Copy>(
+    in_data: &Tile<T>,
+    exponent: T,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| x.powf(exponent)).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
 // rsqrt(x) = 1/sqrt(x) (~ 4 FLOPs per element)
 pub fn rsqrt<T: Debug + num_traits::Float + Copy>(
     in_data: &Tile<T>,
@@ -707,6 +778,45 @@ pub fn mul_constant<T: Debug + ndarray::LinalgScalar + Default>(
             Tile::new_blank(
                 vec![in1_shape_0, in1_shape_1],
                 in1.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+    }
+}
+
+pub fn broadcast_rows<T: Debug + Clone + Default>(
+    in_data: &Tile<T>,
+    row_size: usize,
+    _flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    assert_eq!(
+        in_data.shape[0], 1,
+        "BroadcastRows input must have a single row, got shape {:?}",
+        in_data.shape
+    );
+
+    let shape_1 = in_data.shape[1];
+
+    match &in_data.underlying {
+        Some(arr) => {
+            let mut out_arr = Array2::<T>::default((row_size, shape_1));
+            for i in 0..row_size {
+                for j in 0..shape_1 {
+                    out_arr[[i, j]] = arr[[0, j]].clone();
+                }
+            }
+            (
+                1,
+                Tile::new(out_arr.to_shared(), in_data.bytes_per_elem, write_back_mu),
+            )
+        }
+        None => (
+            1,
+            Tile::new_blank(
+                vec![row_size, shape_1],
+                in_data.bytes_per_elem,
                 write_back_mu,
             ),
         ),
