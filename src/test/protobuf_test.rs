@@ -59,6 +59,7 @@ mod test {
                 config_dict: HashMap::new(),
             },
             db_name,
+            None,
         );
 
         println!(

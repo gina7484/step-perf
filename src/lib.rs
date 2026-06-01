@@ -22,6 +22,7 @@ use crate::proto_driver::proto_headers::graph_proto::ProgramGraph;
 use crate::ramulator::hbm_context::HBMConfig;
 
 #[pyfunction]
+#[pyo3(signature = (proto, logging, hbm_config, sim_config, db_name=None, dump_prefix=None))]
 fn run_graph(
     py: Python,
     proto: String,
@@ -29,6 +30,10 @@ fn run_graph(
     hbm_config: HBMConfig,
     sim_config: SimConfig,
     db_name: Option<String>,
+    // When set, `build_from_proto` dumps `<dump_prefix>.proto.txt` and
+    // `<dump_prefix>.nodes.txt` describing the graph it built. Useful for
+    // debugging `builder.initialize` failures.
+    dump_prefix: Option<String>,
 ) -> (bool, u64, u128, u64) {
     let step_graph: ProgramGraph = {
         let file_contents = fs::read(proto).unwrap();
@@ -38,7 +43,7 @@ fn run_graph(
     println!("Successfully read proto file");
 
     let (passed, cycles, duration) =
-        parse_proto(step_graph, logging, hbm_config, sim_config, db_name.clone());
+        parse_proto(step_graph, logging, hbm_config, sim_config, db_name.clone(), dump_prefix);
 
     println!(
         "Passed: {}, Elapsed Cycles: {}, Duration: {:?}",
