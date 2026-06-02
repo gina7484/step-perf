@@ -8,6 +8,7 @@ use crate::memory::linear_offchip_load_ref::LinearOffChipLoadRef;
 use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
+use crate::operator::accum_buff::AccumBuff;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
 use crate::operator::flatmap_decomp::{
@@ -87,7 +88,7 @@ macro_rules! make_flatmap_counter {
         let snd = $collection
             .$type
             .get_sender($operation.id, None, $builder, $channel_depth);
-        add_child!($builder,FlatmapCounter::new(rcv, snd, $operation.id));
+        add_child!($builder, FlatmapCounter::new(rcv, snd, $operation.id));
     };
 }
 
@@ -110,7 +111,7 @@ macro_rules! make_broadcast {
             broadcast_node.add_target(snd);
         }
 
-        add_child!($builder,broadcast_node);
+        add_child!($builder, broadcast_node);
     };
 }
 
@@ -131,25 +132,28 @@ macro_rules! make_linear_offchip_load_ref {
         let (addr_snd, addr_rcv) = $builder.unbounded();
         let (resp_snd, resp_rcv) = $builder.unbounded();
 
-        add_child!($builder,LinearOffChipLoadRef::<SimpleEvent, _, _>::new(
-            to_usize_vec($dyn_offchip_load.tensor_shape_tiled),
-            to_usize_vec($dyn_offchip_load.stride),
-            to_usize_vec($dyn_offchip_load.out_shape_tiled),
-            $dyn_offchip_load.npy_path,
-            $dyn_offchip_load.tile_row as usize,
-            $dyn_offchip_load.tile_col as usize,
-            $n_bytes,
-            0,
-            $hbm_config.addr_offset,
-            $dyn_offchip_load.par_dispatch as usize,
-            ref_rcv,
-            addr_snd,
-            resp_rcv,
-            snd,
-            $dyn_offchip_load.transposed,
-            $operation.id,
-            $dyn_offchip_load.trigger_rank,
-        ));
+        add_child!(
+            $builder,
+            LinearOffChipLoadRef::<SimpleEvent, _, _>::new(
+                to_usize_vec($dyn_offchip_load.tensor_shape_tiled),
+                to_usize_vec($dyn_offchip_load.stride),
+                to_usize_vec($dyn_offchip_load.out_shape_tiled),
+                $dyn_offchip_load.npy_path,
+                $dyn_offchip_load.tile_row as usize,
+                $dyn_offchip_load.tile_col as usize,
+                $n_bytes,
+                0,
+                $hbm_config.addr_offset,
+                $dyn_offchip_load.par_dispatch as usize,
+                ref_rcv,
+                addr_snd,
+                resp_rcv,
+                snd,
+                $dyn_offchip_load.transposed,
+                $operation.id,
+                $dyn_offchip_load.trigger_rank,
+            )
+        );
         $mem_context.add_reader(ReadBundle {
             addr: addr_rcv,
             resp: resp_snd,
@@ -279,12 +283,7 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Pow(pow) => {
                             let exponent = pow.exponent;
                             Arc::new(move |tile, comp_bw, write_back_mu| {
-                                functions::map_fn::pow(
-                                    tile,
-                                    exponent,
-                                    comp_bw,
-                                    write_back_mu,
-                                )
+                                functions::map_fn::pow(tile, exponent, comp_bw, write_back_mu)
                             })
                         }
                         elemto_elem_func::ElemElemFn::Tanh(_) => {
@@ -297,16 +296,19 @@ fn build_from_proto<'a>(
                         }
                     };
 
-                    add_child!(builder,UnaryMap::<SimpleEvent, _, _>::new(
-                        rcv,
-                        snd,
-                        map_fn,
-                        UnaryMapConfig {
-                            compute_bw: unarymap.compute_bw as u64,
-                            write_back_mu: unarymap.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::U64(_), Type::F32(_)) => {
                     let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -341,16 +343,19 @@ fn build_from_proto<'a>(
                         }
                     };
 
-                    add_child!(builder,UnaryMap::<SimpleEvent, _, _>::new(
-                        rcv,
-                        snd,
-                        map_fn,
-                        UnaryMapConfig {
-                            compute_bw: unarymap.compute_bw as u64,
-                            write_back_mu: unarymap.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::U64(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -412,16 +417,19 @@ fn build_from_proto<'a>(
                         }
                     };
 
-                    add_child!(builder,UnaryMap::<SimpleEvent, _, _>::new(
-                        rcv,
-                        snd,
-                        map_fn,
-                        UnaryMapConfig {
-                            compute_bw: unarymap.compute_bw as u64,
-                            write_back_mu: unarymap.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::MultiHot(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.multihot.get_receiver(
@@ -458,16 +466,19 @@ fn build_from_proto<'a>(
                         }
                     };
 
-                    add_child!(builder,UnaryMapMultiHot::<SimpleEvent, _>::new(
-                        rcv,
-                        snd,
-                        map_fn,
-                        UnaryMapConfig {
-                            compute_bw: unarymap.compute_bw as u64,
-                            write_back_mu: unarymap.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        UnaryMapMultiHot::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::U64(_), Type::MultiHot(_)) => {
                     let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -501,16 +512,19 @@ fn build_from_proto<'a>(
                         }
                     };
 
-                    add_child!(builder,UnaryMapToMultiHot::<SimpleEvent, _>::new(
-                        rcv,
-                        snd,
-                        map_fn,
-                        UnaryMapConfig {
-                            compute_bw: unarymap.compute_bw as u64,
-                            write_back_mu: unarymap.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        UnaryMapToMultiHot::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (_, _) => panic!("Unsupported data types for UnaryMap operation yet"),
             },
@@ -604,15 +618,18 @@ fn build_from_proto<'a>(
                             panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
-                    add_child!(builder,BinaryMap::<SimpleEvent, _, _, _>::new(
-                        rcv1,
-                        rcv2,
-                        snd,
-                        map_fn,
-                        binary_map.compute_bw as u64,
-                        binary_map.write_back_mu,
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        BinaryMap::<SimpleEvent, _, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::U64(_), Type::U64(_), Type::U64(_)) => {
                     // create
@@ -665,15 +682,18 @@ fn build_from_proto<'a>(
                             panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
-                    add_child!(builder,BinaryMap::<SimpleEvent, _, _, _>::new(
-                        rcv1,
-                        rcv2,
-                        snd,
-                        map_fn,
-                        binary_map.compute_bw as u64,
-                        binary_map.write_back_mu,
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        BinaryMap::<SimpleEvent, _, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::U64(_), Type::U64(_), Type::MultiHot(_)) => {
                     // create
@@ -715,15 +735,18 @@ fn build_from_proto<'a>(
                             panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
-                    add_child!(builder,BinaryMapMultiHot::<SimpleEvent, _, _>::new(
-                        rcv1,
-                        rcv2,
-                        snd,
-                        map_fn,
-                        binary_map.compute_bw as u64,
-                        binary_map.write_back_mu,
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        BinaryMapMultiHot::<SimpleEvent, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
                 }
 
                 (Type::F32(_), Type::U64(_), Type::F32(_)) => {
@@ -766,15 +789,18 @@ fn build_from_proto<'a>(
                             panic!("Unsupported binary map function type {:?}", e)
                         }
                     };
-                    add_child!(builder,BinaryMap::<SimpleEvent, _, _, _>::new(
-                        rcv1,
-                        rcv2,
-                        snd,
-                        map_fn,
-                        binary_map.compute_bw as u64,
-                        binary_map.write_back_mu,
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        BinaryMap::<SimpleEvent, _, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
                 }
                 data_types => panic!(
                     "Unsupported data types for BinaryMap operation {:?}",
@@ -864,23 +890,26 @@ fn build_from_proto<'a>(
                     let tile_row = binary_map_accum.tile_row as usize;
                     let tile_col = binary_map_accum.tile_col as usize;
 
-                    add_child!(builder,BinaryMapAccum::<SimpleEvent, _, _>::new(
-                        in1_stream,
-                        in2_stream,
-                        out_stream,
-                        map_fn,
-                        Arc::new(move || {
-                            Tile::new_zero(
-                                [tile_row, tile_col],
-                                f32_bytes,
-                                binary_map_accum.write_back_mu,
-                            )
-                        }),
-                        binary_map_accum.rank,
-                        binary_map_accum.compute_bw as u64,
-                        binary_map_accum.write_back_mu,
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        BinaryMapAccum::<SimpleEvent, _, _>::new(
+                            in1_stream,
+                            in2_stream,
+                            out_stream,
+                            map_fn,
+                            Arc::new(move || {
+                                Tile::new_zero(
+                                    [tile_row, tile_col],
+                                    f32_bytes,
+                                    binary_map_accum.write_back_mu,
+                                )
+                            }),
+                            binary_map_accum.rank,
+                            binary_map_accum.compute_bw as u64,
+                            binary_map_accum.write_back_mu,
+                            operation.id,
+                        )
+                    );
                 }
                 (_, _) => todo!(),
             },
@@ -903,23 +932,26 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,LinearOffChipLoad::<SimpleEvent, _>::new(
-                            to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
-                            to_usize_vec(linear_off_chip_load.stride),
-                            to_usize_vec(linear_off_chip_load.out_shape_tiled),
-                            linear_off_chip_load.npy_path,
-                            linear_off_chip_load.tile_row as usize,
-                            linear_off_chip_load.tile_col as usize,
-                            f32_bytes,
-                            0,
-                            hbm_config.addr_offset,
-                            linear_off_chip_load.par_dispatch as usize,
-                            addr_snd,
-                            resp_rcv,
-                            on_chip_snd,
-                            linear_off_chip_load.transposed,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            LinearOffChipLoad::<SimpleEvent, _>::new(
+                                to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
+                                to_usize_vec(linear_off_chip_load.stride),
+                                to_usize_vec(linear_off_chip_load.out_shape_tiled),
+                                linear_off_chip_load.npy_path,
+                                linear_off_chip_load.tile_row as usize,
+                                linear_off_chip_load.tile_col as usize,
+                                f32_bytes,
+                                0,
+                                hbm_config.addr_offset,
+                                linear_off_chip_load.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                on_chip_snd,
+                                linear_off_chip_load.transposed,
+                                operation.id,
+                            )
+                        );
 
                         mem_context.add_reader(ReadBundle {
                             addr: addr_rcv,
@@ -936,23 +968,26 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,LinearOffChipLoad::<SimpleEvent, _>::new(
-                            to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
-                            to_usize_vec(linear_off_chip_load.stride),
-                            to_usize_vec(linear_off_chip_load.out_shape_tiled),
-                            linear_off_chip_load.npy_path,
-                            linear_off_chip_load.tile_row as usize,
-                            linear_off_chip_load.tile_col as usize,
-                            std::mem::size_of::<u64>(),
-                            0,
-                            hbm_config.addr_offset,
-                            linear_off_chip_load.par_dispatch as usize,
-                            addr_snd,
-                            resp_rcv,
-                            on_chip_snd,
-                            linear_off_chip_load.transposed,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            LinearOffChipLoad::<SimpleEvent, _>::new(
+                                to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
+                                to_usize_vec(linear_off_chip_load.stride),
+                                to_usize_vec(linear_off_chip_load.out_shape_tiled),
+                                linear_off_chip_load.npy_path,
+                                linear_off_chip_load.tile_row as usize,
+                                linear_off_chip_load.tile_col as usize,
+                                std::mem::size_of::<u64>(),
+                                0,
+                                hbm_config.addr_offset,
+                                linear_off_chip_load.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                on_chip_snd,
+                                linear_off_chip_load.transposed,
+                                operation.id,
+                            )
+                        );
 
                         mem_context.add_reader(ReadBundle {
                             addr: addr_rcv,
@@ -981,20 +1016,23 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,DynLinearOffChipLoad::<SimpleEvent, _>::new(
-                            dyn_linear_off_chip_load.shape_path,
-                            dyn_linear_off_chip_load.npy_path,
-                            dyn_linear_off_chip_load.tile_row as usize,
-                            dyn_linear_off_chip_load.tile_col as usize,
-                            f32_bytes,
-                            0,
-                            hbm_config.addr_offset,
-                            dyn_linear_off_chip_load.par_dispatch as usize,
-                            addr_snd,
-                            resp_rcv,
-                            on_chip_snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            DynLinearOffChipLoad::<SimpleEvent, _>::new(
+                                dyn_linear_off_chip_load.shape_path,
+                                dyn_linear_off_chip_load.npy_path,
+                                dyn_linear_off_chip_load.tile_row as usize,
+                                dyn_linear_off_chip_load.tile_col as usize,
+                                f32_bytes,
+                                0,
+                                hbm_config.addr_offset,
+                                dyn_linear_off_chip_load.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                on_chip_snd,
+                                operation.id,
+                            )
+                        );
 
                         mem_context.add_reader(ReadBundle {
                             addr: addr_rcv,
@@ -1027,19 +1065,22 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,DynOffChipStore::<SimpleEvent, _>::new(
-                            dyn_off_chip_store.shape_path,
-                            dyn_off_chip_store.tile_row as usize,
-                            dyn_off_chip_store.tile_col as usize,
-                            dyn_off_chip_store.store_path,
-                            0,
-                            hbm_config.addr_offset,
-                            dyn_off_chip_store.par_dispatch as usize,
-                            on_chip_rcv,
-                            addr_snd,
-                            resp_rcv,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            DynOffChipStore::<SimpleEvent, _>::new(
+                                dyn_off_chip_store.shape_path,
+                                dyn_off_chip_store.tile_row as usize,
+                                dyn_off_chip_store.tile_col as usize,
+                                dyn_off_chip_store.store_path,
+                                0,
+                                hbm_config.addr_offset,
+                                dyn_off_chip_store.par_dispatch as usize,
+                                on_chip_rcv,
+                                addr_snd,
+                                resp_rcv,
+                                operation.id,
+                            )
+                        );
 
                         mem_context.add_writer(WriteBundle {
                             addr: addr_rcv,
@@ -1072,19 +1113,22 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,OffChipStore::<SimpleEvent, _>::new(
-                            to_usize_vec(off_chip_store.tensor_shape_tiled),
-                            off_chip_store.tile_row as usize,
-                            off_chip_store.tile_col as usize,
-                            off_chip_store.store_path,
-                            0,
-                            hbm_config.addr_offset,
-                            off_chip_store.par_dispatch as usize,
-                            on_chip_rcv,
-                            addr_snd,
-                            resp_rcv,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            OffChipStore::<SimpleEvent, _>::new(
+                                to_usize_vec(off_chip_store.tensor_shape_tiled),
+                                off_chip_store.tile_row as usize,
+                                off_chip_store.tile_col as usize,
+                                off_chip_store.store_path,
+                                0,
+                                hbm_config.addr_offset,
+                                off_chip_store.par_dispatch as usize,
+                                on_chip_rcv,
+                                addr_snd,
+                                resp_rcv,
+                                operation.id,
+                            )
+                        );
 
                         mem_context.add_writer(WriteBundle {
                             addr: addr_rcv,
@@ -1145,23 +1189,26 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,RandomOffChipStore::<SimpleEvent, _>::new(
-                            to_usize_vec(random_off_chip_store.tensor_shape_tiled),
-                            random_off_chip_store.npy_path,
-                            random_off_chip_store.tile_row as usize,
-                            random_off_chip_store.tile_col as usize,
-                            f32_bytes,
-                            0,
-                            hbm_config.addr_offset,
-                            random_off_chip_store.par_dispatch as usize,
-                            addr_snd,
-                            resp_rcv,
-                            waddr,
-                            wdata,
-                            wack,
-                            operation.id,
-                            random_off_chip_store.ack_based_on_waddr,
-                        ));
+                        add_child!(
+                            builder,
+                            RandomOffChipStore::<SimpleEvent, _>::new(
+                                to_usize_vec(random_off_chip_store.tensor_shape_tiled),
+                                random_off_chip_store.npy_path,
+                                random_off_chip_store.tile_row as usize,
+                                random_off_chip_store.tile_col as usize,
+                                f32_bytes,
+                                0,
+                                hbm_config.addr_offset,
+                                random_off_chip_store.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                waddr,
+                                wdata,
+                                wack,
+                                operation.id,
+                                random_off_chip_store.ack_based_on_waddr,
+                            )
+                        );
 
                         mem_context.add_writer(WriteBundle {
                             addr: addr_rcv,
@@ -1200,23 +1247,26 @@ fn build_from_proto<'a>(
                         let (addr_snd, addr_rcv) = builder.unbounded();
                         let (resp_snd, resp_rcv) = builder.unbounded();
 
-                        add_child!(builder,RandomOffChipLoad::<SimpleEvent, _>::new(
-                            to_usize_vec(random_off_chip_load.tensor_shape_tiled),
-                            random_off_chip_load.npy_path,
-                            random_off_chip_load.tile_row as usize,
-                            random_off_chip_load.tile_col as usize,
-                            f32_bytes,
-                            0,
-                            hbm_config.addr_offset,
-                            random_off_chip_load.par_dispatch as usize,
-                            addr_snd,
-                            resp_rcv,
-                            raddr,
-                            on_chip_snd,
-                            random_off_chip_load.transposed,
-                            operation.id,
-                            random_off_chip_load.track_traffic,
-                        ));
+                        add_child!(
+                            builder,
+                            RandomOffChipLoad::<SimpleEvent, _>::new(
+                                to_usize_vec(random_off_chip_load.tensor_shape_tiled),
+                                random_off_chip_load.npy_path,
+                                random_off_chip_load.tile_row as usize,
+                                random_off_chip_load.tile_col as usize,
+                                f32_bytes,
+                                0,
+                                hbm_config.addr_offset,
+                                random_off_chip_load.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                raddr,
+                                on_chip_snd,
+                                random_off_chip_load.transposed,
+                                operation.id,
+                                random_off_chip_load.track_traffic,
+                            )
+                        );
 
                         mem_context.add_reader(ReadBundle {
                             addr: addr_rcv,
@@ -1264,13 +1314,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,ExpandRef::<_, _>::new(
-                            in_rcv,
-                            ref_rcv,
-                            expand_ref.expand_rank,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            ExpandRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                expand_ref.expand_rank,
+                                snd,
+                                operation.id,
+                            )
+                        );
                     }
                     (Type::U64(_), Type::U64(_)) => {
                         let in_rcv = channel_map_collection.tile_u64.get_receiver(
@@ -1299,13 +1352,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,ExpandRef::<_, _>::new(
-                            in_rcv,
-                            ref_rcv,
-                            expand_ref.expand_rank,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            ExpandRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                expand_ref.expand_rank,
+                                snd,
+                                operation.id,
+                            )
+                        );
                     }
                     e => panic!("Unsupported data type for ExpandRef operation {:?}", e),
                 }
@@ -1329,11 +1385,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatStatic::<_>::new(
-                            rcv,
-                            repeat_static.repeat_factor as usize,
-                            snd,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                        );
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -1352,11 +1407,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatStatic::<_>::new(
-                            rcv,
-                            repeat_static.repeat_factor as usize,
-                            snd,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                        );
                     }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
                         r#type: Some(buffer::Type::F32(_)),
@@ -1377,11 +1431,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatStatic::<_>::new(
-                            rcv,
-                            repeat_static.repeat_factor as usize,
-                            snd,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                        );
                     }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
@@ -1400,11 +1453,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatStatic::<_>::new(
-                            rcv,
-                            repeat_static.repeat_factor as usize,
-                            snd,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for RepeatStatic operation {:?}",
@@ -1450,13 +1502,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatRef::<_, _>::new(
-                            in_rcv,
-                            ref_rcv,
-                            snd,
-                            repeat_ref.rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                snd,
+                                repeat_ref.rank,
+                                operation.id,
+                            )
+                        );
                     }
                     (Type::U64(_), Type::U64(_)) => {
                         let in_rcv = channel_map_collection.tile_u64.get_receiver(
@@ -1485,13 +1540,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatRef::<_, _>::new(
-                            in_rcv,
-                            ref_rcv,
-                            snd,
-                            repeat_ref.rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                snd,
+                                repeat_ref.rank,
+                                operation.id,
+                            )
+                        );
                     }
                     (
                         Type::Buffer(proto_headers::graph_proto::Buffer {
@@ -1525,13 +1583,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RepeatRef::<_, _>::new(
-                            in_rcv,
-                            ref_rcv,
-                            snd,
-                            repeat_ref.rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            RepeatRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                snd,
+                                repeat_ref.rank,
+                                operation.id,
+                            )
+                        );
                     }
                     e => panic!("Unsupported data type for RepeatRef operation {:?}", e),
                 }
@@ -1642,17 +1703,20 @@ fn build_from_proto<'a>(
                                     builder,
                                     channel_depth,
                                 );
-                                add_child!(builder,FlatPartition::<SimpleEvent, _, _>::new(
-                                    input_rcv,
-                                    control_rcv,
-                                    snd_list,
-                                    flat_partition.partition_rank,
-                                    FlatPartitionConfig {
-                                        switch_cycles: to_u64_vec(flat_partition.switch_cycles),
-                                        write_back_mu: flat_partition.write_back_mu,
-                                    },
-                                    operation.id,
-                                ))
+                                add_child!(
+                                    builder,
+                                    FlatPartition::<SimpleEvent, _, _>::new(
+                                        input_rcv,
+                                        control_rcv,
+                                        snd_list,
+                                        flat_partition.partition_rank,
+                                        FlatPartitionConfig {
+                                            switch_cycles: to_u64_vec(flat_partition.switch_cycles),
+                                            write_back_mu: flat_partition.write_back_mu,
+                                        },
+                                        operation.id,
+                                    )
+                                )
                             }
                             dtype => panic!("Unsupported data type {:?}", dtype),
                         }
@@ -1697,17 +1761,20 @@ fn build_from_proto<'a>(
                                     builder,
                                     channel_depth,
                                 );
-                                add_child!(builder,FlatPartition::<SimpleEvent, _, _>::new(
-                                    input_rcv,
-                                    control_rcv,
-                                    snd_list,
-                                    flat_partition.partition_rank,
-                                    FlatPartitionConfig {
-                                        switch_cycles: to_u64_vec(flat_partition.switch_cycles),
-                                        write_back_mu: flat_partition.write_back_mu,
-                                    },
-                                    operation.id,
-                                ))
+                                add_child!(
+                                    builder,
+                                    FlatPartition::<SimpleEvent, _, _>::new(
+                                        input_rcv,
+                                        control_rcv,
+                                        snd_list,
+                                        flat_partition.partition_rank,
+                                        FlatPartitionConfig {
+                                            switch_cycles: to_u64_vec(flat_partition.switch_cycles),
+                                            write_back_mu: flat_partition.write_back_mu,
+                                        },
+                                        operation.id,
+                                    )
+                                )
                             }
                             dtype => panic!("Unsupported data type {:?}", dtype),
                         }
@@ -1752,17 +1819,20 @@ fn build_from_proto<'a>(
                                     builder,
                                     channel_depth,
                                 );
-                                add_child!(builder,FlatPartition::<SimpleEvent, _, _>::new(
-                                    input_rcv,
-                                    control_rcv,
-                                    snd_list,
-                                    flat_partition.partition_rank,
-                                    FlatPartitionConfig {
-                                        switch_cycles: to_u64_vec(flat_partition.switch_cycles),
-                                        write_back_mu: flat_partition.write_back_mu,
-                                    },
-                                    operation.id,
-                                ))
+                                add_child!(
+                                    builder,
+                                    FlatPartition::<SimpleEvent, _, _>::new(
+                                        input_rcv,
+                                        control_rcv,
+                                        snd_list,
+                                        flat_partition.partition_rank,
+                                        FlatPartitionConfig {
+                                            switch_cycles: to_u64_vec(flat_partition.switch_cycles),
+                                            write_back_mu: flat_partition.write_back_mu,
+                                        },
+                                        operation.id,
+                                    )
+                                )
                             }
                             dtype => panic!("Unsupported data type {:?}", dtype),
                         }
@@ -1824,17 +1894,20 @@ fn build_from_proto<'a>(
                                         channel_depth,
                                     ),
                                 );
-                                add_child!(builder,FlatReassemble::<SimpleEvent, _, _>::new(
-                                    rcv_list,
-                                    control_rcv,
-                                    snd,
-                                    reassemble.reassemble_rank,
-                                    FlatReassembleConfig {
-                                        switch_cycles: to_u64_vec(reassemble.switch_cycles),
-                                        write_back_mu: reassemble.write_back_mu,
-                                    },
-                                    operation.id,
-                                ))
+                                add_child!(
+                                    builder,
+                                    FlatReassemble::<SimpleEvent, _, _>::new(
+                                        rcv_list,
+                                        control_rcv,
+                                        snd,
+                                        reassemble.reassemble_rank,
+                                        FlatReassembleConfig {
+                                            switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                            write_back_mu: reassemble.write_back_mu,
+                                        },
+                                        operation.id,
+                                    )
+                                )
                             }
                             dtype => panic!("Unsupported data type {:?}", dtype),
                         }
@@ -1884,17 +1957,20 @@ fn build_from_proto<'a>(
                                         channel_depth,
                                     ),
                                 );
-                                add_child!(builder,FlatReassemble::<SimpleEvent, _, _>::new(
-                                    rcv_list,
-                                    control_rcv,
-                                    snd,
-                                    reassemble.reassemble_rank,
-                                    FlatReassembleConfig {
-                                        switch_cycles: to_u64_vec(reassemble.switch_cycles),
-                                        write_back_mu: reassemble.write_back_mu,
-                                    },
-                                    operation.id,
-                                ))
+                                add_child!(
+                                    builder,
+                                    FlatReassemble::<SimpleEvent, _, _>::new(
+                                        rcv_list,
+                                        control_rcv,
+                                        snd,
+                                        reassemble.reassemble_rank,
+                                        FlatReassembleConfig {
+                                            switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                            write_back_mu: reassemble.write_back_mu,
+                                        },
+                                        operation.id,
+                                    )
+                                )
                             }
                             dtype => panic!("Unsupported data type {:?}", dtype),
                         }
@@ -1937,16 +2013,19 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,StaticReassemble::<SimpleEvent, _>::new(
-                            rcv_list,
-                            snd,
-                            static_reassemble.merge_rank,
-                            FlatPartitionConfig {
-                                switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
-                                write_back_mu: static_reassemble.write_back_mu,
-                            },
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            StaticReassemble::<SimpleEvent, _>::new(
+                                rcv_list,
+                                snd,
+                                static_reassemble.merge_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                    write_back_mu: static_reassemble.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
                     }
                     Type::U64(_) => {
                         let mut rcv_list = vec![];
@@ -1974,16 +2053,19 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,StaticReassemble::<SimpleEvent, _>::new(
-                            rcv_list,
-                            snd,
-                            static_reassemble.merge_rank,
-                            FlatPartitionConfig {
-                                switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
-                                write_back_mu: static_reassemble.write_back_mu,
-                            },
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            StaticReassemble::<SimpleEvent, _>::new(
+                                rcv_list,
+                                snd,
+                                static_reassemble.merge_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                    write_back_mu: static_reassemble.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
                     }
                     Type::MultiHot(_) => {
                         let mut rcv_list = vec![];
@@ -2011,16 +2093,19 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,StaticReassemble::<SimpleEvent, _>::new(
-                            rcv_list,
-                            snd,
-                            static_reassemble.merge_rank,
-                            FlatPartitionConfig {
-                                switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
-                                write_back_mu: static_reassemble.write_back_mu,
-                            },
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            StaticReassemble::<SimpleEvent, _>::new(
+                                rcv_list,
+                                snd,
+                                static_reassemble.merge_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                    write_back_mu: static_reassemble.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for StaticReassemble operation {:?}",
@@ -2061,16 +2146,19 @@ fn build_from_proto<'a>(
                                 ),
                             ));
                         }
-                        add_child!(builder,Parallelize::<SimpleEvent, _>::new(
-                            input_rcv,
-                            snd_list,
-                            parallelize.parallelize_rank,
-                            FlatPartitionConfig {
-                                switch_cycles: to_u64_vec(parallelize.switch_cycles),
-                                write_back_mu: parallelize.write_back_mu,
-                            },
-                            operation.id,
-                        ))
+                        add_child!(
+                            builder,
+                            Parallelize::<SimpleEvent, _>::new(
+                                input_rcv,
+                                snd_list,
+                                parallelize.parallelize_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(parallelize.switch_cycles),
+                                    write_back_mu: parallelize.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        )
                     }
                     Type::MultiHot(_) => {
                         let input_rcv = channel_map_collection.multihot.get_receiver(
@@ -2096,16 +2184,19 @@ fn build_from_proto<'a>(
                                 ),
                             ));
                         }
-                        add_child!(builder,Parallelize::<SimpleEvent, _>::new(
-                            input_rcv,
-                            snd_list,
-                            parallelize.parallelize_rank,
-                            FlatPartitionConfig {
-                                switch_cycles: to_u64_vec(parallelize.switch_cycles),
-                                write_back_mu: parallelize.write_back_mu,
-                            },
-                            operation.id,
-                        ))
+                        add_child!(
+                            builder,
+                            Parallelize::<SimpleEvent, _>::new(
+                                input_rcv,
+                                snd_list,
+                                parallelize.parallelize_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(parallelize.switch_cycles),
+                                    write_back_mu: parallelize.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        )
                     }
                     Type::U64(u64) => {
                         let input_rcv = channel_map_collection.tile_u64.get_receiver(
@@ -2131,16 +2222,19 @@ fn build_from_proto<'a>(
                                 ),
                             ));
                         }
-                        add_child!(builder,Parallelize::<SimpleEvent, _>::new(
-                            input_rcv,
-                            snd_list,
-                            parallelize.parallelize_rank,
-                            FlatPartitionConfig {
-                                switch_cycles: to_u64_vec(parallelize.switch_cycles),
-                                write_back_mu: parallelize.write_back_mu,
-                            },
-                            operation.id,
-                        ))
+                        add_child!(
+                            builder,
+                            Parallelize::<SimpleEvent, _>::new(
+                                input_rcv,
+                                snd_list,
+                                parallelize.parallelize_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(parallelize.switch_cycles),
+                                    write_back_mu: parallelize.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        )
                     }
                     dtype => panic!("Unsupported data type {:?}", dtype),
                 }
@@ -2164,7 +2258,7 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Promote::new(rcv, snd, promote.promote_rank));
+                        add_child!(builder, Promote::new(rcv, snd, promote.promote_rank));
                     }
                     dtype => panic!("Unsupported data type {:?}", dtype),
                 }
@@ -2188,7 +2282,7 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,PromoteOuter::new(rcv, snd));
+                        add_child!(builder, PromoteOuter::new(rcv, snd));
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -2207,7 +2301,7 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,PromoteOuter::new(rcv, snd));
+                        add_child!(builder, PromoteOuter::new(rcv, snd));
                     }
                     Type::Bool(_) => {
                         let rcv = channel_map_collection.tile_bool.get_receiver(
@@ -2226,7 +2320,7 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,PromoteOuter::new(rcv, snd));
+                        add_child!(builder, PromoteOuter::new(rcv, snd));
                     }
                     dtype => panic!("Unsupported data type {:?}", dtype),
                 }
@@ -2247,7 +2341,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -2256,7 +2350,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
@@ -2265,7 +2359,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     Type::ScalarU64(_) => {
                         let rcv = channel_map_collection.u64.get_receiver(
@@ -2274,7 +2368,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     Type::ScalarBool(_) => {
                         let rcv = channel_map_collection.bool.get_receiver(
@@ -2283,7 +2377,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     Type::Bool(_) => {
                         let rcv = channel_map_collection.tile_bool.get_receiver(
@@ -2292,7 +2386,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
                         r#type: Some(buffer::Type::F32(_)),
@@ -2303,7 +2397,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,ConsumerContext::new(rcv));
+                        add_child!(builder, ConsumerContext::new(rcv));
                     }
                     dtype => panic!(
                         "Unsupported data type for ConsumerContext operation {:?}",
@@ -2327,7 +2421,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,PrinterContext::new(rcv));
+                        add_child!(builder, PrinterContext::new(rcv));
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -2336,7 +2430,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,PrinterContext::new(rcv));
+                        add_child!(builder, PrinterContext::new(rcv));
                     }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
@@ -2345,7 +2439,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,PrinterContext::new(rcv));
+                        add_child!(builder, PrinterContext::new(rcv));
                     }
                     Type::Bool(_) => {
                         let rcv = channel_map_collection.tile_bool.get_receiver(
@@ -2354,7 +2448,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,PrinterContext::new(rcv));
+                        add_child!(builder, PrinterContext::new(rcv));
                     }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
                         r#type: Some(buffer::Type::F32(_)),
@@ -2365,7 +2459,7 @@ fn build_from_proto<'a>(
                             builder,
                             None,
                         );
-                        add_child!(builder,PrinterContext::new(rcv));
+                        add_child!(builder, PrinterContext::new(rcv));
                     }
                     dtype => panic!(
                         "Unsupported data type for PrinterContext operation {:?}",
@@ -2392,12 +2486,15 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Bufferize::<SimpleEvent, _>::new(
-                            rcv,
-                            snd,
-                            bufferize.rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            Bufferize::<SimpleEvent, _>::new(
+                                rcv,
+                                snd,
+                                bufferize.rank,
+                                operation.id,
+                            )
+                        );
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -2416,12 +2513,15 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Bufferize::<SimpleEvent, _>::new(
-                            rcv,
-                            snd,
-                            bufferize.rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            Bufferize::<SimpleEvent, _>::new(
+                                rcv,
+                                snd,
+                                bufferize.rank,
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!("Unsupported data type for Bufferize operation {:?}", dtype),
                 }
@@ -2445,13 +2545,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Streamify::<SimpleEvent, _>::new(
-                            to_usize_vec(streamify.repeat_factor),
-                            streamify.rank,
-                            rcv,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            Streamify::<SimpleEvent, _>::new(
+                                to_usize_vec(streamify.repeat_factor),
+                                streamify.rank,
+                                rcv,
+                                snd,
+                                operation.id,
+                            )
+                        );
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.buff_tile_u64.get_receiver(
@@ -2470,13 +2573,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Streamify::<SimpleEvent, _>::new(
-                            to_usize_vec(streamify.repeat_factor),
-                            streamify.rank,
-                            rcv,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            Streamify::<SimpleEvent, _>::new(
+                                to_usize_vec(streamify.repeat_factor),
+                                streamify.rank,
+                                rcv,
+                                snd,
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!("Unsupported data type for Streamify operation {:?}", dtype),
                 }
@@ -2507,13 +2613,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,StaticStreamify::<SimpleEvent, _>::new(
-                            to_usize_vec(static_streamify.stride),
-                            to_usize_vec(static_streamify.out_shape),
-                            rcv,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            StaticStreamify::<SimpleEvent, _>::new(
+                                to_usize_vec(static_streamify.stride),
+                                to_usize_vec(static_streamify.out_shape),
+                                rcv,
+                                snd,
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for StaticStreamify operation {:?}",
@@ -2565,14 +2674,17 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,DynStreamify::<SimpleEvent, _, _>::new(
-                            rcv,
-                            dyn_streamify.bufferized_rank,
-                            dyn_streamify.repeat_rank,
-                            ref_rcv,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            DynStreamify::<SimpleEvent, _, _>::new(
+                                rcv,
+                                dyn_streamify.bufferized_rank,
+                                dyn_streamify.repeat_rank,
+                                ref_rcv,
+                                snd,
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for DynStreamify operation {:?}",
@@ -2669,12 +2781,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Flatten::new(
-                            rcv,
-                            snd,
-                            flatten.min_rank,
-                            flatten.max_rank,
-                        ));
+                        add_child!(
+                            builder,
+                            Flatten::new(rcv, snd, flatten.min_rank, flatten.max_rank,)
+                        );
                     }
                     Type::Bool(_) => {
                         let rcv = channel_map_collection.tile_bool.get_receiver(
@@ -2693,12 +2803,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Flatten::new(
-                            rcv,
-                            snd,
-                            flatten.min_rank,
-                            flatten.max_rank,
-                        ));
+                        add_child!(
+                            builder,
+                            Flatten::new(rcv, snd, flatten.min_rank, flatten.max_rank,)
+                        );
                     }
                     Type::MultiHot(_) => {
                         let rcv = channel_map_collection.multihot.get_receiver(
@@ -2717,12 +2825,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Flatten::new(
-                            rcv,
-                            snd,
-                            flatten.min_rank,
-                            flatten.max_rank,
-                        ));
+                        add_child!(
+                            builder,
+                            Flatten::new(rcv, snd, flatten.min_rank, flatten.max_rank,)
+                        );
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
@@ -2741,12 +2847,10 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,Flatten::new(
-                            rcv,
-                            snd,
-                            flatten.min_rank,
-                            flatten.max_rank,
-                        ));
+                        add_child!(
+                            builder,
+                            Flatten::new(rcv, snd, flatten.min_rank, flatten.max_rank,)
+                        );
                     }
 
                     dtype => panic!("Unsupported data type for Flatten operation {:?}", dtype),
@@ -2760,12 +2864,16 @@ fn build_from_proto<'a>(
                         builder,
                         get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
-                    add_child!(builder,GeneratorContext::new(
-                        move || {
-                            read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path).unwrap()
-                        },
-                        snd,
-                    ));
+                    add_child!(
+                        builder,
+                        GeneratorContext::new(
+                            move || {
+                                read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path)
+                                    .unwrap()
+                            },
+                            snd,
+                        )
+                    );
                 }
                 false => todo!("Add the same version for IndexN"),
             },
@@ -2859,18 +2967,21 @@ fn build_from_proto<'a>(
                         })
                     };
 
-                    add_child!(builder,Accum::<SimpleEvent, _, _>::new(
-                        rcv,
-                        snd,
-                        func,
-                        init_accum,
-                        accum.rank,
-                        AccumConfig {
-                            compute_bw: accum.compute_bw as u64,
-                            write_back_mu: accum.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        Accum::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            func,
+                            init_accum,
+                            accum.rank,
+                            AccumConfig {
+                                compute_bw: accum.compute_bw as u64,
+                                write_back_mu: accum.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::F32(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.tile_f32.get_receiver(
@@ -2908,18 +3019,21 @@ fn build_from_proto<'a>(
                         Tile::new_blank(vec![tile_row, tile_col], 8, accum.write_back_mu)
                     });
 
-                    add_child!(builder,Accum::<SimpleEvent, _, _>::new(
-                        rcv,
-                        snd,
-                        func,
-                        init_accum,
-                        accum.rank,
-                        AccumConfig {
-                            compute_bw: accum.compute_bw as u64,
-                            write_back_mu: accum.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        Accum::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            func,
+                            init_accum,
+                            accum.rank,
+                            AccumConfig {
+                                compute_bw: accum.compute_bw as u64,
+                                write_back_mu: accum.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::Bool(_), Type::Bool(_)) => {
                     let rcv = channel_map_collection.tile_bool.get_receiver(
@@ -2993,18 +3107,101 @@ fn build_from_proto<'a>(
                     //     })
                     // };
 
-                    add_child!(builder,Accum::<SimpleEvent, _, _>::new(
-                        rcv,
-                        snd,
-                        func,
-                        init_accum,
-                        accum.rank,
-                        AccumConfig {
-                            compute_bw: accum.compute_bw as u64,
-                            write_back_mu: accum.write_back_mu,
-                        },
+                    add_child!(
+                        builder,
+                        Accum::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            func,
+                            init_accum,
+                            accum.rank,
+                            AccumConfig {
+                                compute_bw: accum.compute_bw as u64,
+                                write_back_mu: accum.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                _ => todo!(),
+            },
+            OpType::AccumBuffer(accum) => match (
+                accum.dtype_a.clone().unwrap().r#type.clone().unwrap(),
+                accum.dtype_b.clone().unwrap().r#type.clone().unwrap(),
+            ) {
+                (
+                    Type::F32(_),
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_)),
+                    }),
+                ) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        accum.input_id,
+                        accum.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.buff_tile_f32.get_sender(
                         operation.id,
-                    ));
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let func: Arc<
+                        dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match accum.func.unwrap().accum_fn.unwrap() {
+                        accum_func::AccumFn::Add(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::add(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    operation.id,
+                                )
+                            })
+                        }
+                        _ => todo!(),
+                    };
+
+                    let tile_row = accum.tile_row as usize;
+                    let tile_col = accum.tile_col as usize;
+
+                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = if sim_config
+                        .functional_sim
+                    {
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                Tile::new_zero([tile_row, tile_col], f32_bytes, accum.write_back_mu)
+                            }),
+                            _ => todo!(),
+                        }
+                    } else {
+                        Arc::new(move || {
+                            Tile::new_blank(
+                                vec![tile_row, tile_col],
+                                f32_bytes,
+                                accum.write_back_mu,
+                            )
+                        })
+                    };
+
+                    add_child!(
+                        builder,
+                        AccumBuff::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            func,
+                            init_accum,
+                            accum.rank,
+                            to_usize_vec(accum.buffer_shape),
+                            AccumConfig {
+                                compute_bw: accum.compute_bw as u64,
+                                write_back_mu: accum.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 _ => todo!(),
             },
@@ -3034,14 +3231,17 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,RetileStreamify::<_>::new(
-                            rcv,
-                            snd,
-                            retile_streamify.split_row,
-                            retile_streamify.filter_mask,
-                            retile_streamify.chunk as usize, // chunk size (default: 1 for backward compatibility)
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            RetileStreamify::<_>::new(
+                                rcv,
+                                snd,
+                                retile_streamify.split_row,
+                                retile_streamify.filter_mask,
+                                retile_streamify.chunk as usize, // chunk size (default: 1 for backward compatibility)
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for RetileStreamify operation {:?}",
@@ -3082,18 +3282,20 @@ fn build_from_proto<'a>(
                                 builder,
                                 get_chan_depth(&sim_config.config_dict, mask_id, channel_depth),
                             );
-                            add_child!(builder,FlatmapFilterRowStreamify::<_>::new(
-                                rcv,
-                                mask_rcv,
-                                snd,
-                                operation.id,
-                            ));
+                            add_child!(
+                                builder,
+                                FlatmapFilterRowStreamify::<_>::new(
+                                    rcv,
+                                    mask_rcv,
+                                    snd,
+                                    operation.id,
+                                )
+                            );
                         } else {
-                            add_child!(builder,FlatmapRowStreamify::<_>::new(
-                                rcv,
-                                snd,
-                                operation.id,
-                            ));
+                            add_child!(
+                                builder,
+                                FlatmapRowStreamify::<_>::new(rcv, snd, operation.id,)
+                            );
                         }
                     }
                     dtype => panic!(
@@ -3111,25 +3313,22 @@ fn build_from_proto<'a>(
                 );
                 match metadata_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::U64(_) => {
-                        add_child!(builder,MetadataGen::<u64>::new(
-                            metadata_gen.npy_path,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            MetadataGen::<u64>::new(metadata_gen.npy_path, snd, operation.id,)
+                        );
                     }
                     Type::ScalarU64(_) => {
-                        add_child!(builder,MetadataGen::<u64>::new(
-                            metadata_gen.npy_path,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            MetadataGen::<u64>::new(metadata_gen.npy_path, snd, operation.id,)
+                        );
                     }
                     Type::ScalarI64(_) => {
-                        add_child!(builder,MetadataGen::<i64>::new(
-                            metadata_gen.npy_path,
-                            snd,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            MetadataGen::<i64>::new(metadata_gen.npy_path, snd, operation.id,)
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for MetadataGen operation {:?}",
@@ -3163,13 +3362,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,ExpertAddrGen::<_>::new(
-                            rcv,
-                            snd,
-                            expert_addr_gen.num_tile_per_expert as u64,
-                            expert_addr_gen.expert_addr_base as u64,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            ExpertAddrGen::<_>::new(
+                                rcv,
+                                snd,
+                                expert_addr_gen.num_tile_per_expert as u64,
+                                expert_addr_gen.expert_addr_base as u64,
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!(
                         "Unsupported data type for ExpertAddrGen operation {:?}",
@@ -3204,13 +3406,16 @@ fn build_from_proto<'a>(
                     builder,
                     get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                 );
-                add_child!(builder,CacheReadAddrGen::new(
-                    idx_rcv,
-                    seq_len_rcv,
-                    cache_read_addr_gen.offset_per_idx,
-                    snd,
-                    operation.id,
-                ));
+                add_child!(
+                    builder,
+                    CacheReadAddrGen::new(
+                        idx_rcv,
+                        seq_len_rcv,
+                        cache_read_addr_gen.offset_per_idx,
+                        snd,
+                        operation.id,
+                    )
+                );
             }
             OpType::FilterLastTile(filter_last_tile) => {
                 let seq_len_rcv = channel_map_collection.tile_u64.get_receiver(
@@ -3229,7 +3434,7 @@ fn build_from_proto<'a>(
                     builder,
                     get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                 );
-                add_child!(builder,FilterLastTile::new(seq_len_rcv, snd, operation.id));
+                add_child!(builder, FilterLastTile::new(seq_len_rcv, snd, operation.id));
             }
             OpType::Reshape(reshape) => {
                 match reshape.dtype.clone().unwrap().r#type.clone().unwrap() {
@@ -3276,28 +3481,34 @@ fn build_from_proto<'a>(
                                     }
                                     _ => todo!(),
                                 };
-                                add_child!(builder,Reshape::new(
-                                    rcv,
-                                    snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    Some(pad_val),
-                                    reshape.input_stream_rank,
-                                    reshape.add_outer_dim,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    Reshape::new(
+                                        rcv,
+                                        snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        Some(pad_val),
+                                        reshape.input_stream_rank,
+                                        reshape.add_outer_dim,
+                                        operation.id,
+                                    )
+                                );
                             }
                             None => {
-                                add_child!(builder,Reshape::new(
-                                    rcv,
-                                    snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    None,
-                                    reshape.input_stream_rank,
-                                    reshape.add_outer_dim,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    Reshape::new(
+                                        rcv,
+                                        snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        None,
+                                        reshape.input_stream_rank,
+                                        reshape.add_outer_dim,
+                                        operation.id,
+                                    )
+                                );
                             }
                         }
                     }
@@ -3369,17 +3580,20 @@ fn build_from_proto<'a>(
                                     ),
                                 );
 
-                                add_child!(builder,ReshapePadStream::new(
-                                    rcv,
-                                    snd,
-                                    mask_snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    padding_value,
-                                    reshape.input_stream_rank,
-                                    false,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    ReshapePadStream::new(
+                                        rcv,
+                                        snd,
+                                        mask_snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        padding_value,
+                                        reshape.input_stream_rank,
+                                        false,
+                                        operation.id,
+                                    )
+                                );
                             }
                             false => {
                                 let snd = channel_map_collection.tile_f32.get_sender(
@@ -3392,16 +3606,19 @@ fn build_from_proto<'a>(
                                         channel_depth,
                                     ),
                                 );
-                                add_child!(builder,ReshapeNoPadStream::new(
-                                    rcv,
-                                    snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    padding_value,
-                                    reshape.input_stream_rank,
-                                    false,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    ReshapeNoPadStream::new(
+                                        rcv,
+                                        snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        padding_value,
+                                        reshape.input_stream_rank,
+                                        false,
+                                        operation.id,
+                                    )
+                                );
                             }
                         }
                     }
@@ -3468,17 +3685,20 @@ fn build_from_proto<'a>(
                                     ),
                                 );
 
-                                add_child!(builder,ReshapePadStream::new(
-                                    rcv,
-                                    snd,
-                                    mask_snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    padding_value,
-                                    reshape.input_stream_rank,
-                                    false,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    ReshapePadStream::new(
+                                        rcv,
+                                        snd,
+                                        mask_snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        padding_value,
+                                        reshape.input_stream_rank,
+                                        false,
+                                        operation.id,
+                                    )
+                                );
                             }
                             false => {
                                 let snd = channel_map_collection.tile_u64.get_sender(
@@ -3491,16 +3711,19 @@ fn build_from_proto<'a>(
                                         channel_depth,
                                     ),
                                 );
-                                add_child!(builder,ReshapeNoPadStream::new(
-                                    rcv,
-                                    snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    padding_value,
-                                    reshape.input_stream_rank,
-                                    false,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    ReshapeNoPadStream::new(
+                                        rcv,
+                                        snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        padding_value,
+                                        reshape.input_stream_rank,
+                                        false,
+                                        operation.id,
+                                    )
+                                );
                             }
                         }
                     }
@@ -3546,17 +3769,20 @@ fn build_from_proto<'a>(
                                     ),
                                 );
 
-                                add_child!(builder,ReshapePadStream::new(
-                                    rcv,
-                                    snd,
-                                    mask_snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    padding_value,
-                                    reshape.input_stream_rank,
-                                    false,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    ReshapePadStream::new(
+                                        rcv,
+                                        snd,
+                                        mask_snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        padding_value,
+                                        reshape.input_stream_rank,
+                                        false,
+                                        operation.id,
+                                    )
+                                );
                             }
                             false => {
                                 let snd = channel_map_collection.multihot.get_sender(
@@ -3569,16 +3795,19 @@ fn build_from_proto<'a>(
                                         channel_depth,
                                     ),
                                 );
-                                add_child!(builder,ReshapeNoPadStream::new(
-                                    rcv,
-                                    snd,
-                                    reshape.split_dim as usize,
-                                    reshape.chunk_size as usize,
-                                    padding_value,
-                                    reshape.input_stream_rank,
-                                    false,
-                                    operation.id,
-                                ));
+                                add_child!(
+                                    builder,
+                                    ReshapeNoPadStream::new(
+                                        rcv,
+                                        snd,
+                                        reshape.split_dim as usize,
+                                        reshape.chunk_size as usize,
+                                        padding_value,
+                                        reshape.input_stream_rank,
+                                        false,
+                                        operation.id,
+                                    )
+                                );
                             }
                         }
                     }
@@ -3622,13 +3851,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,EagerMerge::new(
-                            rcv_list,
-                            sel_snd,
-                            snd,
-                            eager_merge.input_rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            EagerMerge::new(
+                                rcv_list,
+                                sel_snd,
+                                snd,
+                                eager_merge.input_rank,
+                                operation.id,
+                            )
+                        );
                     }
                     Type::U64(_) => {
                         let mut rcv_list = vec![];
@@ -3662,13 +3894,16 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder,EagerMerge::new(
-                            rcv_list,
-                            sel_snd,
-                            snd,
-                            eager_merge.input_rank,
-                            operation.id,
-                        ));
+                        add_child!(
+                            builder,
+                            EagerMerge::new(
+                                rcv_list,
+                                sel_snd,
+                                snd,
+                                eager_merge.input_rank,
+                                operation.id,
+                            )
+                        );
                     }
                     dtype => panic!("Unsupported data type for EagerMerge operation {:?}", dtype),
                 }
