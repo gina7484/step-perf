@@ -3981,8 +3981,8 @@ pub fn parse_proto<'a>(
     let run_options = match logging {
         true => {
             let run_options = RunOptionsBuilder::default().log_filter(LogFilterKind::Blanket(
-                // dam::logging::LogFilter::Some([SimpleLogData::NAME.to_owned()].into()),
-                dam::logging::LogFilter::AllowAll,
+                dam::logging::LogFilter::Some([SimpleEvent::NAME.to_owned()].into()),
+                // dam::logging::LogFilter::AllowAll,
             ));
             let run_options = run_options.logging(LoggingOptions::Mongo(
                 MongoOptionsBuilder::default()
