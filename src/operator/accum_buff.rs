@@ -15,24 +15,47 @@ use dam::{context_tools::*, logging::LogEvent};
 ///
 /// Where [`Accum`](super::accum::Accum) reduces a stream onto a single
 /// accumulator tile, `AccumBuff` reduces onto a *buffer* of accumulator tiles.
-/// This expresses reductions such as `[I,K,J] -> [I,J]` or `[I,J,K] -> [J,K]`
-/// where the reduced dimension is streamed outermost and the retained
-/// dimensions form an `(N-1)`-dimensional accumulator buffer (`N == rank`).
+/// It expresses reductions such as `[I,K,J] -> [I,J]` (reduce K), `[I,J,K] ->
+/// [J,K]` (reduce I), or `[I,K,J] -> [J]` (reduce both I and K), where one or
+/// more reduced dimensions fold onto a retained-dimension accumulator buffer.
+///
+/// The input stream carries a stop level per dimension boundary, with level 1
+/// innermost and higher levels further out. By stop level the dimensions form
+/// three contiguous bands:
+///
+/// * **retained** (levels `1..=L`, where `L = buffer_shape.len()`): the
+///   innermost dimensions; they become the accumulator-buffer slots.
+/// * **reduced** (levels `L+1..=rank`): folded into the buffer. There are
+///   `rank - L` of them, so a single-dimension reduction has `rank == L + 1`
+///   and a multi-dimension reduction uses a larger `rank`.
+/// * **passthrough** (levels `> rank`): outer dimensions streamed through
+///   unchanged; each completed buffer is emitted as `ValStop(level - rank)`.
 ///
 /// Because the retained dimensions are streamed innermost in identical
 /// row-major order on every reduction pass, a single flat index that
 /// increments per tile and wraps modulo `product(buffer_shape)` always selects
-/// the correct accumulator slot, regardless of `N`. `buffer_shape` only needs
-/// to record the retained-dimension extents so the emitted [`Buffer`] carries
-/// the correct shape.
+/// the correct accumulator slot, regardless of how many dimensions are reduced:
+/// the index completes one full sweep of the buffer between successive
+/// reduced-dimension boundaries, landing back on slot 0 each time. This holds
+/// only when the retained dimensions are the innermost-contiguous band with the
+/// reduced dimensions directly outside them; an interleaved layout (e.g.
+/// reducing the middle `J` of `[I,J,K] -> [I,K]`) breaks the mapping.
+/// `buffer_shape` records the retained-dimension extents so the emitted
+/// [`Buffer`] carries the correct shape.
 #[context_macro]
 pub struct AccumBuff<E, T: DAMType, OT: DAMType> {
     in_stream: Receiver<Elem<Tile<T>>>,
     out_stream: Sender<Elem<Buffer<Tile<OT>>>>,
     func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
+    /// Stop level at which one complete reduction group flushes: the stop level
+    /// of the outermost reduced dimension. Boundaries below `rank` keep
+    /// accumulating; boundaries above it are passed through as
+    /// `ValStop(level - rank)`.
     rank: StopType,
-    /// Extents of the `(rank - 1)`-dimensional accumulator buffer. The number
+    /// Extents of the retained (innermost) dimensions, one entry per retained
+    /// dimension. `buffer_shape.len()` is the number of retained dimensions and
+    /// `rank - buffer_shape.len()` the number of reduced dimensions. The number
     /// of accumulator slots is the product of these extents.
     buffer_shape: Vec<usize>,
     config: AccumConfig,
@@ -420,5 +443,67 @@ mod tests {
             vec![j_dim, k_dim],
             read_from_mu,
         );
+    }
+
+    /// `[I,K,J] -> [J]` reducing over BOTH the outer I and the middle K.
+    /// rank = 3, buffer shape = [J]. I = 2, K = 3, J = 2.
+    /// tile(i,k,j) holds the scalar value i*100 + k*10 + j.
+    ///
+    /// This exercises `rank > len(buffer_shape) + 1`: two dimensions (I and K)
+    /// are reduced onto the single retained dimension J. Every intermediate
+    /// stop (level 1 = end of J, level 2 = end of K) is `< rank`, so
+    /// accumulation continues; only the level-3 end-of-tensor stop flushes.
+    /// The input stream is byte-for-byte identical to `test_accum_buff_rank2`;
+    /// only `rank` (3 vs 2) and the expected output differ.
+    #[test]
+    fn test_accum_buff_reduce_two_dims() {
+        let read_from_mu = true;
+        let (i_dim, k_dim, j_dim) = (2usize, 3usize, 2usize);
+
+        // Input stream in row-major [I,K,J] order.
+        let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
+        for i in 0..i_dim {
+            for k in 0..k_dim {
+                for j in 0..j_dim {
+                    let v = (i * 100 + k * 10 + j) as i32;
+                    let tile = scalar_tile(v, read_from_mu);
+                    if j == j_dim - 1 {
+                        // end of the innermost (J) run
+                        if k == k_dim - 1 {
+                            // also end of the (reduced) K run
+                            if i == i_dim - 1 {
+                                // also end of the (reduced) I run, whole tensor
+                                in_stream_data.push(Elem::ValStop(tile, 3));
+                            } else {
+                                in_stream_data.push(Elem::ValStop(tile, 2));
+                            }
+                        } else {
+                            in_stream_data.push(Elem::ValStop(tile, 1));
+                        }
+                    } else {
+                        in_stream_data.push(Elem::Val(tile));
+                    }
+                }
+            }
+        }
+
+        // Ground truth: a single [J] buffer summed over BOTH I and K.
+        // slot(j) = sum_{i,k} (i*100 + k*10 + j).
+        let slots: Vec<Tile<i32>> = (0..j_dim)
+            .map(|j| {
+                let mut sum = 0i32;
+                for i in 0..i_dim {
+                    for k in 0..k_dim {
+                        sum += (i * 100 + k * 10 + j) as i32;
+                    }
+                }
+                scalar_tile(sum, read_from_mu)
+            })
+            .collect();
+        let arr = ArcArray::from_shape_vec(vec![j_dim], slots).unwrap();
+        let buffer = Buffer::new(arr, 0);
+        let ground_truth_data: Vec<Elem<Buffer<Tile<i32>>>> = vec![Elem::Val(buffer)];
+
+        run_reduction(in_stream_data, ground_truth_data, 3, vec![j_dim], read_from_mu);
     }
 }

@@ -764,6 +764,73 @@ mod tests {
     }
 
     #[test]
+    fn static_streamify_val_only_linear() {
+        // A single [2,4] buffer arrives as a plain Val (the input stream never
+        // carries a stop token). A linear view (out_shape == buffer shape,
+        // row-major stride) should stream all 8 tiles.
+        //   t0 t1 t2 t3
+        //   t4 t5 t6 t7
+        // stride = [4, 1], out_shape = [2, 4]
+        // Expected: t0, t1, t2, t3 S(1), t4, t5, t6, t7 S(2)
+        type VT = u32;
+        const BYTES_PER_ELEM: usize = 4;
+
+        let mut ctx = ProgramBuilder::default();
+
+        let tile_vec: Vec<Tile<VT>> = (0u32..8)
+            .map(|v| {
+                Tile::<VT>::new(
+                    ndarray::ArcArray2::from_elem((1, 1), v),
+                    BYTES_PER_ELEM,
+                    false,
+                )
+            })
+            .collect();
+
+        let buffer_arr = ndarray::ArcArray::from_vec(tile_vec.clone())
+            .into_shape_with_order((2, 4))
+            .unwrap()
+            .into_dyn();
+        let buffer = super::Buffer::new(buffer_arr, 0);
+
+        let (in_snd, in_rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(
+            move || vec![Elem::Val(buffer)].into_iter(),
+            in_snd,
+        ));
+
+        let (out_snd, out_rcv) = ctx.unbounded();
+        ctx.add_child(super::StaticStreamify::<SimpleEvent, _>::new(
+            vec![4, 1],
+            vec![2, 4],
+            in_rcv,
+            out_snd,
+            DUMMY_ID,
+        ));
+
+        let expected = vec![
+            Elem::Val(tile_vec[0].clone()),
+            Elem::Val(tile_vec[1].clone()),
+            Elem::Val(tile_vec[2].clone()),
+            Elem::ValStop(tile_vec[3].clone(), 1),
+            Elem::Val(tile_vec[4].clone()),
+            Elem::Val(tile_vec[5].clone()),
+            Elem::Val(tile_vec[6].clone()),
+            Elem::ValStop(tile_vec[7].clone(), 2),
+        ];
+
+        ctx.add_child(ApproxCheckerContext::new(
+            move || expected.into_iter(),
+            out_rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
     fn round_trip_test_0d() {
         // Tiled stream shape: [2, 2, 2] => [2, |2, 2] => [2, 2, 2]
         type VT = u32;
