@@ -291,6 +291,16 @@ fn build_from_proto<'a>(
                                 functions::map_fn::tanh(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Sigmoid(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::sigmoid(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::ZerosLike(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::zeros_like(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         e => {
                             panic!("Unsupported unary map function type {:?}", e)
                         }
@@ -515,6 +525,327 @@ fn build_from_proto<'a>(
                     add_child!(
                         builder,
                         UnaryMapToMultiHot::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // _to_copy: f32 -> bf16 cast. bf16 is modelled as Tile<f32>, so both
+                // sides use the tile_f32 channel; the cast only changes bytes_per_elem.
+                (Type::F32(_), Type::Bf16(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::F32ToBf16(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::f32_bf16(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // _to_copy: bf16 -> f32 cast (both use tile_f32 channel).
+                (Type::Bf16(_), Type::F32(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Bf16ToF32(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::bf16_f32(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // Integer (i64) unary ops: clamp, floor_divide, empty_like.
+                (Type::I64(_), Type::I64(_)) => {
+                    let rcv = channel_map_collection.tile_i64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_i64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, u64, bool) -> (u64, Tile<i64>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Clamp(clamp) => {
+                            let min = clamp
+                                .min
+                                .map(|v| v as i64)
+                                .or(clamp.min_float.map(|v| v as i64));
+                            let max = clamp
+                                .max
+                                .map(|v| v as i64)
+                                .or(clamp.max_float.map(|v| v as i64));
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::clamp(tile, min, max, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::FloorDivideConstant(fd) => {
+                            let divisor = fd
+                                .constant
+                                .map(|v| v as i64)
+                                .or(fd.constant_float.map(|v| v as i64))
+                                .expect("floor_divide requires a scalar divisor");
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::floor_divide_scalar(
+                                    tile,
+                                    divisor,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::EmptyLike(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::empty_like(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // ge.Scalar: i64 input -> bool output.
+                (Type::I64(_), Type::Bool(_)) => {
+                    let rcv = channel_map_collection.tile_i64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_bool.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, u64, bool) -> (u64, Tile<bool>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::GeScalar(ge) => {
+                            let scalar = ge
+                                .constant
+                                .map(|v| v as i64)
+                                .or(ge.constant_float.map(|v| v as i64))
+                                .expect("ge.Scalar requires a scalar operand");
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::ge_scalar(tile, scalar, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // Boolean unary ops: bitwise_not.
+                (Type::Bool(_), Type::Bool(_)) => {
+                    let rcv = channel_map_collection.tile_bool.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_bool.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<bool>, u64, bool) -> (u64, Tile<bool>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::BitwiseNot(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::bitwise_not(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // _to_copy: f32 -> bool cast.
+                (Type::F32(_), Type::Bool(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_bool.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<bool>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::F32ToBool(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::f32_bool(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // _to_copy: i64 -> f32 cast.
+                (Type::I64(_), Type::F32(_)) => {
+                    let rcv = channel_map_collection.tile_i64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::I64ToF32(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::i64_f32(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
                             rcv,
                             snd,
                             map_fn,

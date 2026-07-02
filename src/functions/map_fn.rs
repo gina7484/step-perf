@@ -908,6 +908,339 @@ pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u
     )
 }
 
+// ============================================================================
+// Elementwise functions added for ATen op lowering
+// (see plan/0630_0708/elementwise). Each is dispatched by UnaryMap in
+// `proto_driver` based on the (dtype_a, dtype_b) pair.
+// ============================================================================
+
+// sigmoid(x) = 1 / (1 + e^-x)
+// Counted as 7 FLOPs/elem: negate (1) + exp (~4) + add (1) + reciprocal (1).
+// (Consistent with silu = x * sigmoid(x) counted as 8.)
+pub fn sigmoid<T: Debug + num_traits::Float + Copy>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1 * 7) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| T::one() / (T::one() + (-x).exp())).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1 * 7) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+// clamp(x, min, max): either bound may be `None` (aten.clamp allows one-sided
+// clamping). Counted as 2 FLOPs/elem (up to two comparisons).
+pub fn clamp<T: Debug + Copy + PartialOrd + Default>(
+    in_data: &Tile<T>,
+    min: Option<T>,
+    max: Option<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| {
+                    let mut v = x;
+                    if let Some(lo) = min {
+                        if v < lo {
+                            v = lo;
+                        }
+                    }
+                    if let Some(hi) = max {
+                        if v > hi {
+                            v = hi;
+                        }
+                    }
+                    v
+                })
+                .to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+// ge_scalar(x, s) = (x >= s) -> bool tile. Counted as 1 FLOP/elem.
+pub fn ge_scalar<T: Debug + Copy + PartialOrd>(
+    in_data: &Tile<T>,
+    scalar: T,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<bool>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        // bool tiles use 1 byte per element
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| x >= scalar).to_shared(),
+                1,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(vec![shape_0, shape_1], 1, write_back_mu, offset),
+        ),
+    }
+}
+
+// bitwise_not(x) = !x for boolean tiles (logical NOT). 1 FLOP/elem.
+pub fn bitwise_not(
+    in_data: &Tile<bool>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<bool>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| !x).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+// floor_divide_scalar(x, d) = floor(x / d) for integer tiles.
+// Integer division truncates toward zero; for the non-negative index tensors this
+// matches PyTorch's floor semantics. Counted as 2 FLOPs/elem (div + floor).
+pub fn floor_divide_scalar<T: Debug + Copy + num_traits::PrimInt>(
+    in_data: &Tile<T>,
+    divisor: T,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| x / divisor).to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+// empty_like(x): uninitialized tensor with the same shape/dtype as the input. The
+// contents are unspecified in PyTorch; we emit zeros so functional simulation stays
+// deterministic. 1 FLOP/elem.
+pub fn empty_like<T: Debug + Clone + num_traits::Zero>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    (
+        div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+        Tile::new_zero_padded(
+            [shape_0, shape_1],
+            in_data.bytes_per_elem,
+            write_back_mu,
+            offset,
+        ),
+    )
+}
+
+// zeros_like(x): zero-filled tensor with the same shape/dtype as the input. 1 FLOP/elem.
+pub fn zeros_like<T: Debug + Clone + num_traits::Zero>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    (
+        div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+        Tile::new_zero_padded(
+            [shape_0, shape_1],
+            in_data.bytes_per_elem,
+            write_back_mu,
+            offset,
+        ),
+    )
+}
+
+// _to_copy cast f32 -> bf16. In the simulator bf16 is modelled as Tile<f32> with
+// bytes_per_elem = 2; the data is unchanged, only the byte width is updated.
+// 1 FLOP/elem.
+pub fn f32_bf16<T: Debug + Clone>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(arr.clone(), 2, write_back_mu, offset),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(vec![shape_0, shape_1], 2, write_back_mu, offset),
+        ),
+    }
+}
+
+// _to_copy cast bf16 -> f32. Modelled as Tile<f32> with bytes_per_elem = 4.
+// 1 FLOP/elem.
+pub fn bf16_f32<T: Debug + Clone>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(arr.clone(), 4, write_back_mu, offset),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(vec![shape_0, shape_1], 4, write_back_mu, offset),
+        ),
+    }
+}
+
+// _to_copy cast f32 -> bool. Nonzero elements become true (matches torch's bool cast).
+// Output is a bool tile (1 byte per element). 1 FLOP/elem.
+pub fn f32_bool(
+    in_data: &Tile<f32>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<bool>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(arr.mapv(|x| x != 0.0).to_shared(), 1, write_back_mu, offset),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(vec![shape_0, shape_1], 1, write_back_mu, offset),
+        ),
+    }
+}
+
+// _to_copy cast i64 -> f32 (value-preserving numeric cast). Output is an f32 tile
+// (4 bytes per element). 1 FLOP/elem.
+pub fn i64_f32(
+    in_data: &Tile<i64>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<f32>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(arr.mapv(|x| x as f32).to_shared(), 4, write_back_mu, offset),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(vec![shape_0, shape_1], 4, write_back_mu, offset),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1120,5 +1453,137 @@ mod tests {
                 assert_eq!(result[[i, j]], 0.0);
             }
         }
+    }
+
+    // ---- Tests for the elementwise ops added for ATen lowering ----
+
+    #[test]
+    fn test_sigmoid() {
+        let arr = Array2::from_shape_vec((1, 3), vec![0.0f32, 100.0, -100.0]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 4, false);
+        let (cycles, out) = sigmoid(&in_data, 1, false);
+        let o = out.underlying.unwrap();
+        assert!((o[[0, 0]] - 0.5).abs() < 1e-6);
+        assert!(o[[0, 1]] > 0.99);
+        assert!(o[[0, 2]] < 0.01);
+        // numel(3) * 7 FLOPs / 1 FLOP-per-cycle
+        assert_eq!(cycles, 21);
+    }
+
+    #[test]
+    fn test_clamp_one_sided() {
+        // clamp(None, 127): only the upper bound is applied.
+        let arr = Array2::from_shape_vec((1, 3), vec![-5i64, 50, 200]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = clamp(&in_data, None, Some(127i64), 1, false);
+        let o = out.underlying.unwrap();
+        assert_eq!(o[[0, 0]], -5);
+        assert_eq!(o[[0, 1]], 50);
+        assert_eq!(o[[0, 2]], 127);
+    }
+
+    #[test]
+    fn test_clamp_two_sided() {
+        let arr = Array2::from_shape_vec((1, 3), vec![-5i64, 50, 200]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = clamp(&in_data, Some(0i64), Some(127i64), 1, false);
+        let o = out.underlying.unwrap();
+        assert_eq!(o[[0, 0]], 0);
+        assert_eq!(o[[0, 1]], 50);
+        assert_eq!(o[[0, 2]], 127);
+    }
+
+    #[test]
+    fn test_ge_scalar() {
+        let arr = Array2::from_shape_vec((1, 3), vec![10i64, 128, 200]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = ge_scalar(&in_data, 128i64, 1, false);
+        let o = out.underlying.as_ref().unwrap();
+        assert_eq!(o[[0, 0]], false);
+        assert_eq!(o[[0, 1]], true);
+        assert_eq!(o[[0, 2]], true);
+        // bool tiles are 1 byte per element
+        assert_eq!(out.bytes_per_elem, 1);
+    }
+
+    #[test]
+    fn test_bitwise_not() {
+        let arr = Array2::from_shape_vec((1, 2), vec![true, false]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 1, false);
+        let (_cycles, out) = bitwise_not(&in_data, 1, false);
+        let o = out.underlying.unwrap();
+        assert_eq!(o[[0, 0]], false);
+        assert_eq!(o[[0, 1]], true);
+    }
+
+    #[test]
+    fn test_floor_divide_scalar() {
+        let arr = Array2::from_shape_vec((1, 4), vec![0i64, 5, 9, 12]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = floor_divide_scalar(&in_data, 4i64, 1, false);
+        let o = out.underlying.unwrap();
+        assert_eq!(o[[0, 0]], 0);
+        assert_eq!(o[[0, 1]], 1);
+        assert_eq!(o[[0, 2]], 2);
+        assert_eq!(o[[0, 3]], 3);
+    }
+
+    #[test]
+    fn test_zeros_like() {
+        let arr = Array2::from_shape_vec((2, 2), vec![1.0f32, 2.0, 3.0, 4.0]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 4, false);
+        let (_cycles, out) = zeros_like(&in_data, 1, false);
+        assert_eq!(out.shape, vec![2, 2]);
+        assert!(out.underlying.unwrap().iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn test_empty_like_shape() {
+        let arr = Array2::from_shape_vec((1, 3), vec![7i64, 8, 9]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = empty_like(&in_data, 1, false);
+        assert_eq!(out.shape, vec![1, 3]);
+        assert_eq!(out.bytes_per_elem, 8);
+    }
+
+    #[test]
+    fn test_cast_changes_bytes_per_elem() {
+        // f32 -> bf16: data unchanged, byte width becomes 2.
+        let arr = Array2::from_shape_vec((1, 2), vec![1.5f32, 2.5]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 4, false);
+        let (_c, bf) = f32_bf16(&in_data, 1, false);
+        assert_eq!(bf.bytes_per_elem, 2);
+        assert_eq!(bf.underlying.as_ref().unwrap()[[0, 0]], 1.5);
+
+        // bf16 -> f32: byte width becomes 4.
+        let arr2 = Array2::from_shape_vec((1, 2), vec![1.5f32, 2.5]).unwrap();
+        let in_bf = Tile::new(arr2.to_shared(), 2, false);
+        let (_c2, f) = bf16_f32(&in_bf, 1, false);
+        assert_eq!(f.bytes_per_elem, 4);
+        assert_eq!(f.underlying.as_ref().unwrap()[[0, 1]], 2.5);
+    }
+
+    #[test]
+    fn test_f32_to_bool() {
+        let arr = Array2::from_shape_vec((1, 3), vec![0.0f32, 1.0, -2.5]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 4, false);
+        let (_c, out) = f32_bool(&in_data, 1, false);
+        let o = out.underlying.unwrap();
+        assert_eq!(o[[0, 0]], false); // 0.0 -> false
+        assert_eq!(o[[0, 1]], true); // nonzero -> true
+        assert_eq!(o[[0, 2]], true);
+        assert_eq!(out.bytes_per_elem, 1);
+    }
+
+    #[test]
+    fn test_i64_to_f32() {
+        let arr = Array2::from_shape_vec((1, 3), vec![0i64, 7, -3]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_c, out) = i64_f32(&in_data, 1, false);
+        let o = out.underlying.unwrap();
+        assert_eq!(o[[0, 0]], 0.0f32);
+        assert_eq!(o[[0, 1]], 7.0f32);
+        assert_eq!(o[[0, 2]], -3.0f32);
+        assert_eq!(out.bytes_per_elem, 4);
     }
 }
