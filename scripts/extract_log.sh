@@ -5,10 +5,13 @@ db_names=(
     # "expert_mn_mk_32_256_32_256"
     # "expert_mn_mk_32_256_64_256"
     # "expert_mn_mk_64_256_128_256"
-    "expert_mn_mk_64_256_16_256"
-    "expert_mn_mk_64_256_256_256"
-    "expert_mn_mk_64_256_32_256"
-    "expert_mn_mk_64_256_64_256"
+    # "expert_mn_mk_64_256_16_256"
+    # "expert_mn_mk_64_256_256_256"
+    # "expert_mn_mk_64_256_32_256"
+    # "expert_mn_mk_64_256_64_256"
+    # "mlp_2d"
+    # "mlp_2d_delete_red_buff"
+    "mlp_2d_merge_offchip"
 )
 
 

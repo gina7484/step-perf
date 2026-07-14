@@ -517,6 +517,159 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::IndexToMultihot(index_to_multihot) => {
+                            let num_classes = index_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::index_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMapToMultiHot::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // index_to_multihot: i64 index tile -> multihot vector (e.g. topk indices).
+                (Type::I64(_), Type::MultiHot(_)) => {
+                    let rcv = channel_map_collection.tile_i64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.multihot.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, u64, bool) -> (u64, MultiHotN) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::IndexToMultihot(index_to_multihot) => {
+                            let num_classes = index_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::index_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMapToMultiHot::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // index_to_multihot: f32 index tile -> multihot vector.
+                (Type::F32(_), Type::MultiHot(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.multihot.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, MultiHotN) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::IndexToMultihot(index_to_multihot) => {
+                            let num_classes = index_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::index_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        _ => {
+                            panic!("Unsupported unary map function type")
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMapToMultiHot::<SimpleEvent, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // index_to_multihot: bf16 index tile -> multihot vector. bf16 is
+                // modelled as Tile<f32> on the tile_f32 channel (e.g. SimpleMoe select).
+                (Type::Bf16(_), Type::MultiHot(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.multihot.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, MultiHotN) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::IndexToMultihot(index_to_multihot) => {
+                            let num_classes = index_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::index_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }

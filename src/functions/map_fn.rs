@@ -895,6 +895,32 @@ pub fn u64_to_multihot(
     }
 }
 
+// index_to_multihot(x): encode the index values held in a single-row tile into a
+// multihot vector of `num_classes` booleans (position i set iff i appears in x).
+// Generic over the element type so it works for both integer index tiles (i64/u64,
+// e.g. topk indices) and f32 index tiles; each value is cast to a usize index.
+// Costs 1 cycle per input tile regardless of size.
+pub fn index_to_multihot<T: DAMType + num_traits::AsPrimitive<usize>>(
+    in_data: &Tile<T>,
+    num_classes: usize,
+    _comp_bw: u64,
+    write_back_mu: bool,
+) -> (u64, MultiHotN) {
+    match &in_data.underlying {
+        Some(arr) => {
+            let mut hot = vec![false; num_classes];
+            for &val in arr.iter() {
+                let idx: usize = val.as_();
+                if idx < num_classes {
+                    hot[idx] = true;
+                }
+            }
+            (1, MultiHotN::new(hot, write_back_mu))
+        }
+        None => (1, MultiHotN::new(vec![false; num_classes], write_back_mu)),
+    }
+}
+
 pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
     (
         1,
@@ -1424,6 +1450,69 @@ mod tests {
         let (_, tile) = multihot_to_u64(&original, 1, false);
         let (_, reconstructed) = u64_to_multihot(&tile, 5, 1, false);
         assert_eq!(*original, *reconstructed);
+    }
+
+    #[test]
+    fn test_index_to_multihot_single() {
+        let arr = Array2::from_shape_vec((1, 1), vec![2.0f32]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 4, false);
+        let (cycles, mh) = index_to_multihot(&tile, 4, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 4);
+        assert_eq!(*mh, vec![false, false, true, false]);
+    }
+
+    #[test]
+    fn test_index_to_multihot_multiple() {
+        let arr = Array2::from_shape_vec((1, 3), vec![0.0f32, 2.0, 3.0]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 4, false);
+        let (cycles, mh) = index_to_multihot(&tile, 5, 1, true);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 5);
+        assert_eq!(*mh, vec![true, false, true, true, false]);
+        assert!(mh.read_from_mu());
+    }
+
+    #[test]
+    fn test_index_to_multihot_out_of_range() {
+        // Index >= num_classes is ignored.
+        let arr = Array2::from_shape_vec((1, 1), vec![10.0f32]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 4, false);
+        let (cycles, mh) = index_to_multihot(&tile, 3, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(*mh, vec![false, false, false]);
+    }
+
+    #[test]
+    fn test_index_to_multihot_blank() {
+        // Timing-only tile (no underlying data) yields an all-false multihot.
+        let tile: Tile<f32> = Tile::new_blank(vec![1, 1], 4, false);
+        let (cycles, mh) = index_to_multihot(&tile, 3, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 3);
+        assert_eq!(*mh, vec![false, false, false]);
+    }
+
+    #[test]
+    fn test_index_to_multihot_i64() {
+        // Integer index tile (e.g. topk indices, dtype int64).
+        let arr = Array2::from_shape_vec((1, 3), vec![0i64, 2, 3]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 8, false);
+        let (cycles, mh) = index_to_multihot(&tile, 5, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 5);
+        assert_eq!(*mh, vec![true, false, true, true, false]);
+    }
+
+    #[test]
+    fn test_index_to_multihot_u64() {
+        let arr = Array2::from_shape_vec((1, 2), vec![1u64, 4]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 8, false);
+        let (cycles, mh) = index_to_multihot(&tile, 5, 1, true);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.len(), 5);
+        assert_eq!(*mh, vec![false, true, false, false, true]);
+        assert!(mh.read_from_mu());
     }
 
     #[test]
