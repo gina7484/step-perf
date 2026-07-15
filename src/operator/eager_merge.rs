@@ -345,6 +345,7 @@ mod tests {
                 write_back_mu: false,
             },
             DUMMY_ID,
+            String::new(), // sel_npy_path
         ));
 
         ctx.add_child(ApproxCheckerContext::new(

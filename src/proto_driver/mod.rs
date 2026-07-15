@@ -2198,6 +2198,7 @@ fn build_from_proto<'a>(
                                             write_back_mu: flat_partition.write_back_mu,
                                         },
                                         operation.id,
+                                        flat_partition.sel_npy_path.clone(),
                                     )
                                 )
                             }
@@ -2256,6 +2257,7 @@ fn build_from_proto<'a>(
                                             write_back_mu: flat_partition.write_back_mu,
                                         },
                                         operation.id,
+                                        flat_partition.sel_npy_path.clone(),
                                     )
                                 )
                             }
@@ -2314,6 +2316,7 @@ fn build_from_proto<'a>(
                                             write_back_mu: flat_partition.write_back_mu,
                                         },
                                         operation.id,
+                                        flat_partition.sel_npy_path.clone(),
                                     )
                                 )
                             }
@@ -2389,6 +2392,7 @@ fn build_from_proto<'a>(
                                             write_back_mu: reassemble.write_back_mu,
                                         },
                                         operation.id,
+                                        reassemble.sel_npy_path.clone(),
                                     )
                                 )
                             }
@@ -2452,6 +2456,7 @@ fn build_from_proto<'a>(
                                             write_back_mu: reassemble.write_back_mu,
                                         },
                                         operation.id,
+                                        reassemble.sel_npy_path.clone(),
                                     )
                                 )
                             }

@@ -1,6 +1,9 @@
 use crate::memory::PMU_BW;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
-use crate::primitives::{select::SelectAdapter, tile::Tile};
+use crate::primitives::{
+    select::{MultiHotN, SelectAdapter},
+    tile::Tile,
+};
 use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
@@ -20,6 +23,8 @@ pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
     partition_rank: StopType,
     config: FlatPartitionConfig,
     id: u32,
+    #[allow(dead_code)]
+    sel_npy_path: String,
     _phantom: PhantomData<E>,
 }
 
@@ -39,6 +44,7 @@ where
         partition_rank: StopType,
         config: FlatPartitionConfig,
         id: u32,
+        sel_npy_path: String,
     ) -> Self {
         let ctx = Self {
             in_stream,
@@ -47,6 +53,7 @@ where
             partition_rank,
             config,
             id,
+            sel_npy_path,
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -57,6 +64,82 @@ where
         }
 
         ctx
+    }
+
+    /// Reads the selection `.npy` file at `sel_npy_path` and converts each row
+    /// (the innermost dimension) into a `MultiHotN`.
+    ///
+    /// Returns `None` if the file does not exist (i.e. timing-only simulation).
+    /// Any other error (a malformed file, permission issues, etc.) is fatal and
+    /// panics. The data is read as `i64` and treated as multi-hot, where a
+    /// nonzero value marks a selected candidate.
+    fn read_sel_multihot(&self) -> Option<Vec<MultiHotN>> {
+        match std::fs::File::open(&self.sel_npy_path) {
+            Ok(mut file) => {
+                let npy_file = npyz::NpyFile::new(&mut file).unwrap();
+                let shape_vec = npy_file
+                    .shape()
+                    .iter()
+                    .map(|x| *x as usize)
+                    .collect::<Vec<usize>>();
+
+                // Each row (the innermost dimension) becomes one MultiHotN.
+                let row_len = *shape_vec.last().expect("select npy must be at least 1D");
+                let vec_data: Vec<i64> = npy_file.into_vec().unwrap();
+
+                let multihots = vec_data
+                    .chunks(row_len)
+                    .map(|row| MultiHotN::new(row.iter().map(|x| *x != 0).collect(), false))
+                    .collect();
+                Some(multihots)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None, // Just timing simulation
+            Err(error) => {
+                // The file may exist, but opening it failed for another reason,
+                // such as insufficient permissions.
+                panic!("Failed to open file: {error}");
+            }
+        }
+    }
+
+    /// Resolves the select vector for one incoming select element.
+    ///
+    /// When `sel` is blank (timing-only, carries no selection data), the actual
+    /// selection is taken from row `counter` of the selection tensor read from
+    /// `sel_npy_path`; a blank input without a selection tensor is an error.
+    /// Otherwise the selection is taken directly from `sel`.
+    ///
+    /// A single run must be either all-blank (driven by the selection tensor) or
+    /// all-inline; mixing the two would misalign the selection-tensor row counter
+    /// and silently corrupt the output, so `seen_blank` records the mode of the
+    /// first element and any later element of the other kind panics.
+    fn resolve_select_vec(
+        &self,
+        sel: &SELT,
+        selection_multihot: &Option<Vec<MultiHotN>>,
+        counter: usize,
+        seen_blank: &mut Option<bool>,
+    ) -> Vec<usize> {
+        let blank = sel.is_blank();
+        match *seen_blank {
+            Some(prev) if prev != blank => panic!(
+                "FlatPartition_{}: the select stream mixes blank and non-blank elements; a run must be either all-blank (driven by the selection tensor) or all-inline",
+                self.id
+            ),
+            _ => *seen_blank = Some(blank),
+        }
+
+        if blank {
+            match selection_multihot.as_ref() {
+                Some(multihots) => multihots[counter].to_sel_vec(),
+                None => panic!(
+                    "FlatPartition_{}: If the input is blank, the selection tensor should be given!",
+                    self.id
+                ),
+            }
+        } else {
+            sel.to_sel_vec()
+        }
     }
 
     /// Helper function to calculate and increment load cycles for memory operations
@@ -224,6 +307,9 @@ where
     Elem<SELT>: DAMType,
 {
     fn run(&mut self) {
+        let selection_multihot: Option<Vec<MultiHotN>> = self.read_sel_multihot();
+        let mut multihot_counter: usize = 0;
+        let mut seen_blank: Option<bool> = None;
         loop {
             match self.sel_stream.peek_next(&self.time) {
                 Ok(ChannelElement {
@@ -233,19 +319,30 @@ where
                     Elem::Val(sel) => {
                         self.handle_load_cycles(&sel);
                         self.sel_stream.dequeue(&self.time).unwrap();
-                        let select_vec = sel.to_sel_vec();
+                        let select_vec = self.resolve_select_vec(
+                            &sel,
+                            &selection_multihot,
+                            multihot_counter,
+                            &mut seen_blank,
+                        );
                         self.process_input_stream(&select_vec, None);
                     }
                     Elem::ValStop(sel, sel_level) => {
                         self.handle_load_cycles(&sel);
                         self.sel_stream.dequeue(&self.time).unwrap();
-                        let select_vec = sel.to_sel_vec();
+                        let select_vec = self.resolve_select_vec(
+                            &sel,
+                            &selection_multihot,
+                            multihot_counter,
+                            &mut seen_blank,
+                        );
                         let expected_stop_level = sel_level + self.partition_rank;
                         self.process_input_stream(&select_vec, Some(expected_stop_level));
                     }
                 },
                 Err(_) => return,
             }
+            multihot_counter += 1;
         }
     }
 }
@@ -376,7 +473,8 @@ mod tests {
             vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
             1, // partition_rank
             config,
-            0, // id
+            0,             // id
+            String::new(), // sel_npy_path
         ));
 
         // Step 9: Create CheckerContexts for each output stream to verify the results
@@ -417,7 +515,7 @@ mod tests {
 
             for (i, array_idx) in multi_hot.iter().enumerate() {
                 for (j, &is_selected) in array_idx.iter().enumerate() {
-                    if is_selected {
+                    if is_selected == Some(true) {
                         let tile = Tile::new(arrays[i].clone().into(), 4, read_from_mu);
                         ground_truth[j].push(Elem::Val(tile));
                     }
@@ -492,7 +590,8 @@ mod tests {
             vec![exp1_snd, exp2_snd, exp3_snd, exp4_snd],
             0, // partition_rank
             config,
-            0, // id
+            0,             // id
+            String::new(), // sel_npy_path
         ));
         ctx.add_child(ApproxCheckerContext::new(
             || out_stream_data[0].clone().into_iter(),
