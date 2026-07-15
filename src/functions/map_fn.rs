@@ -835,6 +835,15 @@ pub fn multihot_to_u64(
     _comp_bw: u64,
     write_back_mu: bool,
 ) -> (u64, Tile<u64>) {
+    // Blank (timing-only) input carries no selection data, so we can't know how many
+    // indices it would encode. Propagate a blank tile whose column count is the upper
+    // bound (one per candidate) for buffer sizing.
+    if in_data.is_blank() {
+        return (
+            1,
+            Tile::new_blank(vec![1, in_data.len()], 8, write_back_mu),
+        );
+    }
     let sel_vec = in_data.to_sel_vec();
     let n = sel_vec.len();
     if n == 0 {
@@ -875,7 +884,7 @@ pub fn u64_to_multihot(
             }
             (1, MultiHotN::new(hot, write_back_mu))
         }
-        None => (1, MultiHotN::new(vec![false; width], write_back_mu)),
+        None => (1, MultiHotN::new_blank(width, write_back_mu)),
     }
 }
 
@@ -901,7 +910,7 @@ pub fn index_to_multihot<T: DAMType + num_traits::AsPrimitive<usize>>(
             }
             (1, MultiHotN::new(hot, write_back_mu))
         }
-        None => (1, MultiHotN::new(vec![false; num_classes], write_back_mu)),
+        None => (1, MultiHotN::new_blank(num_classes, write_back_mu)),
     }
 }
 
@@ -1393,13 +1402,24 @@ mod tests {
     }
 
     #[test]
+    fn test_multihot_to_u64_blank() {
+        // Blank (timing-only) input has no data: output is a blank tile whose column
+        // count is the candidate-count upper bound, with no underlying data.
+        let mh = MultiHotN::new_blank(4, false);
+        let (cycles, tile) = multihot_to_u64(&mh, 1, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(tile.shape, vec![1, 4]);
+        assert!(tile.underlying.is_none());
+    }
+
+    #[test]
     fn test_u64_to_multihot_single() {
         let arr = Array2::from_shape_vec((1, 1), vec![2u64]).unwrap();
         let tile = Tile::new(arr.to_shared(), 8, false);
         let (cycles, mh) = u64_to_multihot(&tile, 4, 1, false);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 4);
-        assert_eq!(*mh, vec![false, false, true, false]);
+        assert_eq!(mh.to_sel_vec(), vec![2]);
     }
 
     #[test]
@@ -1409,18 +1429,19 @@ mod tests {
         let (cycles, mh) = u64_to_multihot(&tile, 5, 1, true);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 5);
-        assert_eq!(*mh, vec![true, false, true, true, false]);
+        assert_eq!(mh.to_sel_vec(), vec![0, 2, 3]);
         assert!(mh.read_from_mu());
     }
 
     #[test]
     fn test_u64_to_multihot_empty() {
-        // All indices out of range
+        // All indices out of range: concrete (not blank) but nothing selected.
         let arr = Array2::from_shape_vec((1, 1), vec![10u64]).unwrap();
         let tile = Tile::new(arr.to_shared(), 8, false);
         let (cycles, mh) = u64_to_multihot(&tile, 3, 1, false);
         assert_eq!(cycles, 1);
-        assert_eq!(*mh, vec![false, false, false]);
+        assert_eq!(mh.to_sel_vec(), Vec::<usize>::new());
+        assert!(!mh.is_blank());
     }
 
     #[test]
@@ -1439,7 +1460,7 @@ mod tests {
         let (cycles, mh) = index_to_multihot(&tile, 4, 1, false);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 4);
-        assert_eq!(*mh, vec![false, false, true, false]);
+        assert_eq!(mh.to_sel_vec(), vec![2]);
     }
 
     #[test]
@@ -1449,28 +1470,31 @@ mod tests {
         let (cycles, mh) = index_to_multihot(&tile, 5, 1, true);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 5);
-        assert_eq!(*mh, vec![true, false, true, true, false]);
+        assert_eq!(mh.to_sel_vec(), vec![0, 2, 3]);
         assert!(mh.read_from_mu());
     }
 
     #[test]
     fn test_index_to_multihot_out_of_range() {
-        // Index >= num_classes is ignored.
+        // Index >= num_classes is ignored: concrete (not blank) but nothing selected.
         let arr = Array2::from_shape_vec((1, 1), vec![10.0f32]).unwrap();
         let tile = Tile::new(arr.to_shared(), 4, false);
         let (cycles, mh) = index_to_multihot(&tile, 3, 1, false);
         assert_eq!(cycles, 1);
-        assert_eq!(*mh, vec![false, false, false]);
+        assert_eq!(mh.to_sel_vec(), Vec::<usize>::new());
+        assert!(!mh.is_blank());
     }
 
     #[test]
     fn test_index_to_multihot_blank() {
-        // Timing-only tile (no underlying data) yields an all-false multihot.
+        // Timing-only tile (no underlying data) yields a blank multihot (no data),
+        // distinct from a concrete all-false selection.
         let tile: Tile<f32> = Tile::new_blank(vec![1, 1], 4, false);
         let (cycles, mh) = index_to_multihot(&tile, 3, 1, false);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 3);
-        assert_eq!(*mh, vec![false, false, false]);
+        assert!(mh.is_blank());
+        assert_eq!(mh.to_sel_vec(), Vec::<usize>::new());
     }
 
     #[test]
@@ -1481,7 +1505,7 @@ mod tests {
         let (cycles, mh) = index_to_multihot(&tile, 5, 1, false);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 5);
-        assert_eq!(*mh, vec![true, false, true, true, false]);
+        assert_eq!(mh.to_sel_vec(), vec![0, 2, 3]);
     }
 
     #[test]
@@ -1491,7 +1515,7 @@ mod tests {
         let (cycles, mh) = index_to_multihot(&tile, 5, 1, true);
         assert_eq!(cycles, 1);
         assert_eq!(mh.len(), 5);
-        assert_eq!(*mh, vec![false, true, false, false, true]);
+        assert_eq!(mh.to_sel_vec(), vec![1, 4]);
         assert!(mh.read_from_mu());
     }
 

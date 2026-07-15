@@ -5,6 +5,9 @@ use super::elem::Bufferizable;
 pub trait SelectAdapter {
     fn to_sel_vec(&self) -> Vec<usize>;
     fn from_sel_vec(sel_vec: Vec<usize>, size: usize, read_from_mu: bool) -> Self;
+    /// True if this is a dummy carrying no data (every slot is `None`), as produced
+    /// by `new_blank`. Distinct from a real selection with no chosen candidates.
+    fn is_blank(&self) -> bool;
 }
 
 // Two options for the select type
@@ -12,16 +15,31 @@ pub trait SelectAdapter {
 // 2. Index [Option<usize>; K]
 //      - K=number of experts to choose each time
 //      - When we don't choose any of them, it's None
+// Each slot is `Option<bool>`: `Some(_)` carries real selection data (`Some(true)`
+// = selected, `Some(false)` = not selected), while `None` marks a dummy slot with
+// no data. A `new_blank` MultiHotN has every slot `None`, which is distinguishable
+// from an all-`false` (all `Some(false)`) real selection.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MultiHotN {
-    underlying: Vec<bool>,
+    underlying: Vec<Option<bool>>,
     read_from_mu: bool,
 }
 
 impl MultiHotN {
     pub fn new(arr: Vec<bool>, read_from_mu: bool) -> Self {
         Self {
-            underlying: arr,
+            underlying: arr.into_iter().map(Some).collect(),
+            read_from_mu,
+        }
+    }
+
+    /// Creates a dummy MultiHotN carrying only length metadata (no data).
+    /// Every candidate slot is `None`, so `to_sel_vec()` is empty and `is_blank()`
+    /// is true, while `len()`/`size_in_bytes()` still reflect `len` candidates.
+    /// `len` is the number of candidates (the width, same as `from_sel_vec`'s `size`).
+    pub fn new_blank(len: usize, read_from_mu: bool) -> Self {
+        Self {
+            underlying: vec![None; len],
             read_from_mu,
         }
     }
@@ -32,7 +50,7 @@ impl MultiHotN {
 }
 
 impl std::ops::Deref for MultiHotN {
-    type Target = Vec<bool>;
+    type Target = Vec<Option<bool>>;
 
     fn deref(&self) -> &Self::Target {
         self.underlying.as_ref()
@@ -47,7 +65,7 @@ impl SelectAdapter for MultiHotN {
     fn to_sel_vec(&self) -> Vec<usize> {
         let mut res_vec: Vec<usize> = vec![];
         for (idx, data) in self.underlying.iter().enumerate() {
-            if *data {
+            if *data == Some(true) {
                 res_vec.push(idx);
             }
         }
@@ -55,14 +73,20 @@ impl SelectAdapter for MultiHotN {
     }
 
     fn from_sel_vec(sel_vec: Vec<usize>, size: usize, read_from_mu: bool) -> Self {
-        let mut underlying = vec![false; size];
+        let mut underlying = vec![Some(false); size];
         for idx in sel_vec {
-            underlying[idx] = true;
+            underlying[idx] = Some(true);
         }
         Self {
             underlying,
             read_from_mu,
         }
+    }
+
+    /// A blank (all `None`) MultiHotN is distinct from an all-`false` selection
+    /// (all `Some(false)`), which carries real data with no chosen candidates.
+    fn is_blank(&self) -> bool {
+        self.underlying.iter().all(Option::is_none)
     }
 }
 
@@ -91,6 +115,17 @@ impl IndexN {
     pub fn new(data: Vec<Option<usize>>, read_from_mu: bool) -> Self {
         Self {
             underlying: data,
+            read_from_mu,
+        }
+    }
+
+    /// Creates a dummy IndexN carrying only length metadata (no selection).
+    /// All index slots are set to `None`, so `to_sel_vec()` is empty while
+    /// `len()`/`size_in_bytes()` still reflect `len` slots.
+    /// `len` is the number of index slots (K).
+    pub fn new_blank(len: usize, read_from_mu: bool) -> Self {
+        Self {
+            underlying: vec![None; len],
             read_from_mu,
         }
     }
@@ -132,6 +167,11 @@ impl SelectAdapter for IndexN {
             read_from_mu,
         }
     }
+
+    /// A blank IndexN has every slot `None`, as produced by `new_blank`.
+    fn is_blank(&self) -> bool {
+        self.underlying.iter().all(Option::is_none)
+    }
 }
 
 impl Bufferizable for IndexN {
@@ -152,6 +192,7 @@ impl Bufferizable for IndexN {
 #[cfg(test)]
 mod tests {
     use super::SelectAdapter;
+    use crate::primitives::elem::Bufferizable;
     use crate::primitives::select::{IndexN, MultiHotN};
     use dam::types::DAMType;
 
@@ -207,18 +248,41 @@ mod tests {
     }
 
     #[test]
+    fn test_new_blank() {
+        // MultiHotN dummy: len candidates, no data (every slot None)
+        let blank_mh = MultiHotN::new_blank(8, false);
+        assert_eq!(blank_mh.to_sel_vec(), Vec::<usize>::new());
+        assert_eq!(blank_mh.len(), 8);
+        assert_eq!(blank_mh.size_in_bytes(), std::mem::size_of::<bool>() * 8);
+        assert_eq!(blank_mh.read_from_mu, false);
+        assert!(blank_mh.is_blank());
+        // A blank (all None) is distinguishable from an all-false real selection.
+        let all_false = MultiHotN::new(vec![false; 8], false);
+        assert!(!all_false.is_blank());
+        assert_eq!(all_false.to_sel_vec(), Vec::<usize>::new());
+        assert_ne!(*blank_mh, *all_false);
+
+        // IndexN dummy: len slots, all None
+        let blank_idx = IndexN::new_blank(3, true);
+        assert_eq!(blank_idx.to_sel_vec(), Vec::<usize>::new());
+        assert_eq!(blank_idx.len(), 3);
+        assert_eq!(blank_idx.size_in_bytes(), std::mem::size_of::<usize>() * 3);
+        assert_eq!(blank_idx.read_from_mu, true);
+    }
+
+    #[test]
     fn test_from_sel_vec() {
         // Test MultiHotN from_sel_vec
         let sel_vec = vec![1, 3, 5];
         let multi_hot = MultiHotN::from_sel_vec(sel_vec.clone(), 8, false);
         assert_eq!(multi_hot.to_sel_vec(), sel_vec);
         assert_eq!(multi_hot.len(), 8);
-        assert_eq!(multi_hot[1], true);
-        assert_eq!(multi_hot[3], true);
-        assert_eq!(multi_hot[5], true);
-        assert_eq!(multi_hot[0], false);
-        assert_eq!(multi_hot[2], false);
-        assert_eq!(multi_hot[4], false);
+        assert_eq!(multi_hot[1], Some(true));
+        assert_eq!(multi_hot[3], Some(true));
+        assert_eq!(multi_hot[5], Some(true));
+        assert_eq!(multi_hot[0], Some(false));
+        assert_eq!(multi_hot[2], Some(false));
+        assert_eq!(multi_hot[4], Some(false));
 
         // Test IndexN from_sel_vec
         let index_n = IndexN::from_sel_vec(sel_vec.clone(), 8, false);
