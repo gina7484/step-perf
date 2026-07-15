@@ -50,7 +50,7 @@ where
         tensor_shape_tiled: Vec<usize>,
         stride: Vec<usize>,
         out_shape_tiled: Vec<usize>,
-        npy_path: Option<String>,
+        npy_path: String,
         tile_row: usize,
         tile_col: usize,
         n_byte: usize,
@@ -65,11 +65,8 @@ where
         id: u32,
         trigger_rank: u32,
     ) -> Self {
-        let underlying = match npy_path {
-            Some(file_path) => {
-                // Open the file
-                let mut file = std::fs::File::open(file_path).unwrap();
-
+        let underlying = match std::fs::File::open(npy_path) {
+            Ok(mut file) => {
                 // Read the data and shape of the `.npy` file
                 let file_data = npyz::NpyFile::new(&mut file).unwrap();
                 let shape_vec = file_data
@@ -90,7 +87,12 @@ where
                 let vec_data: Vec<T> = file_data.into_vec().unwrap();
                 Some(ndarray::ArcArray::from_shape_vec(shape, vec_data).unwrap())
             }
-            None => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None, // Just timing simulation
+            Err(error) => {
+                // The file may exist, but opening it failed for another reason,
+                // such as insufficient permissions.
+                panic!("Failed to open file: {error}");
+            }
         };
         let ctx = Self {
             tensor_shape_tiled,
@@ -467,7 +469,7 @@ mod tests {
             vec![2, 2],
             vec![2, 1],
             vec![2, 2],
-            None,
+            "dummpy_path.npy".to_string(),
             TILE_ROW,
             TILE_COL,
             BYTES_PER_ELEM,
@@ -564,7 +566,7 @@ mod tests {
             vec![2, 2],
             vec![2, 1],
             vec![2, 2],
-            None,
+            "dummpy_path".to_string(),
             TILE_ROW,
             TILE_COL,
             BYTES_PER_ELEM,

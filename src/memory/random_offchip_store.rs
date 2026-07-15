@@ -15,7 +15,7 @@ use crate::utils::events::LoggableEventSimple;
 pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     // Tiling configurations
     pub tensor_shape_tiled: Vec<usize>, // In terms of tiles.
-    pub npy_path: Option<String>,
+    pub npy_path: String,
     pub underlying: Option<ndarray::ArcArray<T, IxDyn>>,
     pub tile_row: usize,
     pub tile_col: usize,
@@ -47,7 +47,7 @@ where
 {
     pub fn new(
         tensor_shape_tiled: Vec<usize>,
-        npy_path: Option<String>,
+        npy_path: String,
         tile_row: usize,
         tile_col: usize,
         n_byte: usize,
@@ -64,11 +64,8 @@ where
         id: u32,
         ack_based_on_waddr: bool,
     ) -> Self {
-        let underlying = match npy_path.clone() {
-            Some(file_path) => {
-                // Open the file
-                let mut file = std::fs::File::open(file_path).unwrap();
-
+        let underlying = match std::fs::File::open(&npy_path) {
+            Ok(mut file) => {
                 // Read the data and shape of the `.npy` file
                 let file_data = npyz::NpyFile::new(&mut file).unwrap();
                 let shape_vec = file_data
@@ -89,7 +86,12 @@ where
                 let vec_data: Vec<T> = file_data.into_vec().unwrap();
                 Some(ndarray::ArcArray::from_shape_vec(shape, vec_data).unwrap())
             }
-            None => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None, // Just timing simulation
+            Err(error) => {
+                // The file may exist, but opening it failed for another reason,
+                // such as insufficient permissions.
+                panic!("Failed to open file: {error}");
+            }
         };
         assert_eq!(
             tensor_shape_tiled.len(),
@@ -352,9 +354,9 @@ where
                     }
                 }
                 (Err(_), Err(_)) => {
-                    if self.npy_path.is_some() {
+                    if self.underlying.is_some() {
                         // Save data in .npy
-                        let data_file_path = format!("{}.npy", self.npy_path.clone().unwrap());
+                        let data_file_path = format!("{}.npy", self.npy_path.clone());
                         match npyz::to_file_1d(
                             data_file_path,
                             self.underlying
@@ -367,7 +369,7 @@ where
                             Ok(_) => {}
                             Err(_) => panic!(
                                 "Error while writing data to {}",
-                                format!("{}.npy", self.npy_path.clone().unwrap())
+                                format!("{}.npy", self.npy_path.clone())
                             ),
                         }
 
@@ -379,8 +381,7 @@ where
                             self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
                         shape.append(&mut vec![total_rows, total_cols]);
 
-                        let meta_file_path: String =
-                            format!("{}.json", self.npy_path.clone().unwrap());
+                        let meta_file_path: String = format!("{}.json", self.npy_path.clone());
                         let meta_file = File::create(meta_file_path.clone()).unwrap();
                         match serde_json::to_writer(meta_file, &shape) {
                             Ok(_) => {}
@@ -389,7 +390,7 @@ where
 
                         println!(
                             "Successfully wrote the output to {}",
-                            self.npy_path.clone().unwrap()
+                            self.npy_path.clone()
                         );
                     }
                     return;

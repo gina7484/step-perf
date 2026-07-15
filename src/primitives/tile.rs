@@ -62,6 +62,18 @@ impl<T: Clone> Tile<T> {
         }
     }
 
+    /// Returns a copy of this tile with the `underlying` data dropped (set to `None`).
+    /// All other fields (shape, bytes_per_elem, read_from_mu, offset) are preserved.
+    pub fn drop_underlying(&self) -> Self {
+        Self {
+            shape: self.shape.clone(),
+            bytes_per_elem: self.bytes_per_elem,
+            read_from_mu: self.read_from_mu,
+            underlying: None,
+            offset: self.offset,
+        }
+    }
+
     /// This creates a tile with no underlying data and a padded value
     pub fn new_blank_padded(
         shape: Vec<usize>,

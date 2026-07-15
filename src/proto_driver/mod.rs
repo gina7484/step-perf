@@ -184,9 +184,6 @@ fn build_from_proto<'a>(
     let channel_depth = sim_config.channel_depth;
     let mut mem_context = HBMContext::new(builder, hbm_config.clone());
 
-    // Use a regular variable instead of a const, since sim_config.mock_bf16 is not a constant
-    let f32_bytes: usize = if sim_config.mock_bf16 { 2 } else { 4 }; // we will use this to mimic bfloat16
-
     // Graph dump (file 1: proto operators). Built here, before the loop below
     // consumes `step_graph.operators`. `begin()` arms the per-node channel
     // capture used by the `add_child!` macro and the `channel.rs` hooks.
@@ -203,6 +200,9 @@ fn build_from_proto<'a>(
         // if operation.id == 23 || operation.id == 24 || operation.id == 25 {
         //     println!("processing {:?}\n", operation);
         // }
+
+        let dtype_bytes: usize = operation.dtype_bytes as usize; // we will use this to mimic bfloat16
+
         match operation.op_type.clone().unwrap() {
             OpType::Unarymap(unarymap) => match (
                 unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
@@ -337,14 +337,13 @@ fn build_from_proto<'a>(
                         dyn Fn(&Tile<u64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
                     > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
                         elemto_elem_func::ElemElemFn::MaskRow(mask_row) => {
-                            let mock_bf16 = sim_config.mock_bf16.clone();
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::mask_row(
                                     tile,
                                     unarymap.write_back_mu,
                                     mask_row.row as usize,
                                     mask_row.col as usize,
-                                    mock_bf16,
+                                    dtype_bytes,
                                 )
                             })
                         }
@@ -1384,7 +1383,7 @@ fn build_from_proto<'a>(
                             Arc::new(move || {
                                 Tile::new_zero(
                                     [tile_row, tile_col],
-                                    f32_bytes,
+                                    dtype_bytes,
                                     binary_map_accum.write_back_mu,
                                 )
                             }),
@@ -1425,7 +1424,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.npy_path,
                                 linear_off_chip_load.tile_row as usize,
                                 linear_off_chip_load.tile_col as usize,
-                                f32_bytes,
+                                dtype_bytes,
                                 0,
                                 hbm_config.addr_offset,
                                 linear_off_chip_load.par_dispatch as usize,
@@ -1507,7 +1506,7 @@ fn build_from_proto<'a>(
                                 dyn_linear_off_chip_load.npy_path,
                                 dyn_linear_off_chip_load.tile_row as usize,
                                 dyn_linear_off_chip_load.tile_col as usize,
-                                f32_bytes,
+                                dtype_bytes,
                                 0,
                                 hbm_config.addr_offset,
                                 dyn_linear_off_chip_load.par_dispatch as usize,
@@ -1680,7 +1679,7 @@ fn build_from_proto<'a>(
                                 random_off_chip_store.npy_path,
                                 random_off_chip_store.tile_row as usize,
                                 random_off_chip_store.tile_col as usize,
-                                f32_bytes,
+                                dtype_bytes,
                                 0,
                                 hbm_config.addr_offset,
                                 random_off_chip_store.par_dispatch as usize,
@@ -1738,7 +1737,7 @@ fn build_from_proto<'a>(
                                 random_off_chip_load.npy_path,
                                 random_off_chip_load.tile_row as usize,
                                 random_off_chip_load.tile_col as usize,
-                                f32_bytes,
+                                dtype_bytes,
                                 0,
                                 hbm_config.addr_offset,
                                 random_off_chip_load.par_dispatch as usize,
@@ -3201,7 +3200,7 @@ fn build_from_proto<'a>(
                             hbm_config,
                             tile_f32,
                             tile_f32,
-                            f32_bytes,
+                            dtype_bytes,
                             mem_context,
                             builder,
                             channel_depth
@@ -3220,7 +3219,7 @@ fn build_from_proto<'a>(
                             hbm_config,
                             buff_tile_f32,
                             tile_f32,
-                            f32_bytes,
+                            dtype_bytes,
                             mem_context,
                             builder,
                             channel_depth
@@ -3234,7 +3233,7 @@ fn build_from_proto<'a>(
                             hbm_config,
                             multihot,
                             tile_f32,
-                            f32_bytes,
+                            dtype_bytes,
                             mem_context,
                             builder,
                             channel_depth
@@ -3420,35 +3419,24 @@ fn build_from_proto<'a>(
                     let tile_row = accum.tile_row as usize;
                     let tile_col = accum.tile_col as usize;
 
-                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = if sim_config
-                        .functional_sim
+                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = match accum
+                        .init_func
+                        .unwrap()
+                        .init_fn
+                        .unwrap()
                     {
-                        match accum.init_func.unwrap().init_fn.unwrap() {
-                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                                Tile::new_zero([tile_row, tile_col], f32_bytes, accum.write_back_mu)
-                            }),
-                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                                Tile::new_empty(
-                                    [tile_row, tile_col],
-                                    f32_bytes,
-                                    accum.write_back_mu,
-                                )
-                            }),
-                            init_func::InitFn::DynEmpty(_) => Arc::new(move || {
-                                // DynEmpty means the row or the column size is known at run-time.
-                                // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
-                                Tile::new_empty([0, 0], f32_bytes, accum.write_back_mu)
-                            }),
-                            _ => todo!(),
-                        }
-                    } else {
-                        Arc::new(move || {
-                            Tile::new_blank(
-                                vec![tile_row, tile_col],
-                                f32_bytes,
-                                accum.write_back_mu,
-                            )
-                        })
+                        init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                            Tile::new_zero([tile_row, tile_col], dtype_bytes, accum.write_back_mu)
+                        }),
+                        init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                            Tile::new_empty([tile_row, tile_col], dtype_bytes, accum.write_back_mu)
+                        }),
+                        init_func::InitFn::DynEmpty(_) => Arc::new(move || {
+                            // DynEmpty means the row or the column size is known at run-time.
+                            // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
+                            Tile::new_empty([0, 0], dtype_bytes, accum.write_back_mu)
+                        }),
+                        _ => todo!(),
                     };
 
                     add_child!(
@@ -3578,18 +3566,6 @@ fn build_from_proto<'a>(
                             }),
                             _ => todo!(),
                         };
-                    // if sim_config.functional_sim {
-                    //     match accum.init_func.unwrap().init_fn.unwrap() {
-                    //         init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                    //             Tile::new_empty([tile_row, tile_col], 1, accum.write_back_mu)
-                    //         }),
-                    //         _ => todo!(),
-                    //     }
-                    // } else {
-                    //     Arc::new(move || {
-                    //         Tile::new_blank(vec![tile_row, tile_col], 1, accum.write_back_mu)
-                    //     })
-                    // };
 
                     add_child!(
                         builder,
@@ -3651,23 +3627,16 @@ fn build_from_proto<'a>(
                     let tile_row = accum.tile_row as usize;
                     let tile_col = accum.tile_col as usize;
 
-                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = if sim_config
-                        .functional_sim
+                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = match accum
+                        .init_func
+                        .unwrap()
+                        .init_fn
+                        .unwrap()
                     {
-                        match accum.init_func.unwrap().init_fn.unwrap() {
-                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                                Tile::new_zero([tile_row, tile_col], f32_bytes, accum.write_back_mu)
-                            }),
-                            _ => todo!(),
-                        }
-                    } else {
-                        Arc::new(move || {
-                            Tile::new_blank(
-                                vec![tile_row, tile_col],
-                                f32_bytes,
-                                accum.write_back_mu,
-                            )
-                        })
+                        init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                            Tile::new_zero([tile_row, tile_col], dtype_bytes, accum.write_back_mu)
+                        }),
+                        _ => todo!(),
                     };
 
                     add_child!(
@@ -3946,23 +3915,12 @@ fn build_from_proto<'a>(
                                 let tile_col = reshape.tile_col.unwrap() as usize;
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => {
-                                        if sim_config.functional_sim {
-                                            Tile::new_zero_padded(
-                                                [tile_row, tile_col],
-                                                f32_bytes,
-                                                reshape.write_back_mu,
-                                                0,
-                                            )
-                                        } else {
-                                            Tile::new_blank_padded(
-                                                vec![tile_row, tile_col],
-                                                f32_bytes,
-                                                reshape.write_back_mu,
-                                                0,
-                                            )
-                                        }
-                                    }
+                                    init_func::InitFn::Zero(_zero) => Tile::new_zero_padded(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        reshape.write_back_mu,
+                                        0,
+                                    ),
                                     _ => todo!(),
                                 };
                                 add_child!(
@@ -4018,23 +3976,12 @@ fn build_from_proto<'a>(
                                 let tile_col = reshape.tile_col.unwrap() as usize;
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => {
-                                        if sim_config.functional_sim {
-                                            Tile::new_zero_padded(
-                                                [tile_row, tile_col],
-                                                f32_bytes,
-                                                reshape.write_back_mu,
-                                                0,
-                                            )
-                                        } else {
-                                            Tile::new_blank_padded(
-                                                vec![tile_row, tile_col],
-                                                f32_bytes,
-                                                reshape.write_back_mu,
-                                                0,
-                                            )
-                                        }
-                                    }
+                                    init_func::InitFn::Zero(_zero) => Tile::new_zero_padded(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        reshape.write_back_mu,
+                                        0,
+                                    ),
                                     _ => todo!(),
                                 };
                                 Some(pad_val)
@@ -4124,21 +4071,18 @@ fn build_from_proto<'a>(
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
                                     init_func::InitFn::Zero(_zero) => {
-                                        if sim_config.functional_sim {
-                                            Tile::new_zero_padded(
-                                                [tile_row, tile_col],
-                                                8,
-                                                reshape.write_back_mu,
-                                                0,
-                                            )
-                                        } else {
-                                            Tile::new_blank_padded(
-                                                vec![tile_row, tile_col],
-                                                8,
-                                                reshape.write_back_mu,
-                                                0,
-                                            )
-                                        }
+                                        Tile::new_zero_padded(
+                                            [tile_row, tile_col],
+                                            dtype_bytes,
+                                            reshape.write_back_mu,
+                                            0,
+                                        )
+                                        // Tile::new_blank_padded(
+                                        //     vec![tile_row, tile_col],
+                                        //     dtype_bytes,
+                                        //     reshape.write_back_mu,
+                                        //     0,
+                                        // )
                                     }
                                     _ => todo!(),
                                 };

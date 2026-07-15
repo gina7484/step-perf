@@ -22,7 +22,7 @@ pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub tile_row: usize,
     pub tile_col: usize,
     // Data
-    pub store_path: Option<String>,
+    pub store_path: String,
     // HBM Configurations & Addresses
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
@@ -46,7 +46,7 @@ where
         tensor_shape_tiled: Vec<usize>,
         tile_row: usize,
         tile_col: usize,
-        store_path: Option<String>,
+        store_path: String,
         base_addr_byte: u64,
         addr_offset: u64,
         par_dispatch: usize,
@@ -95,6 +95,7 @@ where
     Elem<Tile<T>>: DAMType,
 {
     fn run(&mut self) {
+        let mut functional: Option<bool> = None;
         let mut accum: Array2<T> = Array2::from_shape_vec(
             (0, self.tensor_shape_tiled.last().unwrap() * self.tile_col),
             vec![],
@@ -113,8 +114,9 @@ where
                     data: tile,
                 }) => match tile {
                     Elem::Val(tile_data) => {
-                        if self.store_path.is_some() {
-                            assert!(tile_data.underlying.is_some());
+                        if tile_data.underlying.is_some() {
+                            assert!(functional.is_none() || functional.unwrap() == true);
+                            functional = Some(true);
 
                             let concatenated = concatenate(
                                 Axis(1),
@@ -129,8 +131,9 @@ where
                         tile_data
                     }
                     Elem::ValStop(tile_data, s) => {
-                        if self.store_path.is_some() {
-                            assert!(tile_data.underlying.is_some());
+                        if tile_data.underlying.is_some() {
+                            assert!(functional.is_none() || functional.unwrap() == true);
+                            functional = Some(true);
 
                             let concatenated_horizontal = concatenate(
                                 Axis(1),
@@ -156,7 +159,7 @@ where
                     }
                 },
                 Err(_) => {
-                    if self.store_path.is_some() {
+                    if functional.unwrap_or(false) {
                         // Save the collected so far and return
 
                         // Check whether the collected data is same as expected
@@ -169,12 +172,12 @@ where
                         let data: Vec<T> = accum.into_raw_vec_and_offset().0;
 
                         // Save data in .npy
-                        let data_file_path = format!("{}.npy", self.store_path.clone().unwrap());
+                        let data_file_path = format!("{}.npy", self.store_path.clone());
                         match npyz::to_file_1d(data_file_path, data) {
                             Ok(_) => {}
                             Err(_) => panic!(
                                 "Error while writing data to {}",
-                                format!("{}.npy", self.store_path.clone().unwrap())
+                                format!("{}.npy", self.store_path.clone())
                             ),
                         }
 
@@ -186,8 +189,7 @@ where
                             self.tensor_shape_tiled[..self.tensor_shape_tiled.len() - 2].to_vec();
                         shape.append(&mut vec![total_rows, total_cols]);
 
-                        let meta_file_path: String =
-                            format!("{}.json", self.store_path.clone().unwrap());
+                        let meta_file_path: String = format!("{}.json", self.store_path.clone());
                         let meta_file = File::create(meta_file_path.clone()).unwrap();
                         match serde_json::to_writer(meta_file, &shape) {
                             Ok(_) => {}
@@ -196,7 +198,7 @@ where
 
                         println!(
                             "Successfully wrote the output to {}",
-                            self.store_path.clone().unwrap()
+                            self.store_path.clone()
                         );
                     }
                     return;

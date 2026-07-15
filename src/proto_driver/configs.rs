@@ -5,8 +5,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct SimConfig {
     pub channel_depth: Option<usize>,
-    pub functional_sim: bool,
-    pub mock_bf16: bool,
     pub config_dict: HashMap<u32, usize>,
 }
 
@@ -27,26 +25,6 @@ impl<'py> FromPyObject<'py> for SimConfig {
             Some(value)
         };
 
-        // Retrieve the functional_sim attribute from the object
-        let functional_sim_obj = obj.getattr("functional_sim").map_err(|_| {
-            PyTypeError::new_err("Expected 'functional_sim' attribute in SimConfig object")
-        })?;
-
-        // Extract the functional_sim field
-        let functional_sim: bool = functional_sim_obj
-            .extract()
-            .map_err(|_| PyTypeError::new_err("Expected 'functional_sim' to be a boolean"))?;
-
-        // Retrieve the mock_bf16 attribute from the object
-        let mock_bf16_obj = obj.getattr("mock_bf16").map_err(|_| {
-            PyTypeError::new_err("Expected 'mock_bf16' attribute in SimConfig object")
-        })?;
-
-        // Extract the mock_bf16 field
-        let mock_bf16: bool = mock_bf16_obj
-            .extract()
-            .map_err(|_| PyTypeError::new_err("Expected 'mock_bf16' to be a boolean"))?;
-
         // Retrieve the config_dict attribute from the object
         let config_dict_obj = obj.getattr("config_dict").map_err(|_| {
             PyTypeError::new_err("Expected 'config_dict' attribute in SimConfig object")
@@ -63,8 +41,6 @@ impl<'py> FromPyObject<'py> for SimConfig {
 
         Ok(SimConfig {
             channel_depth,
-            functional_sim,
-            mock_bf16,
             config_dict,
         })
     }
