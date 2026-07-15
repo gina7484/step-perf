@@ -62,6 +62,7 @@ use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBund
 use crate::utils::{
     cast::{to_u64_vec, to_usize_vec},
     events::SimpleEvent,
+    file_printer::FilePrinterContext,
 };
 
 /// Wraps `ProgramBuilder::add_child`, additionally recording the node (type
@@ -2951,6 +2952,68 @@ fn build_from_proto<'a>(
                     }
                     dtype => panic!(
                         "Unsupported data type for PrinterContext operation {:?}",
+                        dtype
+                    ),
+                }
+            }
+            OpType::FilePrinterContext(file_printer_context) => {
+                match file_printer_context
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            file_printer_context.input_id,
+                            file_printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, FilePrinterContext::new(rcv, operation.id));
+                    }
+                    Type::U64(_) => {
+                        let rcv = channel_map_collection.tile_u64.get_receiver(
+                            file_printer_context.input_id,
+                            file_printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, FilePrinterContext::new(rcv, operation.id));
+                    }
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            file_printer_context.input_id,
+                            file_printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, FilePrinterContext::new(rcv, operation.id));
+                    }
+                    Type::Bool(_) => {
+                        let rcv = channel_map_collection.tile_bool.get_receiver(
+                            file_printer_context.input_id,
+                            file_printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, FilePrinterContext::new(rcv, operation.id));
+                    }
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_)),
+                    }) => {
+                        let rcv = channel_map_collection.buff_tile_f32.get_receiver(
+                            file_printer_context.input_id,
+                            file_printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, FilePrinterContext::new(rcv, operation.id));
+                    }
+                    dtype => panic!(
+                        "Unsupported data type for FilePrinterContext operation {:?}",
                         dtype
                     ),
                 }
