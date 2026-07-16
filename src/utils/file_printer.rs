@@ -26,6 +26,7 @@ impl<T: DAMType> Context for FilePrinterContext<T> {
             self.time.incr_cycles(1);
         }
         writer.flush().unwrap();
+        println!("FilePrinterContext {} finished writing to {}", self.id, path);
     }
 }
 

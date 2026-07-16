@@ -1406,7 +1406,9 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel; only
+                    // dtype_bytes (2) differs, and that comes from operation.dtype_bytes.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let on_chip_snd = channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             None,
@@ -2083,7 +2085,8 @@ fn build_from_proto<'a>(
             }
             OpType::Broadcast(broadcast) => {
                 match broadcast.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         make_broadcast!(
                             channel_map_collection,
                             operation,
@@ -2147,7 +2150,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let input_rcv = channel_map_collection.tile_f32.get_receiver(
                             flat_partition.input_id,
                             flat_partition.input_stream_idx,
@@ -2754,7 +2758,8 @@ fn build_from_proto<'a>(
             }
             OpType::PromoteOuter(promote_outer) => {
                 match promote_outer.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(f32) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             promote_outer.input_id,
                             promote_outer.stream_idx,
@@ -2903,7 +2908,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             printer_context.input_id,
                             printer_context.stream_idx,
@@ -2939,8 +2945,9 @@ fn build_from_proto<'a>(
                         );
                         add_child!(builder, PrinterContext::new(rcv));
                     }
+                    // Buffer of bf16 is modelled as Buffer<Tile<f32>> on the buff_tile_f32 channel.
                     Type::Buffer(proto_headers::graph_proto::Buffer {
-                        r#type: Some(buffer::Type::F32(_)),
+                        r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
                     }) => {
                         let rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             printer_context.input_id,
@@ -2965,7 +2972,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             file_printer_context.input_id,
                             file_printer_context.stream_idx,
@@ -3001,8 +3009,9 @@ fn build_from_proto<'a>(
                         );
                         add_child!(builder, FilePrinterContext::new(rcv, operation.id));
                     }
+                    // Buffer of bf16 is modelled as Buffer<Tile<f32>> on the buff_tile_f32 channel.
                     Type::Buffer(proto_headers::graph_proto::Buffer {
-                        r#type: Some(buffer::Type::F32(_)),
+                        r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
                     }) => {
                         let rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             file_printer_context.input_id,
@@ -3315,7 +3324,8 @@ fn build_from_proto<'a>(
             }
             OpType::Flatten(flatten) => {
                 match flatten.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             flatten.input_id,
                             flatten.stream_idx,
@@ -3432,7 +3442,8 @@ fn build_from_proto<'a>(
                 accum.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 accum.dtype_b.clone().unwrap().r#type.clone().unwrap(),
             ) {
-                (Type::F32(_), Type::F32(_)) => {
+                // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                (Type::F32(_), Type::F32(_)) | (Type::Bf16(_), Type::Bf16(_)) => {
                     let rcv = channel_map_collection.tile_f32.get_receiver(
                         accum.input_id,
                         accum.stream_idx,
@@ -3735,7 +3746,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             retile_streamify.input_id,
                             retile_streamify.stream_idx,
@@ -4027,7 +4039,8 @@ fn build_from_proto<'a>(
             }
             OpType::ReshapePadStream(reshape) => {
                 match reshape.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             reshape.input_id,
                             reshape.stream_idx,
