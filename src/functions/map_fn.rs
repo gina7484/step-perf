@@ -1256,6 +1256,45 @@ pub fn i64_f32(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) ->
     }
 }
 
+// transpose(x): tile-wise 2D transpose ([m, n] -> [n, m]). A pure data-movement op
+// used by UnaryMap to realize aten.transpose when the parallel-stream permute also
+// requires transposing each tile's data (see `_lower_transpose` /
+// `need_elementwise_transpose`). Generic over the element type so it works for
+// f32/bf16 (bf16 is modelled as Tile<f32>) and any other tile element. Counted as
+// 1 FLOP/elem, consistent with the other data-movement/creation ops.
+pub fn transpose<T: Debug + Clone>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.t().to_owned().into_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        // Timing-only (blank) tile: no data, just swap the shape.
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_1, shape_0],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1678,5 +1717,39 @@ mod tests {
         assert_eq!(o[[0, 1]], 7.0f32);
         assert_eq!(o[[0, 2]], -3.0f32);
         assert_eq!(out.bytes_per_elem, 4);
+    }
+
+    #[test]
+    fn test_transpose() {
+        // [[1,2,3],[4,5,6]] (2x3) -> [[1,4],[2,5],[3,6]] (3x2)
+        let arr =
+            Array2::from_shape_vec((2, 3), vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 4, false);
+        let (cycles, out) = transpose(&in_data, 1, false);
+
+        assert_eq!(out.shape, vec![3, 2]);
+        let o = out.underlying.as_ref().unwrap();
+        assert_eq!(o[[0, 0]], 1.0);
+        assert_eq!(o[[0, 1]], 4.0);
+        assert_eq!(o[[1, 0]], 2.0);
+        assert_eq!(o[[1, 1]], 5.0);
+        assert_eq!(o[[2, 0]], 3.0);
+        assert_eq!(o[[2, 1]], 6.0);
+        // 6 elems * 1 FLOP / 1 FLOP-per-cycle
+        assert_eq!(cycles, 6);
+        // dtype byte width is preserved
+        assert_eq!(out.bytes_per_elem, 4);
+    }
+
+    #[test]
+    fn test_transpose_blank_swaps_shape() {
+        // Timing-only tile: no data, shape [2,5] -> [5,2].
+        let in_data: Tile<f32> = Tile::new_blank_padded(vec![2, 5], 2, false, 0);
+        let (cycles, out) = transpose(&in_data, 1, false);
+        assert_eq!(out.shape, vec![5, 2]);
+        assert!(out.underlying.is_none());
+        // bf16-width (2 bytes) is preserved through the transpose
+        assert_eq!(out.bytes_per_elem, 2);
+        assert_eq!(cycles, 10);
     }
 }

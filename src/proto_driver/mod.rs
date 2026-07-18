@@ -302,6 +302,11 @@ fn build_from_proto<'a>(
                                 functions::map_fn::zeros_like(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Transpose(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::transpose(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         e => {
                             panic!("Unsupported unary map function type {:?}", e)
                         }
@@ -751,6 +756,48 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Bf16ToF32(_) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::bf16_f32(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => {
+                            panic!("Unsupported unary map function type {:?}", e)
+                        }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                // Tile-preserving bf16 unary ops (transpose). bf16 is modelled as
+                // Tile<f32>, so both input and output use the tile_f32 channel.
+                (Type::Bf16(_), Type::Bf16(_)) => {
+                    let rcv = channel_map_collection.tile_f32.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Transpose(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::transpose(tile, comp_bw, write_back_mu)
                             })
                         }
                         e => {
@@ -2828,7 +2875,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             consumer_context.input_id,
                             consumer_context.stream_idx,
@@ -3029,7 +3077,9 @@ fn build_from_proto<'a>(
             }
             OpType::Bufferize(bufferize) => {
                 match bufferize.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32>; a buffered bf16 tile lives on the
+                    // buff_tile_f32 channel (same as f32).
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             bufferize.input_id,
                             bufferize.stream_idx,
@@ -3156,7 +3206,9 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32>; the buffered input lives on the
+                    // buff_tile_f32 channel and the streamed output on tile_f32.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             static_streamify.input_id,
                             static_streamify.stream_idx,
