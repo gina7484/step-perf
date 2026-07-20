@@ -194,6 +194,14 @@ pub fn retile_row<T: Debug + Clone>(
     match &in_data.underlying {
         Some(in_arr) => {
             let cur_arr = accumulator.underlying.clone().unwrap();
+            let cur_arr = if cur_arr.shape() == [0, 0] {
+                // Initial accumulation
+                Array2::from_shape_vec((0, in_arr.shape()[1]), vec![])
+                    .unwrap()
+                    .to_shared()
+            } else {
+                cur_arr
+            };
 
             (
                 0, // TODO: Add cycles it took for grouping smaller tiles into larger tiles

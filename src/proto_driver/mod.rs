@@ -1070,7 +1070,10 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap(),
             ) {
-                (Type::F32(_), Type::F32(_), Type::F32(_)) => {
+                // bf16 is modelled as Tile<f32>; all three sides use the tile_f32
+                // channel (e.g. the bf16 expert matmuls in the MoE graph).
+                (Type::F32(_), Type::F32(_), Type::F32(_))
+                | (Type::Bf16(_), Type::Bf16(_), Type::Bf16(_)) => {
                     // create
                     let rcv1 = channel_map_collection.tile_f32.get_receiver(
                         binary_map.input_id1,
@@ -1901,7 +1904,8 @@ fn build_from_proto<'a>(
             }
             OpType::RepeatStatic(repeat_static) => {
                 match repeat_static.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
                             repeat_static.input_id,
                             repeat_static.stream_idx,
@@ -3138,7 +3142,8 @@ fn build_from_proto<'a>(
             }
             OpType::Streamify(streamify) => {
                 match streamify.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Buffer<Tile<f32>> / Tile<f32> on the *_f32 channels.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             streamify.input_id,
                             streamify.stream_idx,
@@ -3720,10 +3725,12 @@ fn build_from_proto<'a>(
                 accum.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 accum.dtype_b.clone().unwrap().r#type.clone().unwrap(),
             ) {
+                // bf16 is modelled as Tile<f32> / Buffer<Tile<f32>> on the *_f32 channels
+                // (e.g. the bf16 expert-output accumulation buffer in the MoE graph).
                 (
-                    Type::F32(_),
+                    Type::F32(_) | Type::Bf16(_),
                     Type::Buffer(proto_headers::graph_proto::Buffer {
-                        r#type: Some(buffer::Type::F32(_)),
+                        r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
                     }),
                 ) => {
                     let rcv = channel_map_collection.tile_f32.get_receiver(
