@@ -282,7 +282,7 @@ where
                                     if is_last_selected {
                                         Elem::ValStop(
                                             updated_x.clone(),
-                                            *level + addtional_rank + 1,
+                                            self.reassemble_rank + addtional_rank + 1,
                                         )
                                     } else {
                                         Elem::Val(updated_x.clone())
@@ -291,7 +291,7 @@ where
                                     if is_last_selected && level >= &self.reassemble_rank {
                                         Elem::ValStop(
                                             updated_x.clone(),
-                                            *level + addtional_rank + 1,
+                                            self.reassemble_rank + addtional_rank + 1,
                                         )
                                     } else {
                                         Elem::ValStop(updated_x.clone(), *level)
@@ -663,6 +663,92 @@ mod tests {
         ));
         // println!("Expected output: {:?}", ground_truth);
         // ctx.add_child(PrinterContext::new(out_data_rcv));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    /// Builds the three input streams, select stream, and expected output for the
+    /// "rotating multi-hot over three inputs" scenario.
+    ///
+    /// Each input stream `v` (v = 0, 1, 2) carries:
+    ///   Val(v), ValStop(v, 1), Val(v), ValStop(v, 2)
+    ///
+    /// Select stream:
+    ///   Val(multihot[0,1]), Val(multihot[1,2]), ValStop(multihot[2,0], 1)
+    fn build_rotating_inputs(
+        read_from_mu: bool,
+    ) -> (Vec<Vec<Elem<Tile<i32>>>>, Vec<Elem<MultiHotN>>) {
+        let make_tile = |v: i32| {
+            Tile::new(
+                Array2::from_shape_vec((2, 2), vec![v; 4]).unwrap().into(),
+                4,
+                read_from_mu,
+            )
+        };
+        let make_input = |v: i32| {
+            vec![
+                Elem::Val(make_tile(v)),
+                Elem::ValStop(make_tile(v), 1),
+                Elem::Val(make_tile(v)),
+                Elem::ValStop(make_tile(v), 2),
+            ]
+        };
+
+        let input_streams = vec![make_input(0), make_input(1), make_input(2)];
+
+        let select_stream = vec![
+            Elem::Val(MultiHotN::new(vec![true, true, false], read_from_mu)), // [0, 1]
+            Elem::Val(MultiHotN::new(vec![false, true, true], read_from_mu)), // [1, 2]
+            Elem::ValStop(MultiHotN::new(vec![true, false, true], read_from_mu), 1), // [2, 0] (s1)
+        ];
+
+        (input_streams, select_stream)
+    }
+
+    /// Debug-only: dumps the actual FlatReassemble output for the rotating
+    /// scenario to `FilePrinterContext_7777.log` so we can inspect it.
+    #[test]
+    fn flat_reassemble_3in_rotating_multihot_dump() {
+        use crate::utils::file_printer::FilePrinterContext;
+
+        let (input_streams, select_stream) = build_rotating_inputs(true);
+
+        let mut ctx = ProgramBuilder::default();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+        let (in_sel_snd, in_sel_rcv) = ctx.unbounded();
+        let (exp1_snd, exp1_rcv) = ctx.unbounded();
+        let (exp2_snd, exp2_rcv) = ctx.unbounded();
+        let (exp3_snd, exp3_rcv) = ctx.unbounded();
+
+        let config = FlatReassembleConfig {
+            switch_cycles: vec![1, 2, 3],
+            write_back_mu: true,
+        };
+
+        let mut it = input_streams.into_iter();
+        let in0 = it.next().unwrap();
+        let in1 = it.next().unwrap();
+        let in2 = it.next().unwrap();
+
+        ctx.add_child(GeneratorContext::new(move || in0.into_iter(), exp1_snd));
+        ctx.add_child(GeneratorContext::new(move || in1.into_iter(), exp2_snd));
+        ctx.add_child(GeneratorContext::new(move || in2.into_iter(), exp3_snd));
+        ctx.add_child(GeneratorContext::new(
+            move || select_stream.into_iter(),
+            in_sel_snd,
+        ));
+        ctx.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
+            vec![exp1_rcv, exp2_rcv, exp3_rcv],
+            in_sel_rcv,
+            out_data_snd,
+            1,
+            config,
+            7777,
+            String::new(),
+        ));
+        ctx.add_child(FilePrinterContext::new(out_data_rcv, 7777));
+
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
