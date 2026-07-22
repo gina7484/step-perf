@@ -159,7 +159,7 @@ In `src/proto_driver/mod.rs`, `OpType::AccumBuffer` arm, change the `init_accum`
 
 - [ ] **Step 5: Update the `run_reduction` test helper**
 
-In `src/operator/accum_buff.rs`, in the `#[cfg(test)] mod tests`, add `tile_row`/`tile_col` params to `run_reduction`, change the `init_accum` closure to ignore its args, and pass the params to `new`:
+In `src/operator/accum_buff.rs`, in the `#[cfg(test)] mod tests`, add `tile_row`/`tile_col` and an `init_accum` closure parameter to `run_reduction` (replacing the hardcoded `zero_init` closure and the now-unused `read_from_mu` param), and pass them to `new`. Parameterizing the init closure lets both the static and dynamic tests share this one runner:
 
 ```rust
     fn run_reduction(
@@ -169,7 +169,7 @@ In `src/operator/accum_buff.rs`, in the `#[cfg(test)] mod tests`, add `tile_row`
         buffer_shape: Vec<usize>,
         tile_row: usize,
         tile_col: usize,
-        read_from_mu: bool,
+        init_accum: Arc<dyn Fn(usize, usize) -> Tile<i32> + Send + Sync>,
     ) {
         let mut ctx = ProgramBuilder::default();
         let (in_data_snd, in_data_rcv) = ctx.unbounded();
@@ -184,7 +184,7 @@ In `src/operator/accum_buff.rs`, in the `#[cfg(test)] mod tests`, add `tile_row`
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                 accum_fn::add(tile1, tile2, comp_bw, write_back_mu, 0)
             }),
-            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
+            init_accum,
             rank,
             buffer_shape,
             tile_row,
@@ -208,7 +208,7 @@ In `src/operator/accum_buff.rs`, in the `#[cfg(test)] mod tests`, add `tile_row`
 
 - [ ] **Step 6: Update the three existing `run_reduction` call sites**
 
-`zero_init` produces a `1x2` tile, so pass `tile_row = 1`, `tile_col = 2` (non-zero → no dynamic resolution, behavior identical).
+`zero_init` produces a `1x2` tile, so pass `tile_row = 1`, `tile_col = 2` (non-zero → no dynamic resolution, behavior identical) and a closure that ignores the resolved dims.
 
 In `test_accum_buff_rank2`:
 ```rust
@@ -219,7 +219,7 @@ In `test_accum_buff_rank2`:
             vec![j_dim],
             1,
             2,
-            read_from_mu,
+            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
         );
 ```
 
@@ -232,13 +232,21 @@ In `test_accum_buff_rank3`:
             vec![j_dim, k_dim],
             1,
             2,
-            read_from_mu,
+            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
         );
 ```
 
 In `test_accum_buff_reduce_two_dims`:
 ```rust
-        run_reduction(in_stream_data, ground_truth_data, 3, vec![j_dim], 1, 2, read_from_mu);
+        run_reduction(
+            in_stream_data,
+            ground_truth_data,
+            3,
+            vec![j_dim],
+            1,
+            2,
+            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
+        );
 ```
 
 - [ ] **Step 7: Build and run the existing tests to verify no regression**
@@ -266,66 +274,20 @@ git commit -m "AccumBuff: pass tile_row/tile_col and dims to init_accum closure"
 Rewrite `run` to build accumulator slots lazily — at the first input of each reduction group — resolving any `0` dimension from that input's shape; and change `process_accum_flush` to snapshot with `std::mem::take` so the emptied buffer signals the next group to re-resolve. Driven by two new failing tests.
 
 **Files:**
-- Modify: `src/operator/accum_buff.rs` (`run`, `process_accum_flush`, and add two tests + two test helpers)
+- Modify: `src/operator/accum_buff.rs` (`run`, `process_accum_flush`, and add two tests + the `filled_tile` helper)
 
 **Interfaces:**
-- Consumes: `AccumBuff::new(..., buffer_shape, tile_row, tile_col, config, id)` and `init_accum: Fn(usize, usize) -> Tile<OT>` from Task 1.
-- Produces (test helpers): `filled_tile(rows: usize, cols: usize, v: i32, read_from_mu: bool) -> Tile<i32>` and `run_reduction_dynamic(in_stream_data, ground_truth_data, rank: u32, buffer_shape: Vec<usize>, tile_row: usize, tile_col: usize, read_from_mu: bool)` (uses a dimension-honoring `Tile::new_zero` init closure).
+- Consumes: `run_reduction(in_stream_data, ground_truth_data, rank, buffer_shape, tile_row, tile_col, init_accum)` and `AccumBuff::new(...)` from Task 1.
+- Produces (test helper): `filled_tile(rows: usize, cols: usize, v: i32, read_from_mu: bool) -> Tile<i32>`.
 
-- [ ] **Step 1: Write the two failing tests (and their helpers)**
+- [ ] **Step 1: Write the two failing tests (and the `filled_tile` helper)**
 
-In `src/operator/accum_buff.rs`, inside `mod tests`, add two helpers and two tests:
+In `src/operator/accum_buff.rs`, inside `mod tests`, add the `filled_tile` helper and two tests. Both tests reuse the `run_reduction` helper from Task 1, passing `tile_row = 0` (dynamic) and a dimension-honoring `Tile::new_zero` init closure:
 
 ```rust
     /// A `rows x cols` tile whose every element is `v`.
     fn filled_tile(rows: usize, cols: usize, v: i32, read_from_mu: bool) -> Tile<i32> {
         Tile::new(Array2::from_elem((rows, cols), v).into(), 4, read_from_mu)
-    }
-
-    /// Like `run_reduction`, but the accumulator init closure honors the
-    /// resolved `(rows, cols)` and builds a real zero tile, so dynamic
-    /// (`tile_row`/`tile_col == 0`) resolution can be exercised.
-    fn run_reduction_dynamic(
-        in_stream_data: Vec<Elem<Tile<i32>>>,
-        ground_truth_data: Vec<Elem<Buffer<Tile<i32>>>>,
-        rank: u32,
-        buffer_shape: Vec<usize>,
-        tile_row: usize,
-        tile_col: usize,
-        read_from_mu: bool,
-    ) {
-        let mut ctx = ProgramBuilder::default();
-        let (in_data_snd, in_data_rcv) = ctx.unbounded();
-        let (out_data_snd, out_data_rcv) = ctx.unbounded();
-        ctx.add_child(GeneratorContext::new(
-            || in_stream_data.into_iter(),
-            in_data_snd,
-        ));
-        ctx.add_child(AccumBuff::<SimpleEvent, _, _>::new(
-            in_data_rcv,
-            out_data_snd,
-            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                accum_fn::add(tile1, tile2, comp_bw, write_back_mu, 0)
-            }),
-            Arc::new(move |rows, cols| Tile::new_zero([rows, cols], 4, read_from_mu)),
-            rank,
-            buffer_shape,
-            tile_row,
-            tile_col,
-            AccumConfig {
-                compute_bw: 1000,
-                write_back_mu: true,
-            },
-            0, // id
-        ));
-        ctx.add_child(ApproxCheckerContext::new(
-            || ground_truth_data.into_iter(),
-            out_data_rcv,
-            tolerance_fn,
-        ));
-        ctx.initialize(Default::default())
-            .unwrap()
-            .run(Default::default());
     }
 
     /// Dynamic row (`tile_row = 0`) resolved from the first input, single
@@ -363,14 +325,14 @@ In `src/operator/accum_buff.rs`, inside `mod tests`, add two helpers and two tes
         let arr = ArcArray::from_shape_vec(vec![j_dim], slots).unwrap();
         let ground_truth_data = vec![Elem::Val(Buffer::new(arr, 0))];
 
-        run_reduction_dynamic(
+        run_reduction(
             in_stream_data,
             ground_truth_data,
             2,
             vec![j_dim],
             0, // tile_row dynamic
             cols,
-            read_from_mu,
+            Arc::new(move |r, c| Tile::new_zero([r, c], 4, read_from_mu)),
         );
     }
 
@@ -419,14 +381,14 @@ In `src/operator/accum_buff.rs`, inside `mod tests`, add two helpers and two tes
             }
         }
 
-        run_reduction_dynamic(
+        run_reduction(
             in_stream_data,
             ground_truth_data,
             2,
             vec![1],
             0, // tile_row dynamic
             cols,
-            read_from_mu,
+            Arc::new(move |r, c| Tile::new_zero([r, c], 4, read_from_mu)),
         );
     }
 ```
@@ -571,4 +533,4 @@ git commit -m "AccumBuff: resolve dynamic tile_row/tile_col per reduction group"
 
 **2. Placeholder scan:** No TBD/TODO/"handle edge cases"; all steps carry complete code. The `todo!()` items are real, intentionally-unchanged Rust. ✓
 
-**3. Type consistency:** `init_accum: Fn(usize, usize) -> Tile<OT>` is used identically in the struct (T1S1), `new` (T1S2), both call sites (T1S3), the proto driver (T1S4, `Tile<f32>`), and both test helpers (T1S5 `run_reduction`, T2S1 `run_reduction_dynamic`). `AccumBuff::new`'s argument order (`..., buffer_shape, tile_row, tile_col, config, id`) matches between the struct literal, the proto driver call, and both test helpers. `filled_tile`/`run_reduction_dynamic` signatures match their call sites. ✓
+**3. Type consistency:** `init_accum: Fn(usize, usize) -> Tile<OT>` is used identically in the struct (T1S1), `new` (T1S2), both call sites (T1S3), the proto driver (T1S4, `Tile<f32>`), and the single `run_reduction` test helper (T1S5). `AccumBuff::new`'s argument order (`..., buffer_shape, tile_row, tile_col, config, id`) matches between the struct literal, the proto driver call, and the test helper. `run_reduction`'s new `init_accum` parameter is supplied at all five call sites — three static (via `zero_init`) and two dynamic (via `Tile::new_zero`) — and `filled_tile`'s signature matches its call sites. ✓
