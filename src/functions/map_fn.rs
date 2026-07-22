@@ -1274,7 +1274,7 @@ pub fn transpose<T: Debug + Clone>(
 
     match &in_data.underlying {
         Some(arr) => (
-            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            1, // div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
             Tile::new_padded(
                 arr.t().to_owned().into_shared(),
                 in_data.bytes_per_elem,
@@ -1284,7 +1284,7 @@ pub fn transpose<T: Debug + Clone>(
         ),
         // Timing-only (blank) tile: no data, just swap the shape.
         None => (
-            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            1, // div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
             Tile::new_blank_padded(
                 vec![shape_1, shape_0],
                 in_data.bytes_per_elem,
