@@ -143,8 +143,9 @@ where
     }
 
     /// Accumulate the reduction-completing `data` into the slot at `index`,
-    /// then snapshot the full accumulator buffer, re-initialize all slots, and
-    /// return the completed buffer.
+    /// then snapshot and return the completed accumulator buffer, leaving the
+    /// slot vector empty (via `std::mem::take`) so the next reduction group
+    /// re-resolves any dynamic tile dimension and rebuilds the buffer.
     fn process_accum_flush(
         &mut self,
         data: Tile<T>,
