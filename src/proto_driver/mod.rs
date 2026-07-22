@@ -3310,7 +3310,9 @@ fn build_from_proto<'a>(
                         .clone()
                         .unwrap(),
                 ) {
-                    (Type::F32(_), Type::F32(_)) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel, so
+                    // f32/bf16 combine freely for both the loaded and ref dtypes.
+                    (Type::F32(_) | Type::Bf16(_), Type::F32(_) | Type::Bf16(_)) => {
                         make_linear_offchip_load_ref!(
                             channel_map_collection,
                             operation,
@@ -3325,9 +3327,9 @@ fn build_from_proto<'a>(
                         );
                     }
                     (
-                        Type::F32(_),
+                        Type::F32(_) | Type::Bf16(_),
                         Type::Buffer(proto_headers::graph_proto::Buffer {
-                            r#type: Some(buffer::Type::F32(_)),
+                            r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
                         }),
                     ) => {
                         make_linear_offchip_load_ref!(
@@ -3343,7 +3345,7 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
-                    (Type::F32(_), Type::MultiHot(_)) => {
+                    (Type::F32(_) | Type::Bf16(_), Type::MultiHot(_)) => {
                         make_linear_offchip_load_ref!(
                             channel_map_collection,
                             operation,
