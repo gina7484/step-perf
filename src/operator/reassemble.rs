@@ -294,7 +294,7 @@ where
                                             self.reassemble_rank + addtional_rank + 1,
                                         )
                                     } else {
-                                        Elem::ValStop(updated_x.clone(), *level)
+                                        Elem::ValStop(updated_x.clone(), self.reassemble_rank)
                                     }
                                 };
                                 self.out_stream
