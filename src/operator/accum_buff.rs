@@ -47,7 +47,7 @@ pub struct AccumBuff<E, T: DAMType, OT: DAMType> {
     in_stream: Receiver<Elem<Tile<T>>>,
     out_stream: Sender<Elem<Buffer<Tile<OT>>>>,
     func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-    init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
+    init_accum: Arc<dyn Fn(usize, usize) -> Tile<OT> + Sync + Send>,
     /// Stop level at which one complete reduction group flushes: the stop level
     /// of the outermost reduced dimension. Boundaries below `rank` keep
     /// accumulating; boundaries above it are passed through as
@@ -58,6 +58,14 @@ pub struct AccumBuff<E, T: DAMType, OT: DAMType> {
     /// `rank - buffer_shape.len()` the number of reduced dimensions. The number
     /// of accumulator slots is the product of these extents.
     buffer_shape: Vec<usize>,
+    /// Row extent of each accumulator slot tile, or `0` if the row dimension
+    /// is dynamic and resolved from the first input tile of each reduction
+    /// group.
+    tile_row: usize,
+    /// Column extent of each accumulator slot tile, or `0` if the column
+    /// dimension is dynamic and resolved from the first input tile of each
+    /// reduction group.
+    tile_col: usize,
     config: AccumConfig,
     id: u32,
     _phantom: PhantomData<E>,
@@ -78,9 +86,11 @@ where
         in_stream: Receiver<Elem<Tile<T>>>,
         out_stream: Sender<Elem<Buffer<Tile<OT>>>>,
         func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
-        init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
+        init_accum: Arc<dyn Fn(usize, usize) -> Tile<OT> + Sync + Send>,
         rank: StopType,
         buffer_shape: Vec<usize>,
+        tile_row: usize,
+        tile_col: usize,
         config: AccumConfig,
         id: u32,
     ) -> Self {
@@ -91,6 +101,8 @@ where
             init_accum,
             rank,
             buffer_shape,
+            tile_row,
+            tile_col,
             config,
             id,
             context_info: Default::default(),
@@ -174,8 +186,12 @@ where
 
         // Snapshot the completed slots and re-initialize the buffer in place.
         let n = accumulators.len();
-        let slots: Vec<Tile<OT>> =
-            std::mem::replace(accumulators, (0..n).map(|_| (self.init_accum)()).collect());
+        let slots: Vec<Tile<OT>> = std::mem::replace(
+            accumulators,
+            (0..n)
+                .map(|_| (self.init_accum)(self.tile_row, self.tile_col))
+                .collect(),
+        );
 
         let arr = ArcArray::from_shape_vec(self.buffer_shape.clone(), slots)
             .expect("AccumBuff: buffer_shape does not match the number of accumulator slots");
@@ -201,7 +217,8 @@ where
             n > 0,
             "AccumBuff: buffer_shape must describe at least one accumulator slot"
         );
-        let mut accumulators: Vec<Tile<OT>> = (0..n).map(|_| (self.init_accum)()).collect();
+        let mut accumulators: Vec<Tile<OT>> =
+            (0..n).map(|_| (self.init_accum)(self.tile_row, self.tile_col)).collect();
         let mut index: usize = 0;
         loop {
             match self.in_stream.peek_next(&self.time) {
@@ -290,7 +307,9 @@ mod tests {
         ground_truth_data: Vec<Elem<Buffer<Tile<i32>>>>,
         rank: u32,
         buffer_shape: Vec<usize>,
-        read_from_mu: bool,
+        tile_row: usize,
+        tile_col: usize,
+        init_accum: Arc<dyn Fn(usize, usize) -> Tile<i32> + Send + Sync>,
     ) {
         let mut ctx = ProgramBuilder::default();
         let (in_data_snd, in_data_rcv) = ctx.unbounded();
@@ -305,9 +324,11 @@ mod tests {
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                 accum_fn::add(tile1, tile2, comp_bw, write_back_mu, 0)
             }),
-            Arc::new(move || zero_init(read_from_mu)),
+            init_accum,
             rank,
             buffer_shape,
+            tile_row,
+            tile_col,
             AccumConfig {
                 compute_bw: 1000,
                 write_back_mu: true,
@@ -380,7 +401,9 @@ mod tests {
             ground_truth_data,
             2,
             vec![j_dim],
-            read_from_mu,
+            1,
+            2,
+            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
         );
     }
 
@@ -441,7 +464,9 @@ mod tests {
             ground_truth_data,
             3,
             vec![j_dim, k_dim],
-            read_from_mu,
+            1,
+            2,
+            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
         );
     }
 
@@ -504,6 +529,14 @@ mod tests {
         let buffer = Buffer::new(arr, 0);
         let ground_truth_data: Vec<Elem<Buffer<Tile<i32>>>> = vec![Elem::Val(buffer)];
 
-        run_reduction(in_stream_data, ground_truth_data, 3, vec![j_dim], read_from_mu);
+        run_reduction(
+            in_stream_data,
+            ground_truth_data,
+            3,
+            vec![j_dim],
+            1,
+            2,
+            Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
+        );
     }
 }

@@ -3725,17 +3725,13 @@ fn build_from_proto<'a>(
                     let tile_row = accum.tile_row as usize;
                     let tile_col = accum.tile_col as usize;
 
-                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = match accum
-                        .init_func
-                        .unwrap()
-                        .init_fn
-                        .unwrap()
-                    {
-                        init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                            Tile::new_zero([tile_row, tile_col], dtype_bytes, accum.write_back_mu)
-                        }),
-                        _ => todo!(),
-                    };
+                    let init_accum: Arc<dyn Fn(usize, usize) -> Tile<f32> + Send + Sync> =
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_zero) => Arc::new(move |rows, cols| {
+                                Tile::new_zero([rows, cols], dtype_bytes, accum.write_back_mu)
+                            }),
+                            _ => todo!(),
+                        };
 
                     add_child!(
                         builder,
@@ -3746,6 +3742,8 @@ fn build_from_proto<'a>(
                             init_accum,
                             accum.rank,
                             to_usize_vec(accum.buffer_shape),
+                            tile_row,
+                            tile_col,
                             AccumConfig {
                                 compute_bw: accum.compute_bw as u64,
                                 write_back_mu: accum.write_back_mu,
