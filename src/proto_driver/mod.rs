@@ -2049,10 +2049,11 @@ fn build_from_proto<'a>(
                         );
                     }
                     (
+                        // bf16 is modelled as Tile<f32> on the (buff_)tile_f32 channels.
                         Type::Buffer(proto_headers::graph_proto::Buffer {
-                            r#type: Some(buffer::Type::F32(_)),
+                            r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
                         }),
-                        Type::F32(_),
+                        Type::F32(_) | Type::Bf16(_),
                     ) => {
                         let in_rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             repeat_ref.input_id,
@@ -2351,7 +2352,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(f32) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let mut rcv_list = vec![];
                         for (rcv_id, stream_idx) in reassemble
                             .input_id_list
@@ -2626,7 +2628,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(f32) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let input_rcv = channel_map_collection.tile_f32.get_receiver(
                             parallelize.input_id,
                             parallelize.input_stream_idx,
@@ -2820,6 +2823,27 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_bool.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(builder, PromoteOuter::new(rcv, snd));
+                    }
+                    // Select (multihot) stream, e.g. the broadcast routing mask in the
+                    // MoE control-flow path.
+                    Type::MultiHot(_) => {
+                        let rcv = channel_map_collection.multihot.get_receiver(
+                            promote_outer.input_id,
+                            promote_outer.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                promote_outer.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.multihot.get_sender(
                             operation.id,
                             None,
                             builder,

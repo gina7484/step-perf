@@ -75,8 +75,8 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     let in1_shape_1 = in1.shape[1];
     let in2_shape_0 = in2.shape[0];
     let in2_shape_1 = in2.shape[1];
-    assert!((in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1));
-    assert!((in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1));
+    assert!((in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1), "Accum_{}", id);
+    assert!((in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1), "Accum_{}", id);
 
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
