@@ -184,14 +184,10 @@ where
         ))
         .unwrap();
 
-        // Snapshot the completed slots and re-initialize the buffer in place.
-        let n = accumulators.len();
-        let slots: Vec<Tile<OT>> = std::mem::replace(
-            accumulators,
-            (0..n)
-                .map(|_| (self.init_accum)(self.tile_row, self.tile_col))
-                .collect(),
-        );
+        // Snapshot the completed slots, leaving `accumulators` empty. The empty
+        // vec signals the run loop to re-resolve tile dimensions and rebuild the
+        // buffer from the first input of the next reduction group.
+        let slots: Vec<Tile<OT>> = std::mem::take(accumulators);
 
         let arr = ArcArray::from_shape_vec(self.buffer_shape.clone(), slots)
             .expect("AccumBuff: buffer_shape does not match the number of accumulator slots");
@@ -217,49 +213,66 @@ where
             n > 0,
             "AccumBuff: buffer_shape must describe at least one accumulator slot"
         );
-        let mut accumulators: Vec<Tile<OT>> =
-            (0..n).map(|_| (self.init_accum)(self.tile_row, self.tile_col)).collect();
+        // Accumulator slots, (re)built lazily at the start of each reduction
+        // group. An empty vec means "unresolved": the next input's shape fills
+        // in any dynamic (0) tile dimension. `process_accum_flush` empties the
+        // vec via `std::mem::take`, so each new group re-resolves.
+        let mut accumulators: Vec<Tile<OT>> = Vec::new();
         let mut index: usize = 0;
         loop {
             match self.in_stream.peek_next(&self.time) {
-                Ok(ChannelElement { time: _, data }) => match data {
-                    Elem::Val(x) => {
-                        self.process_accum(x, &mut accumulators, index);
-                        index = (index + 1) % n;
+                Ok(ChannelElement { time: _, data }) => {
+                    if accumulators.is_empty() {
+                        // Start of a reduction group: resolve dynamic tile dims
+                        // from this first input and build the buffer.
+                        let (in_rows, in_cols) = match &data {
+                            Elem::Val(t) | Elem::ValStop(t, _) => (t.shape[0], t.shape[1]),
+                        };
+                        let rows = if self.tile_row == 0 { in_rows } else { self.tile_row };
+                        let cols = if self.tile_col == 0 { in_cols } else { self.tile_col };
+                        accumulators = (0..n).map(|_| (self.init_accum)(rows, cols)).collect();
                     }
-                    Elem::ValStop(x, level) => {
-                        if level < self.rank {
-                            // Intermediate retained-dimension boundary: keep
-                            // accumulating across the reduced dimension.
+                    match data {
+                        Elem::Val(x) => {
                             self.process_accum(x, &mut accumulators, index);
                             index = (index + 1) % n;
-                        } else if level == self.rank {
-                            let out_buffer = self.process_accum_flush(x, &mut accumulators, index);
-                            index = 0;
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::Val(out_buffer),
-                                    },
-                                )
-                                .unwrap();
-                        } else {
-                            let out_buffer = self.process_accum_flush(x, &mut accumulators, index);
-                            index = 0;
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::ValStop(out_buffer, level - self.rank),
-                                    },
-                                )
-                                .unwrap();
+                        }
+                        Elem::ValStop(x, level) => {
+                            if level < self.rank {
+                                // Intermediate retained-dimension boundary: keep
+                                // accumulating across the reduced dimension.
+                                self.process_accum(x, &mut accumulators, index);
+                                index = (index + 1) % n;
+                            } else if level == self.rank {
+                                let out_buffer =
+                                    self.process_accum_flush(x, &mut accumulators, index);
+                                index = 0;
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::Val(out_buffer),
+                                        },
+                                    )
+                                    .unwrap();
+                            } else {
+                                let out_buffer =
+                                    self.process_accum_flush(x, &mut accumulators, index);
+                                index = 0;
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(out_buffer, level - self.rank),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         }
                     }
-                },
+                }
                 Err(_) => return,
             }
         }
@@ -537,6 +550,113 @@ mod tests {
             1,
             2,
             Arc::new(move |_rows, _cols| zero_init(read_from_mu)),
+        );
+    }
+
+    /// A `rows x cols` tile whose every element is `v`.
+    fn filled_tile(rows: usize, cols: usize, v: i32, read_from_mu: bool) -> Tile<i32> {
+        Tile::new(Array2::from_elem((rows, cols), v).into(), 4, read_from_mu)
+    }
+
+    /// Dynamic row (`tile_row = 0`) resolved from the first input, single
+    /// group. Reduce K=2 onto a 2-slot buffer of `2x3` tiles.
+    /// `tile(k,j)` holds `k*10 + j`. slot(j) = sum_k tile(k,j).
+    #[test]
+    fn test_accum_buff_dynamic_row_single_group() {
+        let read_from_mu = true;
+        let (rows, cols) = (2usize, 3usize);
+        let (k_dim, j_dim) = (2usize, 2usize);
+
+        // Row-major [K, J], J retained (buffer_shape=[J]), K reduced, rank=2.
+        let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
+        for k in 0..k_dim {
+            for j in 0..j_dim {
+                let tile = filled_tile(rows, cols, (k * 10 + j) as i32, read_from_mu);
+                if j == j_dim - 1 {
+                    if k == k_dim - 1 {
+                        in_stream_data.push(Elem::ValStop(tile, 2)); // end reduced == rank
+                    } else {
+                        in_stream_data.push(Elem::ValStop(tile, 1)); // end retained run
+                    }
+                } else {
+                    in_stream_data.push(Elem::Val(tile));
+                }
+            }
+        }
+
+        let slots: Vec<Tile<i32>> = (0..j_dim)
+            .map(|j| {
+                let sum: i32 = (0..k_dim).map(|k| (k * 10 + j) as i32).sum();
+                filled_tile(rows, cols, sum, read_from_mu)
+            })
+            .collect();
+        let arr = ArcArray::from_shape_vec(vec![j_dim], slots).unwrap();
+        let ground_truth_data = vec![Elem::Val(Buffer::new(arr, 0))];
+
+        run_reduction(
+            in_stream_data,
+            ground_truth_data,
+            2,
+            vec![j_dim],
+            0, // tile_row dynamic
+            cols,
+            Arc::new(move |r, c| Tile::new_zero([r, c], 4, read_from_mu)),
+        );
+    }
+
+    /// Per-group re-resolution: two passthrough groups whose tiles have
+    /// DIFFERENT row counts. buffer_shape=[1], rank=2, reduced K=2,
+    /// passthrough I=2, `tile_row = 0`. Group 0 tiles are `2x2`, group 1
+    /// tiles are `3x2`. Each emitted buffer must be sized to its own group's
+    /// first input. This PANICS under resolve-once semantics (adding a `3x2`
+    /// tile into a `2x2` accumulator), so it pins per-group resolution.
+    #[test]
+    fn test_accum_buff_dynamic_row_per_group() {
+        let read_from_mu = true;
+        let cols = 2usize;
+        let group_rows = [2usize, 3usize]; // I = 2 groups
+        let k_dim = 2usize;
+
+        // Row-major [I, K, retained(=1)]. Retained level 1, reduced K level 2,
+        // passthrough I level 3, rank=2.
+        let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
+        for i in 0..group_rows.len() {
+            for k in 0..k_dim {
+                let tile = filled_tile(group_rows[i], cols, (i * 10 + k) as i32, read_from_mu);
+                if k == k_dim - 1 {
+                    if i == group_rows.len() - 1 {
+                        in_stream_data.push(Elem::ValStop(tile, 3)); // end passthrough
+                    } else {
+                        in_stream_data.push(Elem::ValStop(tile, 2)); // end reduced == rank
+                    }
+                } else {
+                    in_stream_data.push(Elem::ValStop(tile, 1)); // end retained run
+                }
+            }
+        }
+
+        // Per group: slot0 = sum_k (i*10 + k), tile sized group_rows[i] x cols.
+        let mut ground_truth_data: Vec<Elem<Buffer<Tile<i32>>>> = Vec::new();
+        for i in 0..group_rows.len() {
+            let sum: i32 = (0..k_dim).map(|k| (i * 10 + k) as i32).sum();
+            let slot = filled_tile(group_rows[i], cols, sum, read_from_mu);
+            let arr = ArcArray::from_shape_vec(vec![1usize], vec![slot]).unwrap();
+            let buffer = Buffer::new(arr, 0);
+            if i == group_rows.len() - 1 {
+                ground_truth_data.push(Elem::ValStop(buffer, 1)); // level 3 - rank 2
+            } else {
+                ground_truth_data.push(Elem::Val(buffer));
+            }
+        }
+
+        run_reduction(
+            in_stream_data,
+            ground_truth_data,
+            2,
+            vec![1],
+            0, // tile_row dynamic
+            cols,
+            Arc::new(move |r, c| Tile::new_zero([r, c], 4, read_from_mu)),
         );
     }
 }
