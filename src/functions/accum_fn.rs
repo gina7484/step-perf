@@ -127,16 +127,19 @@ pub fn retile_col<T: Debug + Clone>(
     // This won't be used as the offset field was for a syntactic sugar.
     // We will move on to deprecating the offset field in the future.
 
-    match &in_data.underlying {
-        Some(in_arr) => {
-            let cur_arr = accumulator.underlying.clone().unwrap();
-            let cur_arr = if cur_arr.shape() == [0, 0] {
+    // Functional simulation only happens when both sides carry data. A stream
+    // can mix data-carrying and blank tiles (e.g. Reshape pads a blank stream
+    // with an `InitFn::Zero` tile, which materializes an array), so falling
+    // back to the timing-only path here is not optional.
+    match (&in_data.underlying, &accumulator.underlying) {
+        (Some(in_arr), Some(accum_arr)) => {
+            let cur_arr = if accum_arr.shape() == [0, 0] {
                 // Initial accumulation
                 Array2::from_shape_vec((in_arr.shape()[0], 0), vec![])
                     .unwrap()
                     .to_shared()
             } else {
-                cur_arr
+                accum_arr.clone()
             };
 
             (
@@ -158,7 +161,7 @@ pub fn retile_col<T: Debug + Clone>(
                     }),
             )
         }
-        None => {
+        _ => {
             if accumulator.shape != vec![0, 0] {
                 // In the initial accumulation, the accumulator's shape is [0,0]. Therefore we use in_data's shape[0].
                 // However, afterwards, we need to make sure the number of rows match.
@@ -191,16 +194,19 @@ pub fn retile_row<T: Debug + Clone>(
     let accum_offset = accumulator.offset;
     let in_offset = in_data.offset;
 
-    match &in_data.underlying {
-        Some(in_arr) => {
-            let cur_arr = accumulator.underlying.clone().unwrap();
-            let cur_arr = if cur_arr.shape() == [0, 0] {
+    // Functional simulation only happens when both sides carry data. A stream
+    // can mix data-carrying and blank tiles (e.g. Reshape pads a blank stream
+    // with an `InitFn::Zero` tile, which materializes an array), so falling
+    // back to the timing-only path here is not optional.
+    match (&in_data.underlying, &accumulator.underlying) {
+        (Some(in_arr), Some(accum_arr)) => {
+            let cur_arr = if accum_arr.shape() == [0, 0] {
                 // Initial accumulation
                 Array2::from_shape_vec((0, in_arr.shape()[1]), vec![])
                     .unwrap()
                     .to_shared()
             } else {
-                cur_arr
+                accum_arr.clone()
             };
 
             (
@@ -222,7 +228,7 @@ pub fn retile_row<T: Debug + Clone>(
                     }),
             )
         }
-        None => {
+        _ => {
             assert_eq!(in_data.shape[1], accumulator.shape[1], "Accum_{}", id);
             let new_rows = if (in_data.shape[0] == in_offset) || (in_offset == 0) {
                 in_offset
