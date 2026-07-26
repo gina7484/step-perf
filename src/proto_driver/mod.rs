@@ -146,6 +146,7 @@ macro_rules! make_linear_offchip_load_ref {
                 0,
                 $hbm_config.addr_offset,
                 $dyn_offchip_load.par_dispatch as usize,
+                $dyn_offchip_load.simulate_ramulator,
                 ref_rcv,
                 addr_snd,
                 resp_rcv,
@@ -1442,10 +1443,12 @@ fn build_from_proto<'a>(
                                 0,
                                 hbm_config.addr_offset,
                                 linear_off_chip_load.par_dispatch as usize,
+                                linear_off_chip_load.simulate_ramulator,
                                 addr_snd,
                                 resp_rcv,
                                 on_chip_snd,
                                 linear_off_chip_load.transposed,
+                                linear_off_chip_load.add_outer_singular_dim,
                                 operation.id,
                             )
                         );
@@ -1478,10 +1481,12 @@ fn build_from_proto<'a>(
                                 0,
                                 hbm_config.addr_offset,
                                 linear_off_chip_load.par_dispatch as usize,
+                                linear_off_chip_load.simulate_ramulator,
                                 addr_snd,
                                 resp_rcv,
                                 on_chip_snd,
                                 linear_off_chip_load.transposed,
+                                linear_off_chip_load.add_outer_singular_dim,
                                 operation.id,
                             )
                         );

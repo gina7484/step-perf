@@ -26,11 +26,18 @@ pub struct LinearOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
     pub par_dispatch: usize,
+    // When false, the HBM round-trip is skipped entirely: tiles go straight to
+    // the output stream, so the load costs no memory time.
+    pub simulate_ramulator: bool,
     // Sender & Receiver (DAM details)
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
     pub on_chip_snd: Sender<Elem<Tile<T>>>,
     pub transposed: bool,
+    // Whether the output stream carries a leading size-1 dim on top of
+    // `out_shape_tiled`. When false the stream is one rank shorter, so the
+    // outermost stop token closes one level lower.
+    pub add_outer_singular_dim: bool,
     pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
@@ -53,10 +60,12 @@ where
         base_addr_byte: u64,
         addr_offset: u64,
         par_dispatch: usize,
+        simulate_ramulator: bool,
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
         on_chip_snd: Sender<Elem<Tile<T>>>,
         transposed: bool,
+        add_outer_singular_dim: bool,
         id: u32,
     ) -> Self {
         let underlying = match std::fs::File::open(npy_path) {
@@ -100,10 +109,12 @@ where
             base_addr_byte,
             addr_offset,
             par_dispatch,
+            simulate_ramulator,
             addr_snd,
             resp_addr_rcv,
             on_chip_snd,
             transposed,
+            add_outer_singular_dim,
             id,
             context_info: Default::default(),
             _phantom: PhantomData,
@@ -222,6 +233,18 @@ where
                 }
             }
 
+            // Without the leading size-1 dim the output stream is one rank
+            // shorter, so the token that closes the whole tile grid drops a
+            // level. Level 0 isn't a stop token, so it becomes a plain value.
+            if !self.add_outer_singular_dim
+                && highest_stop_token == Some(self.out_shape_tiled.len() as u32)
+            {
+                highest_stop_token = match self.out_shape_tiled.len() {
+                    0 | 1 => None,
+                    n => Some((n - 1) as u32),
+                };
+            }
+
             match self.underlying {
                 Some(_) => {
                     // Add the addresses to the result list
@@ -315,29 +338,34 @@ where
                 }
             };
 
-            // Send read request to HBM
             let send_request_time = self.time.tick();
-            for (idx, addr_chunk) in tile_addrs
-                .iter()
-                .chunks(self.par_dispatch)
-                .into_iter()
-                .enumerate()
-            {
-                let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
-                self.addr_snd
-                    .enqueue(
-                        &self.time,
-                        ChannelElement {
-                            time: send_request_time + idx as u64,
-                            data: ParAddrs::new(chunk_vec),
-                        },
-                    )
-                    .unwrap();
-            }
 
-            for _i in tile_addrs {
-                // Wait until you get back the response
-                self.resp_addr_rcv.dequeue(&self.time).unwrap();
+            // When the ramulator isn't simulated, the tile is handed to the
+            // output stream without any memory traffic (zero read latency).
+            if self.simulate_ramulator {
+                // Send read request to HBM
+                for (idx, addr_chunk) in tile_addrs
+                    .iter()
+                    .chunks(self.par_dispatch)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
+                    self.addr_snd
+                        .enqueue(
+                            &self.time,
+                            ChannelElement {
+                                time: send_request_time + idx as u64,
+                                data: ParAddrs::new(chunk_vec),
+                            },
+                        )
+                        .unwrap();
+                }
+
+                for _i in tile_addrs {
+                    // Wait until you get back the response
+                    self.resp_addr_rcv.dequeue(&self.time).unwrap();
+                }
             }
 
             let read_finish_time = self.time.tick();
@@ -372,8 +400,98 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::HbmAddrEnum;
+    use super::{HbmAddrEnum, LinearOffChipLoad};
+    use crate::primitives::elem::Elem;
     use crate::primitives::tile::Tile;
+    use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle};
+    use crate::utils::events::SimpleEvent;
+    use dam::{simulation::ProgramBuilder, utility_contexts::ApproxCheckerContext};
+
+    /// Runs a 2x2 tile grid through the load and returns nothing -- the checker
+    /// asserts the emitted stop-token levels. With `add_outer_singular_dim` the
+    /// stream is rank 3 (leading size-1 dim) so the grid closes at level 2;
+    /// without it the stream is rank 2 and the same token closes at level 1.
+    fn run_stop_token_case(add_outer_singular_dim: bool, expected_last_stop: u32) {
+        type VT = f32;
+
+        const BYTES_PER_ELEM: usize = 4;
+        const TILE_ROW: usize = 32;
+        const TILE_COL: usize = 32;
+        const ADDR_OFFSET: u64 = 64;
+        const READ_FROM_MU: bool = true;
+
+        let mut ctx = ProgramBuilder::default();
+        let (addr_snd, addr_rcv) = ctx.unbounded();
+        let (resp_snd, resp_rcv) = ctx.unbounded();
+        let (snd, rcv) = ctx.unbounded();
+
+        let mut mem_context = HBMContext::new(
+            &mut ctx,
+            HBMConfig {
+                addr_offset: ADDR_OFFSET,
+                channel_num: 8,
+                per_channel_init_interval: 2,
+                per_channel_latency: 2,
+                per_channel_outstanding: 1,
+                per_channel_start_up_time: 14,
+            },
+        );
+        mem_context.add_reader(ReadBundle {
+            addr: addr_rcv,
+            resp: resp_snd,
+        });
+        ctx.add_child(mem_context);
+
+        ctx.add_child(LinearOffChipLoad::<SimpleEvent, VT>::new(
+            vec![2, 2],
+            vec![2, 1],
+            vec![2, 2],
+            "dummy_path.npy".to_string(),
+            TILE_ROW,
+            TILE_COL,
+            BYTES_PER_ELEM,
+            0,
+            ADDR_OFFSET,
+            4,
+            true, // simulate_ramulator
+            addr_snd,
+            resp_rcv,
+            snd,
+            false,
+            add_outer_singular_dim,
+            0,
+        ));
+
+        let tile = Tile::<VT>::new_blank(vec![TILE_ROW, TILE_COL], BYTES_PER_ELEM, READ_FROM_MU);
+        // Row-major walk of the 2x2 grid: each row end closes level 1, and the
+        // final tile additionally closes the whole grid.
+        let expected = vec![
+            Elem::Val(tile.clone()),
+            Elem::ValStop(tile.clone(), 1),
+            Elem::Val(tile.clone()),
+            Elem::ValStop(tile, expected_last_stop),
+        ];
+
+        ctx.add_child(ApproxCheckerContext::new(
+            move || expected.clone().into_iter(),
+            rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn stop_token_with_outer_singular_dim() {
+        run_stop_token_case(true, 2);
+    }
+
+    #[test]
+    fn stop_token_without_outer_singular_dim() {
+        run_stop_token_case(false, 1);
+    }
 
     #[test]
     fn test_generate_addr() {

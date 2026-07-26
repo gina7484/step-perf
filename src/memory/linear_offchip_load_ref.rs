@@ -26,6 +26,9 @@ pub struct LinearOffChipLoadRef<E: LoggableEventSimple, T: DAMType, R: DAMType> 
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
     pub par_dispatch: usize,
+    // When false, the HBM round-trip is skipped entirely: tiles go straight to
+    // the output stream, so the load costs no memory time.
+    pub simulate_ramulator: bool,
     // Sender & Receiver (DAM details)
     pub ref_rcv: Receiver<Elem<R>>,
     pub addr_snd: Sender<ParAddrs>,
@@ -57,6 +60,7 @@ where
         base_addr_byte: u64,
         addr_offset: u64,
         par_dispatch: usize,
+        simulate_ramulator: bool,
         ref_rcv: Receiver<Elem<R>>,
         addr_snd: Sender<ParAddrs>,
         resp_addr_rcv: Receiver<u64>,
@@ -105,6 +109,7 @@ where
             base_addr_byte,
             addr_offset,
             par_dispatch,
+            simulate_ramulator,
             ref_rcv,
             addr_snd,
             resp_addr_rcv,
@@ -307,29 +312,34 @@ where
                 }
             };
 
-            // Send read request to HBM
             let send_request_time = self.time.tick();
-            for (idx, addr_chunk) in tile_addrs
-                .iter()
-                .chunks(self.par_dispatch)
-                .into_iter()
-                .enumerate()
-            {
-                let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
-                self.addr_snd
-                    .enqueue(
-                        &self.time,
-                        ChannelElement {
-                            time: send_request_time + idx as u64,
-                            data: ParAddrs::new(chunk_vec),
-                        },
-                    )
-                    .unwrap();
-            }
 
-            for _i in tile_addrs {
-                // Wait until you get back the response
-                self.resp_addr_rcv.dequeue(&self.time).unwrap();
+            // When the ramulator isn't simulated, the tile is handed to the
+            // output stream without any memory traffic (zero read latency).
+            if self.simulate_ramulator {
+                // Send read request to HBM
+                for (idx, addr_chunk) in tile_addrs
+                    .iter()
+                    .chunks(self.par_dispatch)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let chunk_vec: Vec<u64> = addr_chunk.cloned().collect();
+                    self.addr_snd
+                        .enqueue(
+                            &self.time,
+                            ChannelElement {
+                                time: send_request_time + idx as u64,
+                                data: ParAddrs::new(chunk_vec),
+                            },
+                        )
+                        .unwrap();
+                }
+
+                for _i in tile_addrs {
+                    // Wait until you get back the response
+                    self.resp_addr_rcv.dequeue(&self.time).unwrap();
+                }
             }
 
             let read_finish_time = self.time.tick();
@@ -476,6 +486,7 @@ mod tests {
             0,
             ADDR_OFFSET,
             4,
+            true, // simulate_ramulator
             ref_rcv,
             addr_snd,
             resp_rcv,
@@ -495,6 +506,103 @@ mod tests {
 
         // =============== Input [2,2] ================
         // Create 2x2 Buffers (each are a buffer of 2x2 tiles)
+        let arr = Arc::new(
+            ArcArray::from_vec(tile_vec)
+                .into_shape_with_order((2, 3, 2, 2))
+                .unwrap(),
+        );
+        let buff = Buffer::new((*arr).clone().into_dyn(), DUMMY_CREATION_TIME);
+
+        // =============== Output Stream [2,3,2,2] ================
+        ctx.add_child(ApproxCheckerContext::new(
+            move || buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
+            rcv,
+            |x, y| x == y,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    /// Same graph as `round_trip_test_4d`, but with `simulate_ramulator =
+    /// false`: the load must emit the identical output stream while never
+    /// touching the HBM context (which is still wired up, as the proto driver
+    /// always registers the reader).
+    #[test]
+    fn round_trip_test_4d_no_ramulator() {
+        type VT = u32;
+
+        const BYTES_PER_ELEM: usize = 4;
+        const TILE_ROW: usize = 16;
+        const TILE_COL: usize = 16;
+
+        const ADDR_OFFSET: u64 = 64; // The number of bytes to read per request
+
+        let mut ctx = ProgramBuilder::default();
+        let (addr_snd, addr_rcv) = ctx.unbounded();
+        let (resp_snd, resp_rcv) = ctx.unbounded();
+        let (ref_snd, ref_rcv) = ctx.unbounded();
+        let (snd, rcv) = ctx.unbounded();
+
+        let ref_arr = Arc::new(
+            ArcArray::from_vec(vec![MultiHotN::new(vec![true, false], false); 2 * 3])
+                .into_shape_with_order((2, 3))
+                .unwrap(),
+        );
+        let ref_buff = Buffer::new((*ref_arr).clone().into_dyn(), DUMMY_CREATION_TIME);
+
+        let mut mem_context = HBMContext::new(
+            &mut ctx,
+            HBMConfig {
+                addr_offset: ADDR_OFFSET,
+                channel_num: 8,
+                per_channel_init_interval: 2,
+                per_channel_latency: 2,
+                per_channel_outstanding: 1,
+                per_channel_start_up_time: 14,
+            },
+        );
+        mem_context.add_reader(ReadBundle {
+            addr: addr_rcv,
+            resp: resp_snd,
+        });
+
+        ctx.add_child(mem_context);
+
+        ctx.add_child(GeneratorContext::new(
+            move || ref_buff.to_elem_iter().collect::<Vec<_>>().into_iter(),
+            ref_snd,
+        ));
+        ctx.add_child(LinearOffChipLoadRef::<SimpleEvent, VT, _>::new(
+            vec![2, 2],
+            vec![2, 1],
+            vec![2, 2],
+            "dummpy_path.npy".to_string(),
+            TILE_ROW,
+            TILE_COL,
+            BYTES_PER_ELEM,
+            0,
+            ADDR_OFFSET,
+            4,
+            false, // simulate_ramulator
+            ref_rcv,
+            addr_snd,
+            resp_rcv,
+            snd,
+            false,
+            0,
+            0, // trigger_rank
+        ));
+
+        const READ_FROM_MU: bool = true;
+        const DUMMY_CREATION_TIME: u64 = 0;
+        let tile_vec =
+            vec![
+                Tile::<VT>::new_blank(vec![TILE_ROW, TILE_COL], BYTES_PER_ELEM, READ_FROM_MU);
+                2 * 3 * 2 * 2
+            ];
+
         let arr = Arc::new(
             ArcArray::from_vec(tile_vec)
                 .into_shape_with_order((2, 3, 2, 2))
@@ -573,6 +681,7 @@ mod tests {
             0,
             ADDR_OFFSET,
             4,
+            true, // simulate_ramulator
             ref_rcv,
             addr_snd,
             resp_rcv,

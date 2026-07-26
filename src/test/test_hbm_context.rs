@@ -89,10 +89,12 @@ mod test {
             tensor_addrs.get("Input").unwrap().clone() as u64,
             ADDR_OFFSET,
             PAR_DISPATCH,
+            true, // simulate_ramulator
             addr_snd1,
             resp_addr_rcv1,
             repeat_snd1,
             false,
+            true, // add_outer_singular_dim
             0,
         );
 
@@ -125,10 +127,12 @@ mod test {
             tensor_addrs.get("W_Q").unwrap().clone() as u64,
             ADDR_OFFSET,
             PAR_DISPATCH,
+            true, // simulate_ramulator
             addr_snd2,
             resp_addr_rcv2,
             on_chip_snd2,
             false,
+            true, // add_outer_singular_dim
             1,
         );
 
