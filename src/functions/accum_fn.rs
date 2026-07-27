@@ -75,6 +75,30 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     let in1_shape_1 = in1.shape[1];
     let in2_shape_0 = in2.shape[0];
     let in2_shape_1 = in2.shape[1];
+
+    // On the first accumulation step the accumulator is an empty (0-row) tile:
+    // `init=zero` with a dynamic row count serializes as tile_row=0, so it starts
+    // as [0, N] (or [0, 0]). It is the additive identity, so adopt the input
+    // tile's shape instead of broadcasting against 0 rows (which would fail the
+    // row assertion below and underflow `in2_shape_0 - 1` in the add loop).
+    if in2_shape_0 == 0 {
+        let cycles = div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle);
+        return match &in1.underlying {
+            Some(in1_arr) => (
+                cycles,
+                Tile::new(in1_arr.clone(), in1.bytes_per_elem, write_back_mu),
+            ),
+            None => (
+                cycles,
+                Tile::new_blank(
+                    vec![in1_shape_0, in1_shape_1],
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                ),
+            ),
+        };
+    }
+
     assert!((in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1), "Accum_{}", id);
     assert!((in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1), "Accum_{}", id);
 
@@ -268,5 +292,38 @@ pub fn signal_req_all_read<T: Debug>(
             ),
         ),
         None => (1, Tile::new_blank(vec![1, 1], 8, write_back_mu)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::ArcArray2;
+
+    // Regression: in the MoE dynamic-M add-accumulation path the accumulator is
+    // initialised via `init=zero` with a dynamic row count, which serializes as
+    // tile_row=0 -> a [0, N] tile. On the first step `add` must treat it as the
+    // additive identity and adopt the input tile's shape, rather than panicking
+    // on the row-broadcast assertion (or underflowing `in2_shape_0 - 1`).
+    #[test]
+    fn add_empty_accumulator_adopts_input_shape() {
+        let in1: Tile<f32> = Tile::new(ArcArray2::from_elem((13, 64), 1.0f32), 4, false);
+        let acc: Tile<f32> = Tile::new_zero([0, 64], 4, false);
+        let (_cycles, out) = add(&in1, &acc, 6400, false, 122);
+        assert_eq!(out.shape, vec![13, 64]);
+        let out_arr = out.underlying.expect("output should carry data");
+        assert_eq!(out_arr.shape(), &[13, 64]);
+        assert!(out_arr.iter().all(|&v| v == 1.0f32));
+    }
+
+    // A subsequent step (matching shapes) still accumulates elementwise.
+    #[test]
+    fn add_matching_shapes_accumulates() {
+        let in1: Tile<f32> = Tile::new(ArcArray2::from_elem((13, 64), 1.0f32), 4, false);
+        let acc: Tile<f32> = Tile::new(ArcArray2::from_elem((13, 64), 2.0f32), 4, false);
+        let (_cycles, out) = add(&in1, &acc, 6400, false, 122);
+        let out_arr = out.underlying.expect("output should carry data");
+        assert_eq!(out_arr.shape(), &[13, 64]);
+        assert!(out_arr.iter().all(|&v| v == 3.0f32));
     }
 }
