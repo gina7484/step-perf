@@ -540,6 +540,11 @@ fn build_from_proto<'a>(
                                 functions::map_fn::row_wise_append(tile1, tile2, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::ColWiseAppend(col_wise_append) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::col_wise_append(tile1, tile2, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::Div(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::div(tile1, tile2, comp_bw, write_back_mu)
@@ -1111,6 +1116,7 @@ fn build_from_proto<'a>(
                             wack,
                             operation.id,
                             random_off_chip_store.ack_based_on_waddr,
+                            random_off_chip_store.transposed,
                         ));
 
                         mem_context.add_writer(WriteBundle {

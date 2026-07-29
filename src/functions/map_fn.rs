@@ -637,6 +637,63 @@ pub fn row_wise_append<T: Debug + Default + Clone>(
     }
 }
 
+pub fn col_wise_append<T: Debug + Default + Clone>(
+    in_data: &Tile<T>,
+    data_to_append: &Tile<T>,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+    assert_eq!(data_to_append.shape.len(), 2);
+    // data_to_append arrives in the same row-major (K, D) convention as
+    // RowWiseAppend's rhs (K new items, D features each, D matching
+    // in_data's row count) and is transposed here into (D, K) before being
+    // spliced into in_data as K new columns. This lets callers append a
+    // natural per-token feature row without a separate STeP-graph-level
+    // transpose.
+    assert_eq!(in_data.shape[0], data_to_append.shape[1]);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let n_new = data_to_append.shape[0];
+
+    let offset = in_data.offset;
+    assert!(
+        offset + n_new <= shape_1,
+        "should have enough space to append new columns"
+    );
+
+    match (&in_data.underlying, &data_to_append.underlying) {
+        (Some(arr), Some(arr_to_append)) => {
+            // Create a mutable copy of the original array
+            let mut result = arr.to_owned();
+            let col_to_append = arr_to_append.t();
+
+            // Copy the transposed data into the slice starting at offset
+            let mut slice = result.slice_mut(ndarray::s![.., offset..offset + n_new]);
+            slice.assign(&col_to_append);
+
+            (
+                1,
+                Tile::new_padded(
+                    result.into_shared(),
+                    in_data.bytes_per_elem,
+                    write_back_mu,
+                    (offset + n_new) as usize,
+                ),
+            )
+        }
+        _ => (
+            1,
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                (offset + n_new) as usize,
+            ),
+        ),
+    }
+}
+
 pub fn cache_write_addr_gen(
     idx: &Tile<u64>,
     len: &Tile<u64>,
@@ -837,6 +894,52 @@ mod tests {
         println!("output arr: {:?}", out_data.underlying.as_ref().unwrap());
         assert_eq!(out_data.offset, 4);
         assert_eq!(flop_count, 1);
+    }
+
+    #[test]
+    fn test_col_wise_append() {
+        // in_data: (D=4 rows, N=6 cols), columns 0..3 already filled,
+        // columns 3..6 blank (0.0), offset=3 (append at column 3 next).
+        let arr = ndarray::Array2::from_shape_fn(
+            (4, 6),
+            |(i, j)| if j < 3 { i as f32 + j as f32 } else { 0.0 },
+        );
+        println!("input arr: {:?}", arr);
+        let in_data = Tile::new_padded(arr.to_shared(), 4, false, 3);
+
+        // data_to_append arrives in the natural (1, D) row-major shape
+        // (same convention as RowWiseAppend's rhs), D=4 matching in_data's
+        // row count - it should be transposed internally into a (4,1)
+        // column before being spliced in.
+        let arr_to_append = ndarray::Array2::from_shape_fn((1, 4), |(_, j)| 10.0 * (j as f32 + 1.0));
+        let data_to_append = Tile::new_padded(arr_to_append.to_shared(), 4, false, 1);
+        println!(
+            "data_to_append: {:?}",
+            data_to_append.underlying.as_ref().unwrap()
+        );
+
+        let (flop_count, out_data) = col_wise_append(&in_data, &data_to_append, false);
+        let out_arr = out_data.underlying.as_ref().unwrap();
+        println!("output arr: {:?}", out_arr);
+
+        assert_eq!(out_data.offset, 4);
+        assert_eq!(flop_count, 1);
+        // Column 3 should now hold the transposed data_to_append row:
+        // [10, 20, 30, 40] down rows 0..4, not written across row 0.
+        for i in 0..4 {
+            assert_eq!(out_arr[[i, 3]], 10.0 * (i as f32 + 1.0));
+        }
+        // Untouched columns must be unchanged.
+        for j in 0..3 {
+            for i in 0..4 {
+                assert_eq!(out_arr[[i, j]], i as f32 + j as f32);
+            }
+        }
+        for j in 4..6 {
+            for i in 0..4 {
+                assert_eq!(out_arr[[i, j]], 0.0);
+            }
+        }
     }
 
     #[test]

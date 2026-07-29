@@ -35,6 +35,7 @@ pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub wack: Option<TracingSender<Elem<bool>>>,
     pub ack_based_on_waddr: bool, // if true, the ack stream's shape will be based on the waddr,
     // otherwise it is based on the wdata.
+    pub transposed: bool,
     pub id: u32,
     // Phantom data for the event type
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
@@ -65,6 +66,7 @@ where
         wack: Option<TracingSender<Elem<bool>>>,
         id: u32,
         ack_based_on_waddr: bool,
+        transposed: bool,
     ) -> Self {
         let underlying = match npy_path.clone() {
             Some(file_path) => {
@@ -116,6 +118,7 @@ where
             wack,
             id,
             ack_based_on_waddr,
+            transposed,
             _phantom: PhantomData,
             context_info: Default::default(),
         };
@@ -219,8 +222,17 @@ where
                     start_col..start_col + self.tile_col
                 ]);
 
-                // Copy the tile data to the tensor
-                tile_slice.assign(tile_data);
+                // Copy the tile data to the tensor. If the incoming tile is
+                // transposed (delivered as [tile_col, tile_row] to mirror a
+                // transposed RandomOffChipLoad), transpose it back to the
+                // canonical [tile_row, tile_col] byte order before writing,
+                // so a later non-transposed read of the same address is
+                // unaffected.
+                if self.transposed {
+                    tile_slice.assign(&tile_data.t());
+                } else {
+                    tile_slice.assign(tile_data);
+                }
             }
             None => return,
         }
