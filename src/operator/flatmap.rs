@@ -1259,6 +1259,12 @@ mod tests {
             0,                                     // id
         ));
 
+        // Observed output stream (12 elements), as `addr:stop_level` -- every
+        // element carries a stop token here because the inner dim has size 1:
+        //      6:1   7:1   8:2     <- expert 2, i.e. 2*3 + {0,1,2}
+        //      3:1   4:1   5:2     <- expert 1
+        //      9:1  10:1  11:2     <- expert 3
+        //     21:1  22:1  23:2     <- expert 7
         let mut gold = vec![];
         for expert in experts {
             for i in 0..NUM_TILE_PER_EXPERT {
@@ -1331,6 +1337,11 @@ mod tests {
             (5, Some(2)),
         ];
 
+        // Observed output stream (12 elements), as `addr:stop_level` with `-` for
+        // a plain `Val`. The addresses are non-monotonic because the stride
+        // transposes the read:
+        //     100:-  103:1  101:-  104:1  102:-  105:2   <- base 0, 100 + {0,3,1,4,2,5}
+        //     112:-  115:1  113:-  116:1  114:-  117:2   <- base 2, 100 + 2*6 + same
         let mut gold = vec![];
         for base in bases {
             for (offset, stop) in view.iter() {
@@ -1383,6 +1394,9 @@ mod tests {
             0,                          // id
         ));
 
+        // Observed output stream (4 elements), as `addr:stop_level`:
+        //     0:1  1:2     <- input Val(0):        grid closes at level 2
+        //     2:1  3:3     <- input ValStop(1, 1): level 2 folded into level 3
         let gold = vec![
             // base 0, no input stop: the grid closes at level 2.
             Elem::ValStop(addr_tile(0), 1),
