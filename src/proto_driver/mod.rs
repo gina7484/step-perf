@@ -23,7 +23,9 @@ use crate::operator::accum::{Accum, AccumConfig};
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
-use crate::operator::flatmap::{CacheReadAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify};
+use crate::operator::flatmap::{
+    CacheReadAddrGen, DynAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify,
+};
 use crate::operator::flatten::Flatten;
 use crate::operator::map::{
     BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot, UnaryMapToMultiHot,
@@ -1730,7 +1732,9 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 tiles ride the f32 channel map; the element width
+                    // comes from `dtype_bytes`, same as every other op.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let raddr = channel_map_collection.tile_u64.get_receiver(
                             random_off_chip_load.raddr_id,
                             random_off_chip_load.raddr_stream_idx,
@@ -3962,6 +3966,61 @@ fn build_from_proto<'a>(
                     ),
                 }
             }
+            OpType::DynAddrGen(dyn_addr_gen) => {
+                // The view walk is dtype-independent; only how the base index is
+                // read off one input element differs, so each arm just picks the
+                // channel the input stream lives on.
+                macro_rules! make_dyn_addr_gen {
+                    ($chan:ident) => {{
+                        let rcv = channel_map_collection.$chan.get_receiver(
+                            dyn_addr_gen.input_id,
+                            dyn_addr_gen.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                dyn_addr_gen.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            DynAddrGen::<_>::new(
+                                rcv,
+                                snd,
+                                dyn_addr_gen
+                                    .tensor_shape_tiled
+                                    .iter()
+                                    .map(|x| *x as usize)
+                                    .collect(),
+                                dyn_addr_gen.stride.iter().map(|x| *x as usize).collect(),
+                                dyn_addr_gen
+                                    .out_shape_tiled
+                                    .iter()
+                                    .map(|x| *x as usize)
+                                    .collect(),
+                                dyn_addr_gen.addr_base,
+                                operation.id,
+                            )
+                        );
+                    }};
+                }
+
+                match dyn_addr_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::MultiHot(_) => make_dyn_addr_gen!(multihot),
+                    Type::U64(_) => make_dyn_addr_gen!(tile_u64),
+                    Type::I64(_) => make_dyn_addr_gen!(tile_i64),
+                    dtype => panic!(
+                        "Unsupported data type for DynAddrGen operation {:?}",
+                        dtype
+                    ),
+                }
+            }
             OpType::CacheReadAddrGen(cache_read_addr_gen) => {
                 let idx_rcv = channel_map_collection.tile_u64.get_receiver(
                     cache_read_addr_gen.idx_id,
@@ -4379,7 +4438,8 @@ fn build_from_proto<'a>(
             }
             OpType::EagerMerge(eager_merge) => {
                 match eager_merge.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::F32(_) => {
+                    // bf16 tiles ride the f32 channel map, same as every other op.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let mut rcv_list = vec![];
                         for (rcv_id, stream_idx) in eager_merge
                             .input_id_list

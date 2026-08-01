@@ -31,6 +31,8 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
 
+    let offset = accum_offset(in1, in2);
+
     match (&in1.underlying, &in2.underlying) {
         (Some(in1_arr), Some(in2_arr)) => {
             let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
@@ -48,17 +50,41 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
             }
             (
                 div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
             )
         }
         _ => (
             div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-            Tile::new_blank(
+            Tile::new_blank_padded(
                 vec![out_shape_0, out_shape_1],
                 in1.bytes_per_elem,
                 write_back_mu,
+                offset,
             ),
         ),
+    }
+}
+
+/// Valid-row count for one accumulation step.
+///
+/// `in1` is the incoming data tile and `in2` the running accumulator, so the
+/// padding is described by `in1`: the accumulator covers the same rows and, on
+/// the first step, is a neutral `init` tile whose `offset` is meaningless (an
+/// `InitFn::Zero` tile reports the *full* height). Taking `max` of the two would
+/// therefore let that neutral tile unmask rows the input marked as padding.
+/// Only when `in1` is a broadcast row against a taller accumulator does `in2`
+/// carry the row count. Mirrors `map_accum_fn::matmul`, which also keys the
+/// output offset off `in1`.
+fn accum_offset<T: Debug + Clone>(in1: &Tile<T>, in2: &Tile<T>) -> usize {
+    if in1.shape[0] == 1 && in2.shape[0] != 1 {
+        in2.offset
+    } else {
+        in1.offset
     }
 }
 
@@ -86,14 +112,20 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
         return match &in1.underlying {
             Some(in1_arr) => (
                 cycles,
-                Tile::new(in1_arr.clone(), in1.bytes_per_elem, write_back_mu),
+                Tile::new_padded(
+                    in1_arr.clone(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    in1.offset,
+                ),
             ),
             None => (
                 cycles,
-                Tile::new_blank(
+                Tile::new_blank_padded(
                     vec![in1_shape_0, in1_shape_1],
                     in1.bytes_per_elem,
                     write_back_mu,
+                    in1.offset,
                 ),
             ),
         };
@@ -104,6 +136,8 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
 
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
+
+    let offset = accum_offset(in1, in2);
 
     match (&in1.underlying, &in2.underlying) {
         (Some(in1_arr), Some(in2_arr)) => {
@@ -122,15 +156,21 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
             }
             (
                 div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
             )
         }
         _ => (
             div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-            Tile::new_blank(
+            Tile::new_blank_padded(
                 vec![out_shape_0, out_shape_1],
                 in1.bytes_per_elem,
                 write_back_mu,
+                offset,
             ),
         ),
     }
@@ -299,6 +339,58 @@ pub fn signal_req_all_read<T: Debug>(
 mod tests {
     use super::*;
     use ndarray::ArcArray2;
+
+    // Regression: an add-accumulation step must not resurrect the rows that the
+    // input tile marks as padding. In the MoE flow `Reshape` pads a short expert
+    // chunk and `Accum(RetileRow)` records the real row count in `offset`; if the
+    // downstream `Accum(fn: Add)` rebuilds its output with a full-height offset,
+    // every consumer (notably `RetileStreamify(filter_mask=true)`) sees a fully
+    // valid tile and the padding is silently unmasked.
+    #[test]
+    fn add_preserves_input_offset() {
+        const TILE_ROW: usize = 64;
+        const TILE_COL: usize = 512;
+        const VALID_ROWS: usize = 16;
+
+        // Timing-only path: both tiles are blank.
+        let in1: Tile<f32> = Tile::new_blank_padded(vec![TILE_ROW, TILE_COL], 2, false, VALID_ROWS);
+        let acc: Tile<f32> = Tile::new_zero([TILE_ROW, TILE_COL], 2, false);
+        let (_cycles, out) = add(&in1, &acc, 6400, false, 128);
+        assert_eq!(out.offset, VALID_ROWS, "blank path dropped the offset");
+
+        // Functional path: both tiles carry data.
+        let in1: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_elem((TILE_ROW, TILE_COL), 1.0f32),
+            2,
+            false,
+            VALID_ROWS,
+        );
+        let acc: Tile<f32> = Tile::new_zero([TILE_ROW, TILE_COL], 2, false);
+        let (_cycles, out) = add(&in1, &acc, 6400, false, 128);
+        assert_eq!(out.offset, VALID_ROWS, "functional path dropped the offset");
+    }
+
+    #[test]
+    fn mul_preserves_input_offset() {
+        const TILE_ROW: usize = 64;
+        const TILE_COL: usize = 512;
+        const VALID_ROWS: usize = 16;
+
+        let in1: Tile<f32> = Tile::new_blank_padded(vec![TILE_ROW, TILE_COL], 2, false, VALID_ROWS);
+        let acc: Tile<f32> = Tile::new_zero([TILE_ROW, TILE_COL], 2, false);
+        let (_cycles, out) = mul(&in1, &acc, 6400, false, 128);
+        assert_eq!(out.offset, VALID_ROWS, "blank path dropped the offset");
+
+        let in1: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_elem((TILE_ROW, TILE_COL), 1.0f32),
+            2,
+            false,
+            VALID_ROWS,
+        );
+        let acc: Tile<f32> = Tile::new_zero([TILE_ROW, TILE_COL], 2, false);
+        let (_cycles, out) = mul(&in1, &acc, 6400, false, 128);
+        assert_eq!(out.offset, VALID_ROWS, "functional path dropped the offset");
+    }
 
     // Regression: in the MoE dynamic-M add-accumulation path the accumulator is
     // initialised via `init=zero` with a dynamic row count, which serializes as
