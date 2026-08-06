@@ -79,6 +79,7 @@ impl<T: DAMType> Context for PromoteOuter<T> {
                 },
                 Err(_) => return,
             }
+            self.time.incr_cycles(1);
         }
     }
 }
