@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::operator::accum::{Accum, AccumConfig};
+use crate::operator::accum_row_stat::{AccumRowStat, AccumRowStatConfig, RowStat};
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
@@ -174,6 +175,19 @@ fn get_chan_depth(
         Some(custom_depth_chan[&id])
     } else {
         base_depth
+    }
+}
+
+/// Recognize the accumulation functions that need [`AccumRowStat`] instead of
+/// [`Accum`]. Returns the statistic and the number of elements reduced per row,
+/// where `None` means the operator counts them at run time.
+fn row_stat_of(accum_fn: &accum_func::AccumFn) -> Option<(RowStat, Option<u64>)> {
+    match accum_fn {
+        accum_func::AccumFn::MeanStatic(mean) => Some((RowStat::Mean, Some(mean.count))),
+        accum_func::AccumFn::VarStatic(var) => Some((RowStat::Var, Some(var.count))),
+        accum_func::AccumFn::MeanDyn(_) => Some((RowStat::Mean, None)),
+        accum_func::AccumFn::VarDyn(_) => Some((RowStat::Var, None)),
+        _ => None,
     }
 }
 
@@ -3510,83 +3524,118 @@ fn build_from_proto<'a>(
                         builder,
                         get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
-                    let func: Arc<
-                        dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
-                    > = match accum.func.unwrap().accum_fn.unwrap() {
-                        accum_func::AccumFn::Add(_) => {
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::accum_fn::add(
-                                    tile1,
-                                    tile2,
-                                    comp_bw,
-                                    write_back_mu,
-                                    operation.id,
-                                )
-                            })
-                        }
-                        accum_func::AccumFn::RetileRow(_) => {
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::accum_fn::retile_row(
-                                    tile1,
-                                    tile2,
-                                    comp_bw,
-                                    write_back_mu,
-                                    operation.id,
-                                )
-                            })
-                        }
-                        accum_func::AccumFn::RetileCol(_) => {
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::accum_fn::retile_col(
-                                    tile1,
-                                    tile2,
-                                    comp_bw,
-                                    write_back_mu,
-                                    operation.id,
-                                )
-                            })
-                        }
-                        _ => todo!(),
-                    };
+                    let accum_fn_pb = accum.func.clone().unwrap().accum_fn.unwrap();
 
-                    let tile_row = accum.tile_row as usize;
-                    let tile_col = accum.tile_col as usize;
+                    // The row statistics collapse each tile's columns alongside
+                    // the reduced ranks, so the accumulator is not the output
+                    // and `Accum`'s fold cannot express them. They get their own
+                    // operator; every other function falls through to `Accum`.
+                    if let Some((stat, count)) = row_stat_of(&accum_fn_pb) {
+                        add_child!(
+                            builder,
+                            AccumRowStat::<SimpleEvent>::new(
+                                rcv,
+                                snd,
+                                accum.rank,
+                                dtype_bytes,
+                                AccumRowStatConfig {
+                                    compute_bw: accum.compute_bw as u64,
+                                    write_back_mu: accum.write_back_mu,
+                                    stat,
+                                    count,
+                                },
+                                operation.id,
+                            )
+                        );
+                    } else {
+                        let func: Arc<
+                            dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>)
+                                + Send
+                                + Sync,
+                        > = match accum_fn_pb {
+                            accum_func::AccumFn::Add(_) => {
+                                Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                    functions::accum_fn::add(
+                                        tile1,
+                                        tile2,
+                                        comp_bw,
+                                        write_back_mu,
+                                        operation.id,
+                                    )
+                                })
+                            }
+                            accum_func::AccumFn::RetileRow(_) => {
+                                Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                    functions::accum_fn::retile_row(
+                                        tile1,
+                                        tile2,
+                                        comp_bw,
+                                        write_back_mu,
+                                        operation.id,
+                                    )
+                                })
+                            }
+                            accum_func::AccumFn::RetileCol(_) => {
+                                Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                    functions::accum_fn::retile_col(
+                                        tile1,
+                                        tile2,
+                                        comp_bw,
+                                        write_back_mu,
+                                        operation.id,
+                                    )
+                                })
+                            }
+                            _ => todo!(),
+                        };
 
-                    let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = match accum
-                        .init_func
-                        .unwrap()
-                        .init_fn
-                        .unwrap()
-                    {
-                        init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                            Tile::new_zero([tile_row, tile_col], dtype_bytes, accum.write_back_mu)
-                        }),
-                        init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                            Tile::new_empty([tile_row, tile_col], dtype_bytes, accum.write_back_mu)
-                        }),
-                        init_func::InitFn::DynEmpty(_) => Arc::new(move || {
-                            // DynEmpty means the row or the column size is known at run-time.
-                            // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
-                            Tile::new_empty([0, 0], dtype_bytes, accum.write_back_mu)
-                        }),
-                        _ => todo!(),
-                    };
+                        let tile_row = accum.tile_row as usize;
+                        let tile_col = accum.tile_col as usize;
 
-                    add_child!(
-                        builder,
-                        Accum::<SimpleEvent, _, _>::new(
-                            rcv,
-                            snd,
-                            func,
-                            init_accum,
-                            accum.rank,
-                            AccumConfig {
-                                compute_bw: accum.compute_bw as u64,
-                                write_back_mu: accum.write_back_mu,
-                            },
-                            operation.id,
-                        )
-                    );
+                        let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = match accum
+                            .init_func
+                            .unwrap()
+                            .init_fn
+                            .unwrap()
+                        {
+                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                Tile::new_zero(
+                                    [tile_row, tile_col],
+                                    dtype_bytes,
+                                    accum.write_back_mu,
+                                )
+                            }),
+                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                Tile::new_empty(
+                                    [tile_row, tile_col],
+                                    dtype_bytes,
+                                    accum.write_back_mu,
+                                )
+                            }),
+                            init_func::InitFn::DynEmpty(_) => Arc::new(move || {
+                                // DynEmpty means the row or the column size is known at run-time.
+                                // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
+                                Tile::new_empty([0, 0], dtype_bytes, accum.write_back_mu)
+                            }),
+                            _ => todo!(),
+                        };
+
+                        add_child!(
+                            builder,
+                            Accum::<SimpleEvent, _, _>::new(
+                                rcv,
+                                snd,
+                                func,
+                                init_accum,
+                                accum.rank,
+                                AccumConfig {
+                                    compute_bw: accum.compute_bw as u64,
+                                    write_back_mu: accum.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
+                    }
                 }
                 (Type::F32(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.tile_f32.get_receiver(

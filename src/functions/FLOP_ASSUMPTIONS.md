@@ -48,14 +48,14 @@ shape `(max(r1,r2), max(c1,c2))`; for unary/constant ops it is the input shape.
 | `u64_to_multihot` | **1 cycle** | encoding conversion |
 | `to_const_int` | **1 cycle** | constant materialization |
 
-## `accum_fn.rs` — matmul-with-accumulator
+## `map_accum_fn.rs` — matmul-with-accumulator
 
 | Function | FLOPs assumed | Per-element rate / rationale |
 |---|---|---|
 | `matmul` | `2*M*K*N` | Same as map matmul; the accumulator add (`acc + map`) is **not** counted separately |
 | `dyn_matmul` | `2*M*K*N` | Same; first tile may skip accumulation but FLOP count is unchanged |
 
-## `map_accum_fn.rs` — accumulating map / retile ops
+## `accum_fn.rs` — accumulating / retile ops
 
 | Function | FLOPs assumed | Per-element rate / rationale |
 |---|---|---|
@@ -64,6 +64,29 @@ shape `(max(r1,r2), max(c1,c2))`; for unary/constant ops it is the input shape.
 | `retile_col` | **0 cycles** | concat/regrouping — explicit `TODO` to add grouping cost |
 | `retile_row` | **0 cycles** | concat/regrouping — explicit `TODO` |
 | `signal_req_all_read` | **1 cycle** | control signal |
+
+## `operator/accum_row_stat.rs` — row-wise mean / variance
+
+These do not live in `accum_fn.rs`: they collapse each tile's columns as well as
+the reduced stream ranks, so the accumulator is not the output and they need
+their own operator rather than an `Accum` fold function. Costs are charged in
+two places — once per input tile folded, and once more on the tile that closes
+the reduction group.
+
+| Function | Fold FLOPs per `[R, C]` tile | Finalize FLOPs | Rationale |
+|---|---|---|---|
+| `MeanStatic`, `MeanDyn` | `R*C` | `R` | 1 add per element into a running sum, then one divide per row |
+| `VarStatic`, `VarDyn` | `3*R*C` | `4*R` | `x*x`, `sum += x`, `sumsq += x*x` per element; then `sum/n`, `mean*mean`, `sumsq/n`, subtract, per row |
+
+The `Static` and `Dyn` variants cost the same: the element count only changes
+whether the divisor is a baked constant or a run-time counter, and this model
+already prices `div` and `mul` identically at 1 FLOP per element.
+
+⚠️ The **value** is computed with Welford's algorithm, not the `sum`/`sumsq`
+datapath priced above, so that `m2 >= 0` holds by construction and a
+near-constant row cannot emit a negative variance into a downstream `rsqrt`.
+Cycle counts here are derived from tile shapes and are independent of how the
+value is computed, so the two can differ without affecting the cost model.
 
 ## Summary of the assumptions
 
