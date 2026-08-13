@@ -259,6 +259,134 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
+pub fn sub<T: Debug + ndarray::LinalgScalar + Default>(
+    in1: &Tile<T>,
+    in2: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    assert_eq!(in2.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+    let in2_shape_0 = in2.shape[0];
+    let in2_shape_1 = in2.shape[1];
+    assert!((in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1));
+    assert!((in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1));
+
+    let out_shape_0 = in1_shape_0.max(in2_shape_0);
+    let out_shape_1 = in1_shape_1.max(in2_shape_1);
+
+    let offset = if in1_shape_0 == in2_shape_0 {
+        in1.offset.max(in2.offset)
+    } else if in1_shape_0 == 1 {
+        in2.offset
+    } else {
+        // in2_shape_0 == 1
+        in1.offset
+    };
+
+    match (&in1.underlying, &in2.underlying) {
+        (Some(arr1), Some(arr2)) => {
+            let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
+            for i in 0..out_shape_0 {
+                for j in 0..out_shape_1 {
+                    let i0 = i.min(in1_shape_0 - 1);
+                    let j0 = j.min(in1_shape_1 - 1);
+                    let val1 = arr1.get((i0, j0)).unwrap();
+                    let i1 = i.min(in2_shape_0 - 1);
+                    let j1 = j.min(in2_shape_1 - 1);
+                    let val2 = arr2.get((i1, j1)).unwrap();
+                    let out_val = val1.sub(*val2);
+                    out_arr[[i, j]] = out_val;
+                }
+            }
+            (
+                div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
+        }
+        (_, _) => (
+            div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![out_shape_0, out_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+pub fn max<T: Debug + ndarray::LinalgScalar + Default + PartialOrd>(
+    in1: &Tile<T>,
+    in2: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    assert_eq!(in2.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+    let in2_shape_0 = in2.shape[0];
+    let in2_shape_1 = in2.shape[1];
+    assert!((in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1));
+    assert!((in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1));
+
+    let out_shape_0 = in1_shape_0.max(in2_shape_0);
+    let out_shape_1 = in1_shape_1.max(in2_shape_1);
+
+    let offset = if in1_shape_0 == in2_shape_0 {
+        in1.offset.max(in2.offset)
+    } else if in1_shape_0 == 1 {
+        in2.offset
+    } else {
+        // in2_shape_0 == 1
+        in1.offset
+    };
+
+    match (&in1.underlying, &in2.underlying) {
+        (Some(arr1), Some(arr2)) => {
+            let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
+            for i in 0..out_shape_0 {
+                for j in 0..out_shape_1 {
+                    let i0 = i.min(in1_shape_0 - 1);
+                    let j0 = j.min(in1_shape_1 - 1);
+                    let val1 = *arr1.get((i0, j0)).unwrap();
+                    let i1 = i.min(in2_shape_0 - 1);
+                    let j1 = j.min(in2_shape_1 - 1);
+                    let val2 = *arr2.get((i1, j1)).unwrap();
+                    let out_val = if val1 > val2 { val1 } else { val2 };
+                    out_arr[[i, j]] = out_val;
+                }
+            }
+            (
+                div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
+        }
+        (_, _) => (
+            div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![out_shape_0, out_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
 pub fn add_constant<T: Debug + ndarray::LinalgScalar + Default>(
     in1: &Tile<T>,
     constant: T,
@@ -479,6 +607,57 @@ pub fn row_wise_sum<T: Debug + num_traits::Num + Copy>(
                 div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
                 Tile::new_padded(
                     row_sums.to_shared(),
+                    in_data.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
+        }
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, 1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+pub fn row_wise_max<T: Debug + PartialOrd + Copy>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => {
+            // Row-wise max: reduce each row's shape_1 columns down to a
+            // single running max, mirroring row_wise_sum's shape but with
+            // no generic "max" method on this file's Num-only bound, so
+            // fold by hand instead of ndarray's sum_axis.
+            let mut out_arr = ndarray::Array2::from_elem((shape_0, 1), arr[[0, 0]]);
+            for i in 0..shape_0 {
+                let mut row_max = arr[[i, 0]];
+                for j in 1..shape_1 {
+                    let v = arr[[i, j]];
+                    if v > row_max {
+                        row_max = v;
+                    }
+                }
+                out_arr[[i, 0]] = row_max;
+            }
+            (
+                div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
                     in_data.bytes_per_elem,
                     write_back_mu,
                     offset,

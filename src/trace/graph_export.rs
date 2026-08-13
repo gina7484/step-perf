@@ -112,6 +112,7 @@ fn extract_inputs(op: &Operation) -> Vec<(u32, u32)> {
                 push_input(&mut inputs, input_id2, s.stream_idx2);
             }
         }
+        OpType::TakeLast(t) => push_input(&mut inputs, t.input_id, t.stream_idx),
     }
     inputs
 }
@@ -169,6 +170,7 @@ fn op_display(op: &Operation) -> String {
         Some(OpType::StaticReassemble(_)) => "StaticReassemble",
         Some(OpType::Reshape(_)) => "Reshape",
         Some(OpType::Scan(_)) => "Scan",
+        Some(OpType::TakeLast(_)) => "TakeLast",
         None => "Unknown",
     }
     .to_string()

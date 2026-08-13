@@ -218,6 +218,11 @@ fn build_from_proto<'a>(
                                 functions::map_fn::row_wise_sum(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::RowWiseMax(row_wise_max) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::row_wise_max(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::MulConstant(mul_constant) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::mul_constant(
@@ -553,6 +558,16 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Sub(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::sub(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Max(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::max(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         e => {
