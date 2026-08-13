@@ -105,6 +105,13 @@ fn extract_inputs(op: &Operation) -> Vec<(u32, u32)> {
         | OpType::CacheReadAddrGen(_)
         | OpType::FilterLastTile(_)
         | OpType::Reshape(_) => {}
+        OpType::Scan(s) => {
+            push_input(&mut inputs, s.input_id1, s.stream_idx1);
+            push_input(&mut inputs, s.ctr_id, s.ctr_stream_idx);
+            if let Some(input_id2) = s.input_id2 {
+                push_input(&mut inputs, input_id2, s.stream_idx2);
+            }
+        }
     }
     inputs
 }
@@ -161,6 +168,7 @@ fn op_display(op: &Operation) -> String {
         Some(OpType::FilterLastTile(_)) => "FilterLastTile",
         Some(OpType::StaticReassemble(_)) => "StaticReassemble",
         Some(OpType::Reshape(_)) => "Reshape",
+        Some(OpType::Scan(_)) => "Scan",
         None => "Unknown",
     }
     .to_string()
