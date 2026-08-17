@@ -36,6 +36,7 @@ use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::{Reshape, ReshapeNoPadStream, ReshapePadStream};
+use crate::operator::scan::{Scan, ScanConfig};
 use crate::operator::static_reassemble::StaticReassemble;
 use crate::operator::streamify::{StaticStreamify, Streamify};
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
@@ -188,6 +189,35 @@ fn row_stat_of(accum_fn: &accum_func::AccumFn) -> Option<(RowStat, Option<u64>)>
         accum_func::AccumFn::MeanDyn(_) => Some((RowStat::Mean, None)),
         accum_func::AccumFn::VarDyn(_) => Some((RowStat::Var, None)),
         _ => None,
+    }
+}
+
+/// Build one of [`Scan`]'s fold closures over `f32` tiles (the channel bf16 also
+/// rides on). Mirrors the fold list in the `OpType::Accum` arm, which `Scan`
+/// reuses verbatim — the two operators differ in *when* they emit, not in how
+/// they fold.
+fn scan_fold_f32(
+    accum_fn: accum_func::AccumFn,
+    id: u32,
+) -> Arc<dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync> {
+    match accum_fn {
+        accum_func::AccumFn::Add(_) => Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+            functions::accum_fn::add(tile1, tile2, comp_bw, write_back_mu, id)
+        }),
+        accum_func::AccumFn::Mul(_) => Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+            functions::accum_fn::mul(tile1, tile2, comp_bw, write_back_mu, id)
+        }),
+        accum_func::AccumFn::RetileRow(_) => {
+            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                functions::accum_fn::retile_row(tile1, tile2, comp_bw, write_back_mu, id)
+            })
+        }
+        accum_func::AccumFn::RetileCol(_) => {
+            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                functions::accum_fn::retile_col(tile1, tile2, comp_bw, write_back_mu, id)
+            })
+        }
+        e => panic!("Unsupported scan function type {:?}", e),
     }
 }
 
@@ -3767,6 +3797,101 @@ fn build_from_proto<'a>(
                 }
                 _ => todo!(),
             },
+            OpType::Scan(scan) => {
+                match scan.dtype_a.clone().unwrap().r#type.clone().unwrap() {
+                    // The proto carries a single dtype: input1, input2 and the
+                    // output all share it. bf16 is modelled as Tile<f32> on the
+                    // tile_f32 channel, so it rides this arm too.
+                    Type::F32(_) | Type::Bf16(_) => {
+                        let rcv1 = channel_map_collection.tile_f32.get_receiver(
+                            scan.input_id1,
+                            scan.stream_idx1,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                scan.input_id1,
+                                channel_depth,
+                            ),
+                        );
+                        let rcv2 = if let Some(input_id2) = scan.input_id2 {
+                            Some(channel_map_collection.tile_f32.get_receiver(
+                                input_id2,
+                                scan.stream_idx2,
+                                builder,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    input_id2,
+                                    channel_depth,
+                                ),
+                            ))
+                        } else {
+                            None
+                        };
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+
+                        let fn1 = scan_fold_f32(
+                            scan.fn1.clone().unwrap().accum_fn.unwrap(),
+                            operation.id,
+                        );
+                        let fn2 = scan
+                            .fn2
+                            .clone()
+                            .map(|fn2| scan_fold_f32(fn2.accum_fn.unwrap(), operation.id));
+
+                        let tile_row = scan.tile_row as usize;
+                        let tile_col = scan.tile_col as usize;
+                        let write_back_mu = scan.write_back_mu;
+
+                        let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
+                            match scan.init_func.unwrap().init_fn.unwrap() {
+                                init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                    Tile::new_zero(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        write_back_mu,
+                                    )
+                                }),
+                                init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                    Tile::new_empty(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        write_back_mu,
+                                    )
+                                }),
+                                init_func::InitFn::DynEmpty(_) => Arc::new(move || {
+                                    // DynEmpty means the row or the column size is known at
+                                    // run-time, so the first fold sizes the accumulator.
+                                    Tile::new_empty([0, 0], dtype_bytes, write_back_mu)
+                                }),
+                            };
+
+                        add_child!(
+                            builder,
+                            Scan::<SimpleEvent, _, _>::new(
+                                rcv1,
+                                rcv2,
+                                snd,
+                                fn1,
+                                fn2,
+                                init_accum,
+                                scan.rank,
+                                ScanConfig {
+                                    compute_bw: scan.compute_bw as u64,
+                                    write_back_mu: scan.write_back_mu,
+                                    inclusive: scan.inclusive,
+                                },
+                                operation.id,
+                            )
+                        );
+                    }
+                    e => panic!("Unsupported data type {:?} for Scan", e),
+                }
+            }
             OpType::AccumBuffer(accum) => match (
                 accum.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 accum.dtype_b.clone().unwrap().r#type.clone().unwrap(),
