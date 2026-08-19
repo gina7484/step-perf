@@ -207,6 +207,12 @@ fn scan_fold_f32(
         accum_func::AccumFn::Mul(_) => Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
             functions::accum_fn::mul(tile1, tile2, comp_bw, write_back_mu, id)
         }),
+        accum_func::AccumFn::Max(_) => Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+            functions::accum_fn::max(tile1, tile2, comp_bw, write_back_mu, id)
+        }),
+        accum_func::AccumFn::Last(_) => Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+            functions::accum_fn::last(tile1, tile2, comp_bw, write_back_mu, id)
+        }),
         accum_func::AccumFn::RetileRow(_) => {
             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                 functions::accum_fn::retile_row(tile1, tile2, comp_bw, write_back_mu, id)
@@ -297,6 +303,11 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::RowWiseSum(row_wise_sum) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::row_wise_sum(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::RowWiseMax(row_wise_max) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::row_wise_max(tile, comp_bw, write_back_mu)
                             })
                         }
                         elemto_elem_func::ElemElemFn::MulConstant(mul_constant) => {
@@ -1148,6 +1159,11 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Div(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::div(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Sub(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::sub(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         elemto_elem_func::ElemElemFn::Add(_) => {
@@ -3594,6 +3610,28 @@ fn build_from_proto<'a>(
                                     )
                                 })
                             }
+                            accum_func::AccumFn::Max(_) => {
+                                Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                    functions::accum_fn::max(
+                                        tile1,
+                                        tile2,
+                                        comp_bw,
+                                        write_back_mu,
+                                        operation.id,
+                                    )
+                                })
+                            }
+                            accum_func::AccumFn::Last(_) => {
+                                Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                    functions::accum_fn::last(
+                                        tile1,
+                                        tile2,
+                                        comp_bw,
+                                        write_back_mu,
+                                        operation.id,
+                                    )
+                                })
+                            }
                             accum_func::AccumFn::RetileRow(_) => {
                                 Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                     functions::accum_fn::retile_row(
@@ -3630,6 +3668,13 @@ fn build_from_proto<'a>(
                         {
                             init_func::InitFn::Zero(_zero) => Arc::new(move || {
                                 Tile::new_zero(
+                                    [tile_row, tile_col],
+                                    dtype_bytes,
+                                    accum.write_back_mu,
+                                )
+                            }),
+                            init_func::InitFn::NegInf(_) => Arc::new(move || {
+                                Tile::new_neg_inf(
                                     [tile_row, tile_col],
                                     dtype_bytes,
                                     accum.write_back_mu,
@@ -3851,6 +3896,13 @@ fn build_from_proto<'a>(
                             match scan.init_func.unwrap().init_fn.unwrap() {
                                 init_func::InitFn::Zero(_zero) => Arc::new(move || {
                                     Tile::new_zero(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        write_back_mu,
+                                    )
+                                }),
+                                init_func::InitFn::NegInf(_) => Arc::new(move || {
+                                    Tile::new_neg_inf(
                                         [tile_row, tile_col],
                                         dtype_bytes,
                                         write_back_mu,

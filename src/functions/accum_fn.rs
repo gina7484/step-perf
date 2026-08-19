@@ -176,6 +176,140 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
+/// Element-wise maximum fold. Mirrors `add`, but the identity is -inf (supplied by
+/// `InitFn::NegInf`) rather than 0, so an all-negative reduction group still folds
+/// to its true maximum.
+pub fn max<T: Debug + Copy + Default + PartialOrd>(
+    in1: &Tile<T>,
+    in2: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+    id: u32,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    assert_eq!(in2.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+    let in2_shape_0 = in2.shape[0];
+    let in2_shape_1 = in2.shape[1];
+
+    // Same guard as `add`: a dynamically-sized accumulator starts as a 0-row tile.
+    // -inf is the identity for max, so adopt the input tile's shape rather than
+    // broadcasting against 0 rows (which would underflow `in2_shape_0 - 1` below).
+    if in2_shape_0 == 0 {
+        let cycles = div_ceil((in1_shape_0 * in1_shape_1) as u64, flop_per_cycle);
+        return match &in1.underlying {
+            Some(in1_arr) => (
+                cycles,
+                Tile::new_padded(
+                    in1_arr.clone(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    in1.offset,
+                ),
+            ),
+            None => (
+                cycles,
+                Tile::new_blank_padded(
+                    vec![in1_shape_0, in1_shape_1],
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    in1.offset,
+                ),
+            ),
+        };
+    }
+
+    assert!(
+        (in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1),
+        "Accum_{}",
+        id
+    );
+    assert!(
+        (in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1),
+        "Accum_{}",
+        id
+    );
+
+    let out_shape_0 = in1_shape_0.max(in2_shape_0);
+    let out_shape_1 = in1_shape_1.max(in2_shape_1);
+
+    let offset = accum_offset(in1, in2);
+
+    match (&in1.underlying, &in2.underlying) {
+        (Some(in1_arr), Some(in2_arr)) => {
+            let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
+            for i in 0..out_shape_0 {
+                for j in 0..out_shape_1 {
+                    let i0 = i.min(in1_shape_0 - 1);
+                    let j0 = j.min(in1_shape_1 - 1);
+                    let val1 = *in1_arr.get((i0, j0)).unwrap();
+                    let i1 = i.min(in2_shape_0 - 1);
+                    let j1 = j.min(in2_shape_1 - 1);
+                    let val2 = *in2_arr.get((i1, j1)).unwrap();
+                    out_arr[[i, j]] = if val2 > val1 { val2 } else { val1 };
+                }
+            }
+            (
+                div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
+        }
+        _ => (
+            div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![out_shape_0, out_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+/// Keeps only the last element of each reduction group: the fold discards the
+/// accumulator and returns the incoming tile, so `Accum` enqueues whatever arrived
+/// last in the group at the stop level. A stream `[1, 2 s1, 3, 4 s2]` reduces to
+/// `[2, 4 s1]`.
+///
+/// Pure data movement -- no ALU work -- so it charges 0 cycles, the same
+/// convention as `retile_row`/`retile_col`.
+pub fn last<T: Debug + Clone>(
+    in_data: &Tile<T>,
+    _accumulator: &Tile<T>,
+    _flop_per_cycle: u64,
+    write_back_mu: bool,
+    _id: u32,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    match &in_data.underlying {
+        Some(arr) => (
+            0,
+            Tile::new_padded(
+                arr.clone(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                in_data.offset,
+            ),
+        ),
+        None => (
+            0,
+            Tile::new_blank_padded(
+                in_data.shape.clone(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                in_data.offset,
+            ),
+        ),
+    }
+}
+
 pub fn retile_col<T: Debug + Clone>(
     in_data: &Tile<T>,
     accumulator: &Tile<T>,
@@ -417,5 +551,126 @@ mod tests {
         let out_arr = out.underlying.expect("output should carry data");
         assert_eq!(out_arr.shape(), &[13, 64]);
         assert!(out_arr.iter().all(|&v| v == 3.0f32));
+    }
+
+    // -inf is the identity for a max fold, so a group of entirely negative values
+    // must still reduce to its true maximum. A zero-seeded accumulator would clamp
+    // this to 0.0 and silently break an online softmax's running max.
+    #[test]
+    fn max_folds_all_negative_group() {
+        let acc: Tile<f32> = Tile::new_neg_inf([2, 2], 4, false);
+        assert!(acc
+            .underlying
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|v| *v == f32::NEG_INFINITY));
+
+        let in1: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_shape_vec((2, 2), vec![-5.0f32, -1.0, -3.0, -9.0]).unwrap(),
+            4,
+            false,
+            2,
+        );
+        let (cycles, out) = max(&in1, &acc, 4, false, 7);
+        assert_eq!(
+            out.underlying.unwrap().as_slice().unwrap(),
+            &[-5.0f32, -1.0, -3.0, -9.0]
+        );
+        assert_eq!(cycles, div_ceil(2 * 2, 4));
+
+        // Second step: fold in a tile that only wins in some positions.
+        let acc: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_shape_vec((2, 2), vec![-5.0f32, -1.0, -3.0, -9.0]).unwrap(),
+            4,
+            false,
+            2,
+        );
+        let in2: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_shape_vec((2, 2), vec![-7.0f32, -0.5, -3.0, -100.0]).unwrap(),
+            4,
+            false,
+            2,
+        );
+        let (_, out) = max(&in2, &acc, 4, false, 7);
+        assert_eq!(
+            out.underlying.unwrap().as_slice().unwrap(),
+            &[-5.0f32, -0.5, -3.0, -9.0]
+        );
+    }
+
+    // Mirrors `add`: a dynamically-sized accumulator arrives as a 0-row tile on the
+    // first step and must adopt the input's shape instead of broadcasting against it.
+    #[test]
+    fn max_adopts_input_shape_when_accumulator_empty() {
+        let in1: Tile<f32> = Tile::new_padded(ArcArray2::from_elem((4, 8), -2.0f32), 2, false, 3);
+        let acc: Tile<f32> = Tile::new_empty([0, 0], 2, false);
+        let (_, out) = max(&in1, &acc, 16, false, 7);
+        assert_eq!(out.shape, vec![4, 8]);
+        assert_eq!(out.offset, 3);
+        assert!(out.underlying.unwrap().iter().all(|v| *v == -2.0f32));
+
+        // Timing-only path keeps the same shape/offset behaviour.
+        let blank: Tile<f32> = Tile::new_blank_padded(vec![4, 8], 2, false, 3);
+        let acc: Tile<f32> = Tile::new_empty([0, 0], 2, false);
+        let (_, out) = max(&blank, &acc, 16, false, 7);
+        assert!(out.underlying.is_none());
+        assert_eq!(out.shape, vec![4, 8]);
+        assert_eq!(out.offset, 3);
+    }
+
+    // Broadcasting a [R,1] accumulator against an [R,C] input, as `Accum` does when
+    // folding a row-wise statistic back over full tiles.
+    #[test]
+    fn max_broadcasts_single_column() {
+        let in1: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_shape_vec((2, 3), vec![1.0f32, 5.0, 2.0, 9.0, 0.0, 4.0]).unwrap(),
+            4,
+            false,
+            2,
+        );
+        let acc: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_shape_vec((2, 1), vec![3.0f32, 1.0]).unwrap(),
+            4,
+            false,
+            2,
+        );
+        let (_, out) = max(&in1, &acc, 8, false, 7);
+        let out_arr = out.underlying.unwrap();
+        assert_eq!(out_arr.shape(), &[2, 3]);
+        assert_eq!(
+            out_arr.as_slice().unwrap(),
+            &[3.0f32, 5.0, 3.0, 9.0, 1.0, 4.0]
+        );
+    }
+
+    // The fold discards the accumulator entirely and costs no compute -- the
+    // stream-level behaviour it produces is covered by
+    // `operator::accum::tests::test_last_keeps_final_element_of_each_group`.
+    #[test]
+    fn last_returns_input_and_ignores_accumulator() {
+        let in1: Tile<f32> = Tile::new_padded(
+            ArcArray2::from_shape_vec((2, 2), vec![1.0f32, 2.0, 3.0, 4.0]).unwrap(),
+            4,
+            false,
+            2,
+        );
+        let acc: Tile<f32> = Tile::new_padded(ArcArray2::from_elem((2, 2), 99.0f32), 4, false, 2);
+        let (cycles, out) = last(&in1, &acc, 8, true, 5);
+        assert_eq!(cycles, 0, "last is data movement, not compute");
+        assert_eq!(
+            out.underlying.unwrap().as_slice().unwrap(),
+            &[1.0f32, 2.0, 3.0, 4.0]
+        );
+        assert_eq!(out.offset, 2, "the input's offset must survive");
+        assert!(out.read_from_mu, "write_back_mu must reach the output tile");
+
+        // Timing-only path: shape and offset still come from the input.
+        let blank: Tile<f32> = Tile::new_blank_padded(vec![4, 8], 2, false, 3);
+        let (cycles, out) = last(&blank, &acc, 8, false, 5);
+        assert_eq!(cycles, 0);
+        assert!(out.underlying.is_none());
+        assert_eq!(out.shape, vec![4, 8]);
+        assert_eq!(out.offset, 3);
     }
 }

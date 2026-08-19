@@ -132,6 +132,70 @@ pub fn div<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
+pub fn sub<T: Debug + ndarray::LinalgScalar + Default>(
+    in1: &Tile<T>,
+    in2: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in1.shape.len(), 2);
+    assert_eq!(in2.shape.len(), 2);
+    let in1_shape_0 = in1.shape[0];
+    let in1_shape_1 = in1.shape[1];
+    let in2_shape_0 = in2.shape[0];
+    let in2_shape_1 = in2.shape[1];
+    assert!((in1_shape_0 == in2_shape_0) || (in1_shape_0 == 1) || (in2_shape_0 == 1));
+    assert!((in1_shape_1 == in2_shape_1) || (in1_shape_1 == 1) || (in2_shape_1 == 1));
+
+    let out_shape_0 = in1_shape_0.max(in2_shape_0);
+    let out_shape_1 = in1_shape_1.max(in2_shape_1);
+
+    let offset = if in1_shape_0 == in2_shape_0 {
+        in1.offset.max(in2.offset)
+    } else if in1_shape_0 == 1 {
+        in2.offset
+    } else {
+        // in2_shape_0 == 1
+        in1.offset
+    };
+
+    match (&in1.underlying, &in2.underlying) {
+        (Some(arr1), Some(arr2)) => {
+            let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
+            for i in 0..out_shape_0 {
+                for j in 0..out_shape_1 {
+                    let i0 = i.min(in1_shape_0 - 1);
+                    let j0 = j.min(in1_shape_1 - 1);
+                    let val1 = arr1.get((i0, j0)).unwrap();
+                    let i1 = i.min(in2_shape_0 - 1);
+                    let j1 = j.min(in2_shape_1 - 1);
+                    let val2 = arr2.get((i1, j1)).unwrap();
+                    let out_val = val1.sub(*val2);
+                    out_arr[[i, j]] = out_val;
+                }
+            }
+            (
+                div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    out_arr.to_shared(),
+                    in1.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
+        }
+        (_, _) => (
+            div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![out_shape_0, out_shape_1],
+                in1.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
 pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
     in1: &Tile<T>,
     in2: &Tile<T>,
@@ -550,6 +614,57 @@ pub fn row_wise_sum<T: Debug + num_traits::Num + Copy>(
                 div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
                 Tile::new_padded(
                     row_sums.to_shared(),
+                    in_data.bytes_per_elem,
+                    write_back_mu,
+                    offset,
+                ),
+            )
+        }
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, 1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+pub fn row_wise_max<T: Debug + PartialOrd + Copy>(
+    in_data: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(in_data.shape.len(), 2);
+
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => {
+            // Perform row-wise max: reduce each row to get a [shape_0, 1] array.
+            // A compare-and-select costs the same as an add in the roofline below,
+            // so the cycle count matches `row_wise_sum`.
+            let row_maxes: Vec<T> = arr
+                .rows()
+                .into_iter()
+                .map(|row| {
+                    row.iter()
+                        .copied()
+                        .reduce(|a, b| if b > a { b } else { a })
+                        .expect("row_wise_max requires each row to be non-empty")
+                })
+                .collect();
+            let row_maxes = Array2::from_shape_vec((shape_0, 1), row_maxes)
+                .expect("row_wise_max: failed to reshape row maxima to [rows, 1]");
+            (
+                div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(
+                    row_maxes.to_shared(),
                     in_data.bytes_per_elem,
                     write_back_mu,
                     offset,
@@ -1309,6 +1424,84 @@ mod tests {
 
         println!("output arr: {:?}", out_data.underlying.unwrap());
         assert_eq!(flop_count, 2);
+    }
+
+    #[test]
+    fn test_sub() {
+        let arr1 = ndarray::Array2::from_shape_vec((2, 2), vec![5.0f32, 1.0, -3.0, 0.0]).unwrap();
+        let arr2 = ndarray::Array2::from_shape_vec((2, 2), vec![2.0f32, 4.0, -8.0, 0.5]).unwrap();
+        let in1 = Tile::new_padded(arr1.to_shared(), 4, false, 2);
+        let in2 = Tile::new_padded(arr2.to_shared(), 4, false, 2);
+        let (flop_count, out_data) = sub(&in1, &in2, 2, false);
+
+        let out = out_data.underlying.unwrap();
+        assert_eq!(out.shape(), &[2, 2]);
+        // Order matters: lhs - rhs, not the other way round.
+        assert_eq!(out.as_slice().unwrap(), &[3.0f32, -3.0, 5.0, -0.5]);
+        assert_eq!(flop_count, div_ceil(2 * 2, 2));
+    }
+
+    #[test]
+    fn test_sub_broadcasts_and_blank() {
+        // [2,3] - [2,1]: broadcasting the row-wise max out of an online softmax.
+        let arr1 =
+            ndarray::Array2::from_shape_vec((2, 3), vec![1.0f32, 5.0, 2.0, 9.0, 0.0, 4.0]).unwrap();
+        let arr2 = ndarray::Array2::from_shape_vec((2, 1), vec![5.0f32, 9.0]).unwrap();
+        let in1 = Tile::new_padded(arr1.to_shared(), 4, false, 2);
+        let in2 = Tile::new_padded(arr2.to_shared(), 4, false, 2);
+        let (_, out_data) = sub(&in1, &in2, 8, false);
+        let out = out_data.underlying.unwrap();
+        assert_eq!(out.shape(), &[2, 3]);
+        assert_eq!(
+            out.as_slice().unwrap(),
+            &[-4.0f32, 0.0, -3.0, 0.0, -9.0, -5.0]
+        );
+
+        // Timing-only path: one blank input means no data, but shape/cycles hold.
+        let blank: Tile<f32> = Tile::new_blank_padded(vec![2, 3], 2, false, 1);
+        let in2 = Tile::new_padded(arr2.to_shared(), 2, false, 1);
+        let (flop_count, out_data) = sub(&blank, &in2, 8, true);
+        assert!(out_data.underlying.is_none());
+        assert_eq!(out_data.shape, vec![2, 3]);
+        assert_eq!(flop_count, div_ceil(2 * 3, 8));
+    }
+
+    #[test]
+    fn test_row_wise_max() {
+        // Row i holds [i, i+1, i+2, i+3], so the max of row i is i + 3.
+        let arr = ndarray::Array2::from_shape_fn((3, 4), |(i, j)| i as f32 + j as f32);
+        let in_data = Tile::new_padded(arr.to_shared(), 4, false, 3);
+        let (flop_count, out_data) = row_wise_max(&in_data, 6, false);
+
+        let out = out_data.underlying.unwrap();
+        assert_eq!(out.shape(), &[3, 1]);
+        assert_eq!(out.as_slice().unwrap(), &[3.0f32, 4.0, 5.0]);
+        // div_ceil(3 * 4, 6) == 2, same roofline as row_wise_sum
+        assert_eq!(flop_count, 2);
+        assert_eq!(out_data.offset, 3);
+        assert_eq!(out_data.bytes_per_elem, 4);
+    }
+
+    #[test]
+    fn test_row_wise_max_negative_and_blank() {
+        // All-negative rows: the reduction must not seed from zero.
+        let arr =
+            ndarray::Array2::from_shape_vec((2, 3), vec![-5.0f32, -1.0, -3.0, -9.0, -7.0, -8.0])
+                .unwrap();
+        let in_data = Tile::new_padded(arr.to_shared(), 2, true, 0);
+        let (_, out_data) = row_wise_max(&in_data, 4, true);
+        assert_eq!(
+            out_data.underlying.unwrap().as_slice().unwrap(),
+            &[-1.0f32, -7.0]
+        );
+
+        // Timing-only ("blank") tile: no data, but shape/cycles still collapse to [R, 1].
+        let blank: Tile<f32> = Tile::new_blank_padded(vec![2, 3], 2, false, 1);
+        let (flop_count, out_data) = row_wise_max(&blank, 4, true);
+        assert!(out_data.underlying.is_none());
+        assert_eq!(out_data.shape, vec![2, 1]);
+        assert_eq!(out_data.offset, 1);
+        assert_eq!(flop_count, div_ceil(2 * 3, 4));
     }
 
     #[test]

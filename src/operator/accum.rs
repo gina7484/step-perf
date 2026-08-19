@@ -177,6 +177,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
         functions::accum_fn,
         operator::accum::{Accum, AccumConfig},
@@ -186,7 +187,101 @@ mod tests {
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
     use ndarray::Array2;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+
+    /// Collects everything the operator emits, so a test can assert on the whole
+    /// output stream. An `ApproxCheckerContext` only walks the ground truth and
+    /// would accept extra trailing elements, but "one output per reduction group"
+    /// is part of what a fold's stream behaviour has to get right.
+    #[context_macro]
+    struct Collect {
+        chan: Receiver<Elem<Tile<i32>>>,
+        out: Arc<Mutex<Vec<Elem<Tile<i32>>>>>,
+    }
+
+    impl Collect {
+        fn new(chan: Receiver<Elem<Tile<i32>>>, out: Arc<Mutex<Vec<Elem<Tile<i32>>>>>) -> Self {
+            let ctx = Self {
+                chan,
+                out,
+                context_info: Default::default(),
+            };
+            ctx.chan.attach_receiver(&ctx);
+            ctx
+        }
+    }
+
+    impl Context for Collect {
+        fn run(&mut self) {
+            loop {
+                match self.chan.dequeue(&self.time) {
+                    Ok(ChannelElement { time: _, data }) => self.out.lock().unwrap().push(data),
+                    Err(_) => return,
+                }
+                self.time.incr_cycles(1);
+            }
+        }
+    }
+
+    /// A 1x1 tile holding `v`.
+    fn scalar_tile(v: i32) -> Tile<i32> {
+        Tile::new(
+            Array2::from_shape_vec((1, 1), vec![v]).unwrap().to_shared(),
+            4,
+            false,
+        )
+    }
+
+    // The user-facing property: reducing rank 1 with `last` keeps only the final
+    // element of each group. `[1, 2 s1, 3, 4 s2]` -> `[2, 4 s1]`.
+    #[test]
+    fn test_last_keeps_final_element_of_each_group() {
+        let in_stream_data = vec![
+            Elem::Val(scalar_tile(1)),
+            Elem::ValStop(scalar_tile(2), 1),
+            Elem::Val(scalar_tile(3)),
+            Elem::ValStop(scalar_tile(4), 2),
+        ];
+
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(|| in_stream_data.into_iter(), in_snd));
+        ctx.add_child(Accum::<SimpleEvent, _, _>::new(
+            in_rcv,
+            out_snd,
+            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                accum_fn::last(tile1, tile2, comp_bw, write_back_mu, 0)
+            }),
+            Arc::new(move || Tile::new_zero([1, 1], 4, false)),
+            1, // rank
+            AccumConfig {
+                compute_bw: 1000,
+                write_back_mu: false,
+            },
+            0, // id
+        ));
+        let collected = Arc::new(Mutex::new(Vec::new()));
+        ctx.add_child(Collect::new(out_rcv, collected.clone()));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+
+        let out = collected.lock().unwrap().clone();
+        // Exactly two elements: the outer stop survives, the inner one is consumed.
+        assert_eq!(out.len(), 2, "expected [2, 4 s1], got {:?}", out);
+        match &out[0] {
+            Elem::Val(tile) => assert_eq!(tile.underlying.as_ref().unwrap()[[0, 0]], 2),
+            other => panic!("expected Val(2), got {:?}", other),
+        }
+        match &out[1] {
+            Elem::ValStop(tile, level) => {
+                assert_eq!(tile.underlying.as_ref().unwrap()[[0, 0]], 4);
+                assert_eq!(*level, 1, "rank 1 should consume one stop level");
+            }
+            other => panic!("expected ValStop(4, 1), got {:?}", other),
+        }
+    }
 
     fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
         match (a, b) {

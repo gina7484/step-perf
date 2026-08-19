@@ -127,6 +127,26 @@ impl<T: Clone> Tile<T> {
 }
 
 // Functions to initialize tiles
+impl<T: Clone + num::Float> Tile<T> {
+    /// Returns a tile filled with negative infinity (All rows are active. No padding.)
+    ///
+    /// This is the identity for a max reduction: seeding with zero would clamp an
+    /// all-negative reduction group to 0. Bounded to `num::Float` because the
+    /// integer tile types have no -inf representation.
+    /// * Tile Shape: arr_shape
+    /// * Tile content: all -inf
+    /// * Offset: arr_shape[0]
+    pub fn new_neg_inf(arr_shape: [usize; 2], bytes_per_elem: usize, read_from_mu: bool) -> Self {
+        Self {
+            shape: arr_shape.to_vec(),
+            bytes_per_elem: bytes_per_elem,
+            read_from_mu: read_from_mu,
+            underlying: Some(ndarray::ArcArray2::from_elem(arr_shape, T::neg_infinity())),
+            offset: arr_shape[0],
+        }
+    }
+}
+
 impl<T: Clone + num::Zero> Tile<T> {
     /// Returns a zero tile (All rows are active. No padding.)
     /// * Tile Shape: arr_shape
