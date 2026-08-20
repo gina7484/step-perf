@@ -1,4 +1,5 @@
 pub mod accum;
+pub mod accum_buff;
 pub mod bufferize;
 pub mod map;
 pub mod map_accum;
@@ -15,8 +16,8 @@ pub mod partition;
 pub mod promote;
 pub mod reassemble;
 pub mod repeat;
-pub mod static_reassemble;
 pub mod reshape;
+pub mod static_reassemble;
 pub mod streamify;
 
 use dam::types::StaticallySized;

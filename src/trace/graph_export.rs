@@ -113,6 +113,8 @@ fn extract_inputs(op: &Operation) -> Vec<(u32, u32)> {
             }
         }
         OpType::TakeLast(t) => push_input(&mut inputs, t.input_id, t.stream_idx),
+        OpType::StaticStreamify(s) => push_input(&mut inputs, s.input_id, s.stream_idx),
+        OpType::AccumBuffer(a) => push_input(&mut inputs, a.input_id, a.stream_idx),
     }
     inputs
 }
@@ -171,6 +173,8 @@ fn op_display(op: &Operation) -> String {
         Some(OpType::Reshape(_)) => "Reshape",
         Some(OpType::Scan(_)) => "Scan",
         Some(OpType::TakeLast(_)) => "TakeLast",
+        Some(OpType::StaticStreamify(_)) => "StaticStreamify",
+        Some(OpType::AccumBuffer(_)) => "AccumBuffer",
         None => "Unknown",
     }
     .to_string()

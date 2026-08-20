@@ -2,6 +2,7 @@ use std::{collections::HashMap, fmt, marker::PhantomData};
 
 use crate::primitives::{buffer::Buffer, elem::Elem, select::MultiHotN, tile::Tile};
 use crate::trace::TracingSender;
+use crate::utils::graph_dump;
 use dam::{
     channel::{Receiver, Sender},
     simulation::ProgramBuilder,
@@ -116,6 +117,19 @@ where
         builder: &mut ProgramBuilder<'a>,
         capacity: Option<usize>,
     ) -> Receiver<Elem<T>> {
+        let rcv = self.get_receiver_inner(id, idx, builder, capacity);
+        // Graph-dump hook: record the channel the calling node receives on.
+        graph_dump::capture_channel(rcv.id(), graph_dump::Dir::In, idx, std::any::type_name::<T>());
+        rcv
+    }
+
+    fn get_receiver_inner(
+        &mut self,
+        id: u32,
+        idx: Option<u32>,
+        builder: &mut ProgramBuilder<'a>,
+        capacity: Option<usize>,
+    ) -> Receiver<Elem<T>> {
         // if id == 272 {
         //     println!("get_sender: {:?}", idx);
         //     println!("{:?}", self.map.as_ref().unwrap().get(&id));
@@ -166,7 +180,10 @@ where
                             }
                         }
                     }
-                    _ => panic!("Check whether your id or ChannelMap is correct"),
+                    e => panic!(
+                        "{:?} - Check whether your id or ChannelMap is correct: id={}, idx={:?}",
+                        e, id, idx
+                    ),
                 },
                 None => match chan_map.remove(&id) {
                     // Single
@@ -191,17 +208,38 @@ where
                             }
                         }
                     }
-                    _ => panic!("Check whether your id or ChannelMap is correct"),
+                    _ => panic!(
+                        "Check whether your id or ChannelMap is correct: id={}, idx={:?}",
+                        id, idx
+                    ),
                 },
             },
             None => {
                 self.instantiate();
-                self.get_receiver(id, idx, builder, capacity)
+                self.get_receiver_inner(id, idx, builder, capacity)
             }
         }
     }
 
     pub fn get_sender(
+        &mut self,
+        id: u32,
+        idx: Option<u32>,
+        builder: &mut ProgramBuilder<'a>,
+        capacity: Option<usize>,
+    ) -> TracingSender<Elem<T>>
+    where
+        Elem<T>: DAMType + Clone + std::fmt::Debug + crate::trace::TraceChannelPayload,
+    {
+        let snd = self.get_sender_inner(id, idx, builder, capacity);
+        // Graph-dump hook: record the channel the calling node sends on.
+        // `idx` is passed through unmodified, not `idx.unwrap_or(0)`:
+        // `EntryKind::from_idx` reads Some/None to tell Broadcast from Single.
+        graph_dump::capture_channel(snd.id(), graph_dump::Dir::Out, idx, std::any::type_name::<T>());
+        snd
+    }
+
+    fn get_sender_inner(
         &mut self,
         id: u32,
         idx: Option<u32>,
@@ -289,7 +327,7 @@ where
             },
             None => {
                 self.instantiate();
-                self.get_sender(id, idx, builder, capacity)
+                self.get_sender_inner(id, idx, builder, capacity)
             }
         }
     }
