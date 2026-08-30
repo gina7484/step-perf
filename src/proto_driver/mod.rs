@@ -9,6 +9,8 @@ use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::accum_buff::AccumBuff;
+use crate::operator::take_last::TakeLast;
+use crate::operator::scan::{Scan, ScanConfig};
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
 use crate::operator::flatmap_decomp::{
@@ -2784,6 +2786,172 @@ fn build_from_proto<'a>(
                         "Unsupported data type for LinearOffChipLoadRef operation {:?}",
                         dtype
                     ),
+                }
+            }
+            // TakeLast: keep only the final tile of the scanned axis. Needed for
+            // the FlashAttention decode graph (l_final / O_final taps); step_perf
+            // previously had NO arm for this op, so it fell through to
+            // `_ => todo!()` and any FA graph panicked with "not yet implemented"
+            // under functional_sim.
+            //
+            // LIMITATION: implements keep_last = 1 (unchunked). With
+            // chunk_factor = C > 1 the STeP node declares keep_last = C and the C
+            // chunk contexts interleave on the stream; that is not modelled yet.
+            // Validate C=1 against the naive layer before trusting C>1 output.
+            OpType::TakeLast(take_last) => {
+                match take_last.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) => {
+                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                            take_last.input_id,
+                            take_last.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                take_last.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(builder, TakeLast::new(rcv, snd));
+                    }
+                    _ => todo!("TakeLast: only F32 is wired"),
+                }
+            }
+            // Scan: prefix-scan loop with a loop-carried value and TWO output taps
+            // (stream 0 = "next"/after the fold, stream 1 = "prior"/before).
+            // step_perf had NO arm for this op, so every FlashAttention graph
+            // panicked "not yet implemented" under functional_sim.
+            //
+            // Invocation boundaries come from the input's STOP TOKENS, not from
+            // `ctr` -- see the operator's header. `ctr` is still dequeued once per
+            // invocation so its producer does not block.
+            //
+            // chunk_factor > 1 is REJECTED by the operator rather than silently
+            // folding all C chunk recurrences into one. Validate C=1 FA against
+            // the naive layer before trusting anything here.
+            OpType::Scan(scan) => {
+                let (ta, tb) = (
+                    scan.dtype_a.clone().unwrap().r#type.clone().unwrap(),
+                    scan.dtype_b.clone().unwrap().r#type.clone().unwrap(),
+                );
+                match (ta, tb) {
+                    (Type::F32(_), Type::F32(_)) => {
+                        let in1 = channel_map_collection.tile_f32.get_receiver(
+                            scan.input_id1,
+                            scan.stream_idx1,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, scan.input_id1, channel_depth),
+                        );
+                        let in2 = scan.input_id2.map(|id2| {
+                            channel_map_collection.tile_f32.get_receiver(
+                                id2,
+                                scan.stream_idx2,
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, id2, channel_depth),
+                            )
+                        });
+                        let ctr = channel_map_collection.tile_u64.get_receiver(
+                            scan.ctr_id,
+                            scan.ctr_stream_idx,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, scan.ctr_id, channel_depth),
+                        );
+                        let next_snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            Some(0),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let prior_snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            Some(1),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+
+                        fn pick(
+                            f: elemto_elem_func::ElemElemFn,
+                        ) -> Arc<
+                            dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>)
+                                + Send
+                                + Sync,
+                        > {
+                            match f {
+                                elemto_elem_func::ElemElemFn::Add(_) => Arc::new(
+                                    move |a, b, bw, w| functions::map_fn::add(a, b, bw, w),
+                                ),
+                                elemto_elem_func::ElemElemFn::Mul(_) => Arc::new(
+                                    move |a, b, bw, w| functions::map_fn::mul(a, b, bw, w),
+                                ),
+                                elemto_elem_func::ElemElemFn::Max(_) => Arc::new(
+                                    move |a, b, bw, w| functions::map_fn::max(a, b, bw, w),
+                                ),
+                                other => todo!("Scan: fold fn {:?} not wired", other),
+                            }
+                        }
+
+                        let f1 = pick(scan.func1.clone().unwrap().elem_elem_fn.unwrap());
+                        let f2 = scan
+                            .func2
+                            .clone()
+                            .and_then(|f| f.elem_elem_fn)
+                            .map(pick);
+
+                        let tile_row = scan.tile_row as usize;
+                        let tile_col = scan.tile_col as usize;
+                        let wbm = scan.write_back_mu;
+                        let init: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
+                            if sim_config.functional_sim {
+                                match scan.init_func.clone().unwrap().init_fn.unwrap() {
+                                    init_func::InitFn::Zero(_) => Arc::new(move || {
+                                        Tile::new_zero([tile_row, tile_col], f32_bytes, wbm)
+                                    }),
+                                    init_func::InitFn::Empty(_) => Arc::new(move || {
+                                        Tile::new_empty([tile_row, tile_col], f32_bytes, wbm)
+                                    }),
+                                    other => todo!("Scan: init {:?} not wired", other),
+                                }
+                            } else {
+                                Arc::new(move || {
+                                    Tile::new_blank(vec![tile_row, tile_col], f32_bytes, wbm)
+                                })
+                            };
+
+                        add_child!(
+                            builder,
+                            Scan::<SimpleEvent, f32, f32>::new(
+                                in1,
+                                in2,
+                                ctr,
+                                next_snd,
+                                prior_snd,
+                                f1,
+                                f2,
+                                init,
+                                // step-perf bundles its OWN copy of the proto
+                                // (step-perf/step_perf_ir/) and that copy PREDATES
+                                // the flash-decoding `chunk_factor` field, so it is
+                                // not visible here at all. Passing 1 is therefore
+                                // the only option -- but it means a C>1 graph is
+                                // INDISTINGUISHABLE from C=1 to step_perf and would
+                                // be scanned as unchunked, producing confidently
+                                // WRONG numbers. Regenerate step-perf's proto before
+                                // validating any chunked graph on this path.
+                                1,
+                                ScanConfig {
+                                    compute_bw: scan.compute_bw as u64,
+                                    write_back_mu: scan.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
+                    }
+                    other => todo!("Scan: dtype pair {:?} not wired", other),
                 }
             }
             OpType::Flatten(flatten) => {
