@@ -177,6 +177,9 @@ where
         // reset. Per the proto contract each invocation carries exactly
         // C x per-chunk tiles, so `j % C` stays chunk-aligned across boundaries.
         let mut j: usize = 0;
+        let mut n_elems: u64 = 0;
+        let mut n_ctr: u64 = 0;
+        let mut n_stops: u64 = 0;
         // `ctr` MUST be drained once per invocation, not once overall.
         // Broadcast_136 feeds ctr to all three Scans, one tile per invocation; a
         // Scan that reads only one tile ever leaves the broadcast blocked as soon
@@ -194,7 +197,10 @@ where
                     Elem::ValStop(x, s) => (x, s),
                 },
                 Err(_) => {
-                    if std::env::var("STEP_PERF_OP_TRACE").is_ok() { eprintln!("[SCAN {} exit: in1 closed]", self.id); }
+                    if std::env::var("STEP_PERF_OP_COUNTS").is_ok() {
+                        eprintln!("[SCANCOUNT id={} C={} elems={} ctr_deq={} stops={}]",
+                            self.id, self.chunk_factor, n_elems, n_ctr, n_stops);
+                    }
                     return;
                 }
             };
@@ -209,11 +215,14 @@ where
             // drained separately and defensively below instead.
             let chunk = j % c;
             j += 1;
+            n_elems += 1;
+            if stop >= 1 { n_stops += 1; }
             if fresh[chunk] {
                 // One ctr tile per chunk context. At C=1 this is exactly the
                 // per-invocation drain that was validated; at C>1 each of the C
                 // Select contexts is delivered its own per-chunk trip count.
                 let _ = self.ctr.dequeue(&self.time);
+                n_ctr += 1;
                 running[chunk] = (self.init)();
                 fresh[chunk] = false;
             }

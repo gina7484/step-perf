@@ -45,13 +45,16 @@ where
 
 impl<T: DAMType> Context for TakeLast<T> {
     fn run(&mut self) {
+        let mut n_in: u64 = 0;
+        let mut n_out: u64 = 0;
         loop {
             match self.in_stream.dequeue(&self.time) {
                 Ok(ChannelElement { time: _, data }) => match data {
                     // Interior tile of the scanned axis: not the last, drop it.
-                    Elem::Val(_x) => {}
+                    Elem::Val(_x) => { n_in += 1; }
                     // Closes the scanned axis => this IS the final tile.
                     Elem::ValStop(x, s) => {
+                        n_in += 1; n_out += 1;
                         // Forward the stop token UNCHANGED. The STeP node's own
                         // docstring says the scanned axis is collapsed while
                         // "keeping the same rank as the input" -- its stream shape
@@ -74,7 +77,9 @@ impl<T: DAMType> Context for TakeLast<T> {
                     }
                 },
                 Err(_) => {
-                    if std::env::var("STEP_PERF_OP_TRACE").is_ok() { eprintln!("[TAKELAST exit: input closed]"); }
+                    if std::env::var("STEP_PERF_OP_COUNTS").is_ok() {
+                        eprintln!("[TAKELASTCOUNT in={} out={}]", n_in, n_out);
+                    }
                     return;
                 }
             }
