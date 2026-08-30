@@ -2987,12 +2987,42 @@ fn build_from_proto<'a>(
                                 f2,
                                 init,
                                 // Flash-decoding chunk count C. Absent/0/1 all
-                                // mean unchunked. The bundled proto is now synced
-                                // with step_tl master, so this is the real value
-                                // the frontend emitted -- previously it was
-                                // hardcoded to 1, which made a C>1 graph
-                                // INDISTINGUISHABLE from C=1 here.
-                                scan.chunk_factor.unwrap_or(1),
+                                // mean unchunked.
+                                //
+                                // C>1 IS NOT MODELLED and now FAILS LOUDLY. It
+                                // used to return the UNCHUNKED answer silently,
+                                // which is far worse than an error: a C=2 run
+                                // completed, reported "Passed: true", and matched
+                                // C=1 on every unpadded request -- because it had
+                                // computed exactly C=1. Chunking is expressed in
+                                // the STeP graph only as a division of the Scan's
+                                // trip count, with no chunk boundary in any stream
+                                // shape, so this functional model cannot see it.
+                                // Set STEP_PERF_ALLOW_UNCHUNKED=1 to get the old
+                                // behaviour for PERFORMANCE-only runs, where the
+                                // wrong values do not matter.
+                                {
+                                    let cf = scan.chunk_factor.unwrap_or(1);
+                                    if cf > 1
+                                        && std::env::var("STEP_PERF_ALLOW_UNCHUNKED").is_err()
+                                    {
+                                        panic!(
+                                            "Scan {}: chunk_factor={} (flash decoding) is NOT \
+                                             modelled by step_perf's functional simulator. It \
+                                             would silently compute the UNCHUNKED result and \
+                                             report success. Chunking lives only in the ctr trip \
+                                             count; no stream shape carries a chunk boundary, so \
+                                             the Scan cannot introduce one without breaking \
+                                             BinaryMap's shape check against its sibling streams. \
+                                             Fix: give the graph a real chunk rank (which would \
+                                             also allow per-chunk trip counts and remove the need \
+                                             for chunk padding). Set STEP_PERF_ALLOW_UNCHUNKED=1 \
+                                             for performance-only runs.",
+                                            operation.id, cf
+                                        );
+                                    }
+                                    cf
+                                },
                                 ScanConfig {
                                     compute_bw: scan.compute_bw as u64,
                                     write_back_mu: scan.write_back_mu,
