@@ -17,7 +17,7 @@
 //! chunk contexts are interleaved on the stream. Handling that needs the
 //! interleave pattern, which this does not yet model -- see the header note in
 //! `proto_driver`'s TakeLast arm.
-use crate::primitives::elem::{Elem, StopType};
+use crate::primitives::elem::Elem;
 use crate::trace::TracingSender as Sender;
 use dam::context_tools::*;
 
@@ -52,12 +52,16 @@ impl<T: DAMType> Context for TakeLast<T> {
                     Elem::Val(_x) => {}
                     // Closes the scanned axis => this IS the final tile.
                     Elem::ValStop(x, s) => {
-                        let new_rank: StopType = s.saturating_sub(1);
-                        let out = if new_rank == 0 {
-                            Elem::Val(x)
-                        } else {
-                            Elem::ValStop(x, new_rank)
-                        };
+                        // Forward the stop token UNCHANGED. The STeP node's own
+                        // docstring says the scanned axis is collapsed while
+                        // "keeping the same rank as the input" -- its stream shape
+                        // is `shape[:-1] + (keep_last,)`, i.e. the last axis is
+                        // REPLACED (extent keep_last) rather than removed. An
+                        // earlier version decremented the rank, which corrupted
+                        // every downstream Flatten/Map (observed as panics in
+                        // flatten.rs and map.rs, and the final OffChipStore
+                        // receiving 0 of its 4096 expected elements).
+                        let out = Elem::ValStop(x, s);
                         self.out_stream
                             .enqueue(
                                 &self.time,

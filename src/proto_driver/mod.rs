@@ -175,6 +175,26 @@ fn get_chan_depth(
     }
 }
 
+/// Does any operator read `scan_id`'s PRIOR tap (stream_idx 1)?
+///
+/// The Scan lowering always produces both taps, but most graphs read only
+/// `next`: scan_l and scan_o expose `prior` and nothing consumes it, while
+/// scan_m has both consumed. Building a sender for an unread tap leaves a
+/// channel with no receiver, which the runtime reports as DisconnectedReceiver
+/// and which aborts the whole simulation.
+fn scan_prior_is_consumed(step_graph: &ProgramGraph, scan_id: u32) -> bool {
+    step_graph.operators.iter().any(|o| {
+        let t = format!("{:?}", o);
+        [
+            format!("input_id: {}, stream_idx: Some(1)", scan_id),
+            format!("input_id1: {}, stream_idx1: Some(1)", scan_id),
+            format!("input_id2: Some({}), stream_idx2: Some(1)", scan_id),
+        ]
+        .iter()
+        .any(|pat| t.contains(pat.as_str()))
+    })
+}
+
 fn build_from_proto<'a>(
     step_graph: &ProgramGraph,
     channel_map_collection: &mut ChannelMapCollection<'a>,
@@ -2799,6 +2819,10 @@ fn build_from_proto<'a>(
             // chunk contexts interleave on the stream; that is not modelled yet.
             // Validate C=1 against the naive layer before trusting C>1 output.
             OpType::TakeLast(take_last) => {
+                if std::env::var("STEP_PERF_OP_TRACE").is_ok() {
+                    eprintln!("[BUILD TakeLast id={} in={} idx={:?}]",
+                        operation.id, take_last.input_id, take_last.stream_idx);
+                }
                 match take_last.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::F32(_) => {
                         let rcv = channel_map_collection.tile_f32.get_receiver(
@@ -2835,6 +2859,10 @@ fn build_from_proto<'a>(
             // folding all C chunk recurrences into one. Validate C=1 FA against
             // the naive layer before trusting anything here.
             OpType::Scan(scan) => {
+                if std::env::var("STEP_PERF_OP_TRACE").is_ok() {
+                    eprintln!("[BUILD Scan id={} in1={} in2={:?} ctr={} ctr_idx={:?}]",
+                        operation.id, scan.input_id1, scan.input_id2, scan.ctr_id, scan.ctr_stream_idx);
+                }
                 let (ta, tb) = (
                     scan.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                     scan.dtype_b.clone().unwrap().r#type.clone().unwrap(),
@@ -2861,18 +2889,41 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, scan.ctr_id, channel_depth),
                         );
-                        let next_snd = channel_map_collection.tile_f32.get_sender(
+                        // Build a tap ONLY if some operator reads it. An unread
+                        // tap becomes a channel with a sender and no receiver,
+                        // which the runtime reports as DisconnectedReceiver and
+                        // which aborts the simulation. scan_l / scan_o expose
+                        // `prior` but nothing consumes it.
+                        let consumed = |idx: u32| -> bool {
+                            step_graph.operators.iter().any(|o| {
+                                let t = format!("{:?}", o);
+                                t.contains(&format!("input_id1: {}", operation.id))
+                                    || t.contains(&format!("input_id: {}", operation.id))
+                                    || t.contains(&format!("input_id2: {}", operation.id))
+                            }) && step_graph.operators.iter().any(|o| {
+                                let t = format!("{:?}", o);
+                                t.contains(&format!("stream_idx: Some({})", idx))
+                                    || t.contains(&format!("stream_idx1: Some({})", idx))
+                                    || t.contains(&format!("stream_idx2: Some({})", idx))
+                            })
+                        };
+                        let _ = &consumed;
+                        let next_snd = Some(channel_map_collection.tile_f32.get_sender(
                             operation.id,
                             Some(0),
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        let prior_snd = channel_map_collection.tile_f32.get_sender(
-                            operation.id,
-                            Some(1),
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
+                        ));
+                        let prior_snd = if scan_prior_is_consumed(step_graph, operation.id) {
+                            Some(channel_map_collection.tile_f32.get_sender(
+                                operation.id,
+                                Some(1),
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                            ))
+                        } else {
+                            None
+                        };
 
                         fn pick(
                             f: elemto_elem_func::ElemElemFn,

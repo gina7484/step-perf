@@ -44,8 +44,8 @@ pub struct Scan<E, T: DAMType, OT: DAMType> {
     in1: Receiver<Elem<Tile<T>>>,
     in2: Option<Receiver<Elem<Tile<T>>>>,
     ctr: Receiver<Elem<Tile<u64>>>,
-    next_stream: Sender<Elem<Tile<OT>>>,
-    prior_stream: Sender<Elem<Tile<OT>>>,
+    next_stream: Option<Sender<Elem<Tile<OT>>>>,
+    prior_stream: Option<Sender<Elem<Tile<OT>>>>,
     func1: FoldFn<T, OT>,
     func2: Option<FoldFn<T, OT>>,
     init: Arc<dyn Fn() -> Tile<OT> + Send + Sync>,
@@ -69,8 +69,8 @@ where
         in1: Receiver<Elem<Tile<T>>>,
         in2: Option<Receiver<Elem<Tile<T>>>>,
         ctr: Receiver<Elem<Tile<u64>>>,
-        next_stream: Sender<Elem<Tile<OT>>>,
-        prior_stream: Sender<Elem<Tile<OT>>>,
+        next_stream: Option<Sender<Elem<Tile<OT>>>>,
+        prior_stream: Option<Sender<Elem<Tile<OT>>>>,
         func1: FoldFn<T, OT>,
         func2: Option<FoldFn<T, OT>>,
         init: Arc<dyn Fn() -> Tile<OT> + Send + Sync>,
@@ -105,8 +105,17 @@ where
             i2.attach_receiver(&ctx);
         }
         ctx.ctr.attach_receiver(&ctx);
-        ctx.next_stream.attach_sender(&ctx);
-        ctx.prior_stream.attach_sender(&ctx);
+        // Attach ONLY the taps a consumer actually reads. Creating a sender for
+        // an unread tap leaves a channel with no receiver, which the runtime
+        // reports as DisconnectedReceiver and which killed the whole simulation.
+        // Measured: scan_l and scan_o expose `prior` but nothing consumes it,
+        // while scan_m has both taps consumed.
+        if let Some(n) = &ctx.next_stream {
+            n.attach_sender(&ctx);
+        }
+        if let Some(pr) = &ctx.prior_stream {
+            pr.attach_sender(&ctx);
+        }
         ctx
     }
 }
@@ -124,9 +133,16 @@ where
     fn run(&mut self) {
         let mut running: Tile<OT> = (self.init)();
         let mut new_invocation = true;
-        // Drain one ctr tile up front so its producer is not blocked from the
-        // start. Errors are ignored: ctr is not used for semantics here.
-        let _ = self.ctr.dequeue(&self.time);
+        // `ctr` MUST be drained once per invocation, not once overall.
+        // Broadcast_136 feeds ctr to all three Scans, one tile per invocation; a
+        // Scan that reads only one tile ever leaves the broadcast blocked as soon
+        // as its buffer fills, and the whole simulation HANGS (observed: trace
+        // frozen at tick ~3679 with the process alive).
+        //
+        // An earlier version did drain per invocation and hit
+        // DisconnectedReceiver -- but that was a SEPARATE bug (unconditional
+        // creation of the unused `prior` tap, now fixed). The two were
+        // independent; per-invocation draining was correct all along.
         loop {
             let (data, stop) = match self.in1.dequeue(&self.time) {
                 Ok(ChannelElement { time: _, data }) => match data {
@@ -148,6 +164,7 @@ where
             // functional model needs (boundaries come from stop tokens), so it is
             // drained separately and defensively below instead.
             if new_invocation {
+                let _ = self.ctr.dequeue(&self.time);
                 running = (self.init)();
                 new_invocation = false;
             }
@@ -198,14 +215,20 @@ where
             // `next` (stream_idx 0). Enqueueing to a receiverless channel errors,
             // so this must not unwrap -- doing so panicked the whole simulation
             // with `DisconnectedReceiver`. Dropping an unread tap is correct.
-            let _ = self.prior_stream.enqueue(
-                &self.time,
-                ChannelElement { time: self.time.tick(), data: mk(prior) },
-            );
-            let _ = self.next_stream.enqueue(
-                &self.time,
-                ChannelElement { time: self.time.tick(), data: mk(running.clone()) },
-            );
+            if let Some(pr) = &self.prior_stream {
+                pr.enqueue(
+                    &self.time,
+                    ChannelElement { time: self.time.tick(), data: mk(prior) },
+                )
+                .unwrap();
+            }
+            if let Some(n) = &self.next_stream {
+                n.enqueue(
+                    &self.time,
+                    ChannelElement { time: self.time.tick(), data: mk(running.clone()) },
+                )
+                .unwrap();
+            }
 
             dam::logging::log_event(&E::new(
                 "Scan".to_string(),
