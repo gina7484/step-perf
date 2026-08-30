@@ -2814,10 +2814,12 @@ fn build_from_proto<'a>(
             // `_ => todo!()` and any FA graph panicked with "not yet implemented"
             // under functional_sim.
             //
-            // LIMITATION: implements keep_last = 1 (unchunked). With
-            // chunk_factor = C > 1 the STeP node declares keep_last = C and the C
-            // chunk contexts interleave on the stream; that is not modelled yet.
-            // Validate C=1 against the naive layer before trusting C>1 output.
+            // CHUNKING: no change needed for chunk_factor = C > 1, and the
+            // proto has no keep_last field to honour. The C chunks arrive as C
+            // sequential Select contexts, each closed by its own stop token;
+            // this op drops interior `Val` and forwards `ValStop` unchanged, so
+            // it emits exactly C finals per logical tile for free. Confirmed by
+            // FA C=2/4/8 completing and matching C=1 on unpadded rows.
             OpType::TakeLast(take_last) => {
                 if std::env::var("STEP_PERF_OP_TRACE").is_ok() {
                     eprintln!("[BUILD TakeLast id={} in={} idx={:?}]",
@@ -2984,16 +2986,13 @@ fn build_from_proto<'a>(
                                 f1,
                                 f2,
                                 init,
-                                // step-perf bundles its OWN copy of the proto
-                                // (step-perf/step_perf_ir/) and that copy PREDATES
-                                // the flash-decoding `chunk_factor` field, so it is
-                                // not visible here at all. Passing 1 is therefore
-                                // the only option -- but it means a C>1 graph is
-                                // INDISTINGUISHABLE from C=1 to step_perf and would
-                                // be scanned as unchunked, producing confidently
-                                // WRONG numbers. Regenerate step-perf's proto before
-                                // validating any chunked graph on this path.
-                                1,
+                                // Flash-decoding chunk count C. Absent/0/1 all
+                                // mean unchunked. The bundled proto is now synced
+                                // with step_tl master, so this is the real value
+                                // the frontend emitted -- previously it was
+                                // hardcoded to 1, which made a C>1 graph
+                                // INDISTINGUISHABLE from C=1 here.
+                                scan.chunk_factor.unwrap_or(1),
                                 ScanConfig {
                                     compute_bw: scan.compute_bw as u64,
                                     write_back_mu: scan.write_back_mu,
