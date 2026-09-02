@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 pub struct StaticReassemble<E, A: DAMType> {
     in_streams: Vec<Receiver<Elem<A>>>,
     out_stream: Sender<Elem<A>>,
-    merge_rank: StopType,
+    reassemble_rank: StopType,
     config: FlatPartitionConfig,
     id: u32,
     _phantom: PhantomData<E>,
@@ -24,14 +24,23 @@ where
     pub fn new(
         in_streams: Vec<Receiver<Elem<A>>>,
         out_stream: Sender<Elem<A>>,
-        merge_rank: StopType,
+        reassemble_rank: StopType,
         config: FlatPartitionConfig,
         id: u32,
     ) -> Self {
+        assert!(
+            !in_streams.is_empty(),
+            "StaticReassemble needs an input stream"
+        );
+        assert_eq!(
+            in_streams.len(),
+            config.switch_cycles.len(),
+            "StaticReassemble needs one switch-cycle value per input stream"
+        );
         let ctx = Self {
             in_streams,
             out_stream,
-            merge_rank,
+            reassemble_rank,
             config,
             id,
             context_info: Default::default(),
@@ -44,6 +53,18 @@ where
 
         ctx
     }
+
+    fn enqueue(&mut self, lane: usize, data: Elem<A>) {
+        self.out_stream
+            .enqueue(
+                &self.time,
+                ChannelElement {
+                    time: self.time.tick() + self.config.switch_cycles[lane],
+                    data,
+                },
+            )
+            .unwrap();
+    }
 }
 
 impl<
@@ -55,46 +76,70 @@ where
 {
     fn run(&mut self) {
         let par_factor = self.in_streams.len();
+        let final_lane = par_factor - 1;
+
         loop {
-            for i in 0..par_factor {
+            let mut expected_stop_level: Option<StopType> = None;
+            for lane in 0..par_factor {
                 loop {
-                    match self.in_streams[i].dequeue(&self.time) {
+                    match self.in_streams[lane].dequeue(&self.time) {
                         Ok(ChannelElement {
                             time: _,
                             data: val_data,
                         }) => match val_data {
-                            Elem::Val(x) => {
-                                self.out_stream
-                                    .enqueue(
-                                        &self.time,
-                                        ChannelElement {
-                                            time: self.time.tick() + self.config.switch_cycles[i],
-                                            data: Elem::Val(x),
-                                        },
-                                    )
-                                    .unwrap();
-                                if self.merge_rank == 0 {
-                                    break;
+                            Elem::Val(value) => self.enqueue(lane, Elem::Val(value)),
+                            Elem::ValStop(value, stop_level) => {
+                                if stop_level <= self.reassemble_rank {
+                                    self.enqueue(lane, Elem::ValStop(value, stop_level));
+                                    continue;
                                 }
-                            }
-                            Elem::ValStop(x, stop_lev) => {
-                                self.out_stream
-                                    .enqueue(
-                                        &self.time,
-                                        ChannelElement {
-                                            time: self.time.tick() + self.config.switch_cycles[i],
-                                            data: Elem::ValStop(x, stop_lev),
-                                        },
-                                    )
-                                    .unwrap();
-                                if stop_lev == self.merge_rank {
-                                    break;
-                                } else if stop_lev > self.merge_rank {
-                                    panic!("Stop level is greater than merge rank");
+
+                                match expected_stop_level {
+                                    Some(expected) if expected != stop_level => {
+                                        panic!(
+                                            "StaticReassemble {} saw S{} on lane {}, but \
+                                             the lane group started with S{}",
+                                            self.id, stop_level, lane, expected
+                                        );
+                                    }
+                                    None => expected_stop_level = Some(stop_level),
+                                    _ => {}
                                 }
+
+                                let output = if lane == final_lane {
+                                    Elem::ValStop(value, stop_level)
+                                } else if self.reassemble_rank == 0 {
+                                    // Remove the lane-local S1 when joining the
+                                    // innermost dimension.
+                                    Elem::Val(value)
+                                } else {
+                                    // Keep boundaries below the reconstructed
+                                    // axis, but remove this lane's closure of
+                                    // the reconstructed axis and outer axes.
+                                    Elem::ValStop(value, self.reassemble_rank)
+                                };
+                                self.enqueue(lane, output);
+                                break;
                             }
                         },
-                        Err(_) => return,
+                        Err(_) if lane == 0 => {
+                            for remaining_lane in 1..par_factor {
+                                if self.in_streams[remaining_lane].dequeue(&self.time).is_ok() {
+                                    panic!(
+                                        "StaticReassemble {} lane {} has data after \
+                                         lane 0 ended",
+                                        self.id, remaining_lane
+                                    );
+                                }
+                            }
+                            return;
+                        }
+                        Err(_) => {
+                            panic!(
+                                "StaticReassemble {} lane {} ended inside a lane group",
+                                self.id, lane
+                            );
+                        }
                     }
                 }
             }
@@ -143,25 +188,9 @@ mod tests {
             2,
             READ_FROM_MU,
         );
-        let tile2 = Tile::<VT>::new(
-            ArcArray2::from_shape_vec((2, 2), (4..8).collect()).unwrap(),
-            2,
-            READ_FROM_MU,
-        );
-        let tile3 = Tile::<VT>::new(
-            ArcArray2::from_shape_vec((2, 2), (8..12).collect()).unwrap(),
-            2,
-            READ_FROM_MU,
-        );
-        let tile4 = Tile::<VT>::new(
-            ArcArray2::from_shape_vec((2, 2), (12..16).collect()).unwrap(),
-            2,
-            READ_FROM_MU,
-        );
-
-        // Each input stream has one tile (inverse of parallelize_0d)
+        // Each rank-0 lane still has a terminal S1.
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::Val(tile1)].into_iter(),
+            move || vec![Elem::ValStop(tile1, 1)].into_iter(),
             in_data_snd0,
         ));
 
@@ -171,7 +200,7 @@ mod tests {
             READ_FROM_MU,
         );
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::Val(tile2_clone)].into_iter(),
+            move || vec![Elem::ValStop(tile2_clone, 1)].into_iter(),
             in_data_snd1,
         ));
 
@@ -181,7 +210,7 @@ mod tests {
             READ_FROM_MU,
         );
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::Val(tile3_clone)].into_iter(),
+            move || vec![Elem::ValStop(tile3_clone, 1)].into_iter(),
             in_data_snd2,
         ));
 
@@ -191,7 +220,7 @@ mod tests {
             READ_FROM_MU,
         );
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::Val(tile4_clone)].into_iter(),
+            move || vec![Elem::ValStop(tile4_clone, 1)].into_iter(),
             in_data_snd3,
         ));
 
@@ -234,7 +263,7 @@ mod tests {
                     Elem::Val(tile1_exp),
                     Elem::Val(tile2_exp),
                     Elem::Val(tile3_exp),
-                    Elem::Val(tile4_exp),
+                    Elem::ValStop(tile4_exp, 1),
                 ]
                 .into_iter()
             },
@@ -268,25 +297,9 @@ mod tests {
             2,
             READ_FROM_MU,
         );
-        let tile2 = Tile::<VT>::new(
-            ArcArray2::from_shape_vec((2, 2), (4..8).collect()).unwrap(),
-            2,
-            READ_FROM_MU,
-        );
-        let tile3 = Tile::<VT>::new(
-            ArcArray2::from_shape_vec((2, 2), (8..12).collect()).unwrap(),
-            2,
-            READ_FROM_MU,
-        );
-        let tile4 = Tile::<VT>::new(
-            ArcArray2::from_shape_vec((2, 2), (12..16).collect()).unwrap(),
-            2,
-            READ_FROM_MU,
-        );
-
-        // Each input stream has one tile with ValStop at rank 1
+        // Each [1, 1] lane closes both of its dimensions.
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::ValStop(tile1, 1)].into_iter(),
+            move || vec![Elem::ValStop(tile1, 2)].into_iter(),
             in_data_snd0,
         ));
 
@@ -296,7 +309,7 @@ mod tests {
             READ_FROM_MU,
         );
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::ValStop(tile2_clone, 1)].into_iter(),
+            move || vec![Elem::ValStop(tile2_clone, 2)].into_iter(),
             in_data_snd1,
         ));
 
@@ -306,7 +319,7 @@ mod tests {
             READ_FROM_MU,
         );
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::ValStop(tile3_clone, 1)].into_iter(),
+            move || vec![Elem::ValStop(tile3_clone, 2)].into_iter(),
             in_data_snd2,
         ));
 
@@ -316,7 +329,7 @@ mod tests {
             READ_FROM_MU,
         );
         ctx.add_child(GeneratorContext::new(
-            move || vec![Elem::ValStop(tile4_clone, 1)].into_iter(),
+            move || vec![Elem::ValStop(tile4_clone, 2)].into_iter(),
             in_data_snd3,
         ));
 
@@ -359,11 +372,89 @@ mod tests {
                     Elem::ValStop(tile1_exp, 1),
                     Elem::ValStop(tile2_exp, 1),
                     Elem::ValStop(tile3_exp, 1),
-                    Elem::ValStop(tile4_exp, 1),
+                    Elem::ValStop(tile4_exp, 2),
                 ]
                 .into_iter()
             },
             out_data_rcv,
+            tolerance_fn,
+        ));
+
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    fn scalar_tile(value: u32) -> Tile<u32> {
+        use ndarray::ArcArray2;
+
+        Tile::new(
+            ArcArray2::from_shape_vec((1, 1), vec![value]).unwrap(),
+            0,
+            false,
+        )
+    }
+
+    fn canonical_stream(shape: &[usize], values: Vec<u32>) -> Vec<Elem<Tile<u32>>> {
+        assert_eq!(shape.iter().product::<usize>(), values.len());
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let position = index + 1;
+                let mut stride = 1usize;
+                let mut stop_level = 0u32;
+                for dim in shape.iter().rev() {
+                    stride *= dim;
+                    if position % stride != 0 {
+                        break;
+                    }
+                    stop_level += 1;
+                }
+                let tile = scalar_tile(value);
+                if stop_level == 0 {
+                    Elem::Val(tile)
+                } else {
+                    Elem::ValStop(tile, stop_level)
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn static_reassemble_inner_rank_restores_outer_stream() {
+        let mut ctx = ProgramBuilder::default();
+        let (lane0_sender, lane0_receiver) = ctx.unbounded();
+        let (lane1_sender, lane1_receiver) = ctx.unbounded();
+        let (output_sender, output_receiver) = ctx.unbounded();
+
+        let lane0_values = (0..6).chain(12..18).collect();
+        let lane1_values = (6..12).chain(18..24).collect();
+        let lane0 = canonical_stream(&[2, 2, 3], lane0_values);
+        let lane1 = canonical_stream(&[2, 2, 3], lane1_values);
+        ctx.add_child(GeneratorContext::new(
+            move || lane0.into_iter(),
+            lane0_sender,
+        ));
+        ctx.add_child(GeneratorContext::new(
+            move || lane1.into_iter(),
+            lane1_sender,
+        ));
+        ctx.add_child(StaticReassemble::<SimpleEvent, _>::new(
+            vec![lane0_receiver, lane1_receiver],
+            output_sender,
+            1,
+            FlatPartitionConfig {
+                switch_cycles: vec![1; 2],
+                write_back_mu: false,
+            },
+            0,
+        ));
+
+        let output = canonical_stream(&[2, 4, 3], (0..24).collect());
+        ctx.add_child(ApproxCheckerContext::new(
+            move || output.into_iter(),
+            output_receiver,
             tolerance_fn,
         ));
 

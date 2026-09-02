@@ -2595,7 +2595,7 @@ fn build_from_proto<'a>(
                             StaticReassemble::<SimpleEvent, _>::new(
                                 rcv_list,
                                 snd,
-                                static_reassemble.merge_rank,
+                                static_reassemble.reassemble_rank,
                                 FlatPartitionConfig {
                                     switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
                                     write_back_mu: static_reassemble.write_back_mu,
@@ -2635,7 +2635,7 @@ fn build_from_proto<'a>(
                             StaticReassemble::<SimpleEvent, _>::new(
                                 rcv_list,
                                 snd,
-                                static_reassemble.merge_rank,
+                                static_reassemble.reassemble_rank,
                                 FlatPartitionConfig {
                                     switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
                                     write_back_mu: static_reassemble.write_back_mu,
@@ -2675,7 +2675,7 @@ fn build_from_proto<'a>(
                             StaticReassemble::<SimpleEvent, _>::new(
                                 rcv_list,
                                 snd,
-                                static_reassemble.merge_rank,
+                                static_reassemble.reassemble_rank,
                                 FlatPartitionConfig {
                                     switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
                                     write_back_mu: static_reassemble.write_back_mu,
@@ -2730,6 +2730,7 @@ fn build_from_proto<'a>(
                                 input_rcv,
                                 snd_list,
                                 parallelize.parallelize_rank,
+                                parallelize.output_dim,
                                 FlatPartitionConfig {
                                     switch_cycles: to_u64_vec(parallelize.switch_cycles),
                                     write_back_mu: parallelize.write_back_mu,
@@ -2768,6 +2769,7 @@ fn build_from_proto<'a>(
                                 input_rcv,
                                 snd_list,
                                 parallelize.parallelize_rank,
+                                parallelize.output_dim,
                                 FlatPartitionConfig {
                                     switch_cycles: to_u64_vec(parallelize.switch_cycles),
                                     write_back_mu: parallelize.write_back_mu,
@@ -2806,6 +2808,7 @@ fn build_from_proto<'a>(
                                 input_rcv,
                                 snd_list,
                                 parallelize.parallelize_rank,
+                                parallelize.output_dim,
                                 FlatPartitionConfig {
                                     switch_cycles: to_u64_vec(parallelize.switch_cycles),
                                     write_back_mu: parallelize.write_back_mu,
