@@ -82,6 +82,12 @@ pub struct Scan<E, T: DAMType, OT: DAMType> {
     ctr: Receiver<Elem<Tile<u64>>>,
     next_stream: Option<Sender<Elem<Tile<OT>>>>,
     prior_stream: Option<Sender<Elem<Tile<OT>>>>,
+    /// GH#3 [T5]: OPTIONAL third tap -- this step's 0-based index along the
+    /// scanned axis, as a [1,1] u64 tile. `None` (every graph that does not
+    /// read stream 2) creates no channel, exactly like `prior_stream`.
+    /// Integer, not `OT`: at tile_N=32 a 4,085-token request indexes past
+    /// 256, where bf16 stops representing integers exactly.
+    index_stream: Option<Sender<Elem<Tile<u64>>>>,
     func1: FoldFn<T, OT>,
     func2: Option<FoldFn<T, OT>>,
     init: Arc<dyn Fn() -> Tile<OT> + Send + Sync>,
@@ -109,6 +115,7 @@ where
         ctr: Receiver<Elem<Tile<u64>>>,
         next_stream: Option<Sender<Elem<Tile<OT>>>>,
         prior_stream: Option<Sender<Elem<Tile<OT>>>>,
+        index_stream: Option<Sender<Elem<Tile<u64>>>>,
         func1: FoldFn<T, OT>,
         func2: Option<FoldFn<T, OT>>,
         init: Arc<dyn Fn() -> Tile<OT> + Send + Sync>,
@@ -124,6 +131,7 @@ where
             ctr,
             next_stream,
             prior_stream,
+            index_stream,
             func1,
             func2,
             init,
@@ -145,6 +153,9 @@ where
         // while scan_m has both taps consumed.
         if let Some(n) = &ctx.next_stream {
             n.attach_sender(&ctx);
+        }
+        if let Some(ix) = &ctx.index_stream {
+            ix.attach_sender(&ctx);
         }
         if let Some(pr) = &ctx.prior_stream {
             pr.attach_sender(&ctx);
@@ -308,6 +319,36 @@ where
             // `next` (stream_idx 0). Enqueueing to a receiverless channel errors,
             // so this must not unwrap -- doing so panicked the whole simulation
             // with `DisconnectedReceiver`. Dropping an unread tap is correct.
+            // GH#3 [T5]: this step's index along the scanned axis, carrying
+            // the SAME stop token as the data taps so a downstream zip stays
+            // aligned. `pos` was just incremented, so the 0-based index of the
+            // element we are emitting for is `pos - 1`.
+            //
+            // Unlike the hardware `Select` (which deals C chunks round-robin
+            // and so emits `step*C + ctx`), this functional model walks the
+            // stream in natural order and `pos` already IS the position along
+            // the scanned axis. The two agree because strided dealing makes
+            // emission order equal global index -- the same property the
+            // hardware relies on.
+            if let Some(ix) = &self.index_stream {
+                let idx_tile = Tile::new(
+                    ndarray::Array2::from_shape_vec((1, 1), vec![pos - 1])
+                        .unwrap()
+                        .to_shared(),
+                    8,
+                    self.config.write_back_mu,
+                );
+                let idx_elem = if out_stop == 0 {
+                    Elem::Val(idx_tile)
+                } else {
+                    Elem::ValStop(idx_tile, out_stop)
+                };
+                ix.enqueue(
+                    &self.time,
+                    ChannelElement { time: self.time.tick(), data: idx_elem },
+                )
+                .unwrap();
+            }
             if let Some(pr) = &self.prior_stream {
                 pr.enqueue(
                     &self.time,

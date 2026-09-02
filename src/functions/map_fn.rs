@@ -747,6 +747,66 @@ pub fn row_wise_max<T: Debug + PartialOrd + Copy>(
     }
 }
 
+/// Multiply every element of an F32 tile by a scalar carried in a U64 tile.
+///
+/// Needed by the analytic ragged-padding correction (route 3):
+/// `l_true = l_polluted - n_invalid * exp(-m_final)`, where `n_invalid` is a
+/// per-request count that necessarily arrives as U64 -- step-perf's
+/// `MetadataGen` reads u64 ONLY (memory/metadata_gen.rs:29 panics on a float
+/// .npy), while `exp(-m)` is F32. The proto_driver already has an
+/// (F32, U64, F32) BinaryMap arm, but it implemented only `SetOffset`.
+///
+/// Scalar semantics match `set_offset`: element [0,0] of the U64 tile.
+/// Subtract a scalar carried in a U64 tile from every element of an F32 tile.
+/// Route 3's C>1 form: in the shift-free merge the exp weights cancel, so the
+/// whole correction is `l_glob - n_invalid_total`.
+pub fn sub_u64_scalar(
+    in_data: &Tile<f32>,
+    scalar: &Tile<u64>,
+    write_back_mu: bool,
+) -> (u64, Tile<f32>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let (s0, s1) = (in_data.shape[0], in_data.shape[1]);
+    let k = scalar.underlying.as_ref().unwrap()[[0, 0]] as f32;
+    match &in_data.underlying {
+        Some(arr) => (1, Tile::new(arr.mapv(|v| v - k).into_shared(),
+                                   in_data.bytes_per_elem, write_back_mu)),
+        None => (1, Tile::new_blank(vec![s0, s1], in_data.bytes_per_elem, write_back_mu)),
+    }
+}
+
+pub fn mul_by_u64_scalar(
+    in_data: &Tile<f32>,
+    scalar: &Tile<u64>,
+    write_back_mu: bool,
+) -> (u64, Tile<f32>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+
+    let k = scalar.underlying.as_ref().unwrap()[[0, 0]] as f32;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            1,
+            Tile::new(
+                arr.mapv(|v| v * k).into_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+        // A blank tile stays blank: 0 * k == 0.
+        None => (
+            1,
+            Tile::new_blank(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+            ),
+        ),
+    }
+}
+
 pub fn set_offset<T: Debug + ndarray::LinalgScalar + Default>(
     in_data: &Tile<T>,
     offset: &Tile<u64>,
@@ -805,6 +865,85 @@ pub fn mask_row<
             // Set the i-th row to 1.0
             if i < row {
                 for j in 0..col {
+                    out_arr[[i, j]] = D::one();
+                }
+            }
+
+            (
+                1,
+                Tile::new(
+                    out_arr.to_shared(),
+                    if mock_bf16 {
+                        2
+                    } else {
+                        std::mem::size_of::<D>()
+                    },
+                    write_back_mu,
+                ),
+            )
+        }
+        None => (
+            1,
+            Tile::new_blank(
+                vec![row, col],
+                if mock_bf16 {
+                    2
+                } else {
+                    std::mem::size_of::<D>()
+                },
+                write_back_mu,
+            ),
+        ),
+    }
+}
+
+/// Column-oriented sibling of `mask_row` -- and NOT a transpose of it.
+///
+/// `mask_row` is a ONE-HOT ROW selector (`out[i][*] = 1` for the single index
+/// `i`). This is a PREFIX COLUMN mask: `1.0` in columns `[0, n)` and `0.0`
+/// from `n` on, for EVERY row, with `n` clamped to `[0, col]`.
+///
+/// The clamp is load-bearing: it lets ONE count cover all three
+/// ragged-padding cases (GH#3 [T5]) with no "is this the last tile?" select --
+///   * `n >= col`  -> all ones   (a fully-valid KV tile)
+///   * `0 < n < col` -> partial  (the ragged tail tile)
+///   * `n <= 0`    -> all zeros  (a whole pad tile, which C>1 padding creates)
+/// The caller feeds `total_valid - kv_tile_index * col` and all three fall out.
+///
+/// NEGATIVE COUNTS: the count arrives unsigned (`u64` on the proto path), and
+/// `total_valid - n*col` is genuinely negative on pad tiles, so it has already
+/// WRAPPED by the time it arrives. Left alone that reads as an enormous count,
+/// i.e. `>= col`, i.e. ALL ONES -- a whole pad tile would come out entirely
+/// unmasked, silently, which is the exact failure the inert all-ones mask
+/// already has. So the value is reinterpreted as signed and floored at zero.
+/// Real counts are bounded by the cache extent (maxN = 4096), nowhere near
+/// the sign bit, so the reinterpretation cannot misfire on a legitimate count.
+pub fn mask_col<
+    T: Debug + Default + Clone + TryInto<usize>,
+    D: num_traits::Float + Debug + Default + Clone,
+>(
+    in_data: &Tile<T>,
+    write_back_mu: bool,
+    row: usize,
+    col: usize,
+    mock_bf16: bool,
+) -> (u64, Tile<D>) {
+    assert_eq!(in_data.shape, vec![1, 1]);
+
+    match &in_data.underlying {
+        Some(arr) => {
+            let val = arr[[0, 0]].clone();
+            let raw: usize = val
+                .try_into()
+                .unwrap_or_else(|_| panic!("Failed to convert value to usize"));
+            // See the doc comment: an upstream subtraction that went negative
+            // arrives here wrapped, and must floor to zero rather than saturate
+            // to "all valid".
+            let n = if (raw as i64) < 0 { 0 } else { raw.min(col) };
+
+            let mut out_arr = Array2::<D>::default((row, col));
+            for i in 0..row {
+                for j in 0..n {
                     out_arr[[i, j]] = D::one();
                 }
             }
@@ -1226,6 +1365,90 @@ mod tests {
                 assert_eq!(out_arr[[i, j]], 0.0);
             }
         }
+    }
+
+    #[test]
+    fn test_mask_col_partial_is_the_intra_tile_case() {
+        // The ragged tail: 3 valid columns of 8, every row identical.
+        let idx_arr = Array2::from_shape_vec((1, 1), vec![3u64]).unwrap();
+        let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+        let (cycles, out) = mask_col::<u64, f32>(&in_data, false, 2, 8, false);
+        assert_eq!(cycles, 1);
+        assert_eq!(out.shape, vec![2, 8]);
+        let r = out.underlying.as_ref().unwrap();
+        for i in 0..2 {
+            for j in 0..8 {
+                let want = if j < 3 { 1.0 } else { 0.0 };
+                assert_eq!(r[[i, j]], want, "row {i} col {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_col_clamps_to_all_ones() {
+        // A fully-valid tile: the caller feeds a count larger than the width
+        // rather than testing "is this the last tile?".
+        for count in [8u64, 9, 4096] {
+            let idx_arr = Array2::from_shape_vec((1, 1), vec![count]).unwrap();
+            let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+            let (_c, out) = mask_col::<u64, f32>(&in_data, false, 1, 8, false);
+            let r = out.underlying.as_ref().unwrap();
+            for j in 0..8 {
+                assert_eq!(r[[0, j]], 1.0, "count {count} col {j} should be valid");
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_col_zero_is_all_zeros() {
+        let idx_arr = Array2::from_shape_vec((1, 1), vec![0u64]).unwrap();
+        let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+        let (_c, out) = mask_col::<u64, f32>(&in_data, false, 1, 8, false);
+        let r = out.underlying.as_ref().unwrap();
+        for j in 0..8 {
+            assert_eq!(r[[0, j]], 0.0, "col {j}");
+        }
+    }
+
+    /// THE critical case. `total_valid - kv_index*col` is negative on a whole
+    /// pad tile and arrives here already wrapped. Untreated it reads as an
+    /// enormous count -> all ones -> the pad tile is entirely unmasked, with
+    /// no error anywhere. At C=16 a 91-token request pads to 512 slots, so
+    /// getting this wrong silently reinstates most of the bug.
+    #[test]
+    fn test_mask_col_wrapped_negative_count_masks_everything() {
+        for count in [u64::MAX, u64::MAX - 31, 1u64 << 63] {
+            let idx_arr = Array2::from_shape_vec((1, 1), vec![count]).unwrap();
+            let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+            let (_c, out) = mask_col::<u64, f32>(&in_data, false, 1, 8, false);
+            let r = out.underlying.as_ref().unwrap();
+            for j in 0..8 {
+                assert_eq!(
+                    r[[0, j]], 0.0,
+                    "wrapped count {count} must mask column {j}, not saturate to valid"
+                );
+            }
+        }
+    }
+
+    /// `mask_col` is not a transposed `mask_row`: same input, different shape
+    /// of answer. Pins the distinction so nobody "simplifies" one into the
+    /// other -- hwsim already reuses MaskRow as a dataflow stand-in, which is
+    /// fine for latency and wrong for values.
+    #[test]
+    fn test_mask_col_is_not_a_transposed_mask_row() {
+        let idx_arr = Array2::from_shape_vec((1, 1), vec![2u64]).unwrap();
+        let in_data = Tile::new(idx_arr.to_shared(), 8, false);
+        let (_c, col_out) = mask_col::<u64, f32>(&in_data, false, 4, 4, false);
+        let (_c2, row_out) = mask_row::<u64, f32>(&in_data, false, 4, 4, false);
+        let c = col_out.underlying.as_ref().unwrap();
+        let rw = row_out.underlying.as_ref().unwrap();
+        // prefix-of-columns in every row ...
+        assert_eq!((c[[0, 0]], c[[0, 1]], c[[0, 2]]), (1.0, 1.0, 0.0));
+        assert_eq!((c[[3, 0]], c[[3, 1]], c[[3, 2]]), (1.0, 1.0, 0.0));
+        // ... versus one whole row set.
+        assert_eq!((rw[[2, 0]], rw[[2, 3]]), (1.0, 1.0));
+        assert_eq!((rw[[0, 0]], rw[[3, 0]]), (0.0, 0.0));
     }
 
     #[test]

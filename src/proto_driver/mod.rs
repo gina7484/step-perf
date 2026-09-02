@@ -195,6 +195,25 @@ fn scan_prior_is_consumed(step_graph: &ProgramGraph, scan_id: u32) -> bool {
     })
 }
 
+/// GH#3 [T5]: does any operator read `scan_id`'s INDEX tap (stream_idx 2)?
+///
+/// Same contract as `scan_prior_is_consumed`, and same reason: building a
+/// sender nothing receives aborts the run with `DisconnectedReceiver`. This
+/// is also what keeps the index port OPT-IN on the functional path -- a graph
+/// that never reads stream 2 behaves exactly as it did before.
+fn scan_index_is_consumed(step_graph: &ProgramGraph, scan_id: u32) -> bool {
+    step_graph.operators.iter().any(|o| {
+        let t = format!("{:?}", o);
+        [
+            format!("input_id: {}, stream_idx: Some(2)", scan_id),
+            format!("input_id1: {}, stream_idx1: Some(2)", scan_id),
+            format!("input_id2: Some({}), stream_idx2: Some(2)", scan_id),
+        ]
+        .iter()
+        .any(|pat| t.contains(pat.as_str()))
+    })
+}
+
 fn build_from_proto<'a>(
     step_graph: &ProgramGraph,
     channel_map_collection: &mut ChannelMapCollection<'a>,
@@ -364,6 +383,28 @@ fn build_from_proto<'a>(
                                     unarymap.write_back_mu,
                                     mask_row.row as usize,
                                     mask_row.col as usize,
+                                    mock_bf16,
+                                )
+                            })
+                        }
+                        // GH#3 [T5]: the ragged-padding mask. A PREFIX column
+                        // mask, not a transposed `mask_row` (which is a
+                        // one-hot ROW selector) -- see `map_fn::mask_col`.
+                        //
+                        // This is the only place in the stack where the mask's
+                        // VALUES are real: hwsim lowers MaskCol to MaskRow as a
+                        // dataflow stand-in, `MASK_ROW_BF16` has no fabric
+                        // opcode and falls back to AddBf16, and `mkALU` is a
+                        // stub. So a green Bluesim run says nothing about the
+                        // mask; this arm is what makes it checkable at all.
+                        elemto_elem_func::ElemElemFn::MaskCol(mask_col) => {
+                            let mock_bf16 = sim_config.mock_bf16.clone();
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mask_col(
+                                    tile,
+                                    unarymap.write_back_mu,
+                                    mask_col.row as usize,
+                                    mask_col.col as usize,
                                     mock_bf16,
                                 )
                             })
@@ -723,6 +764,20 @@ fn build_from_proto<'a>(
                                 functions::map_fn::add(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
+                        // GH#3 [T5]: `count = total_valid - kv_index*tile_N`
+                        // for the ragged-padding mask. NOTE this is a U64
+                        // subtraction and the count is GENUINELY NEGATIVE on
+                        // whole pad tiles, so it wraps. That is load-bearing
+                        // and handled downstream: `map_fn::mask_col`
+                        // reinterprets the value as signed and floors it at
+                        // zero, so a wrapped count masks the tile instead of
+                        // saturating to "all valid". Real counts are bounded
+                        // by maxN (4096), nowhere near the sign bit.
+                        elemto_elem_func::ElemElemFn::Sub(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::sub(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
                         e => {
                             panic!("Unsupported binary map function type {:?}", e)
                         }
@@ -828,6 +883,25 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::SetOffset(set_offset) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::set_offset(tile1, tile2, write_back_mu)
+                            })
+                        }
+                        // Scale an F32 tile by a U64 metadata scalar. Used by
+                        // the analytic ragged-padding correction (route 3):
+                        // n_invalid * exp(-m_final). `n_invalid` must be U64
+                        // because MetadataGen reads u64 only, so this pairing
+                        // is unavoidable rather than a modelling choice.
+                        elemto_elem_func::ElemElemFn::Mul(_) => {
+                            Arc::new(move |tile1, tile2, _comp_bw, write_back_mu| {
+                                functions::map_fn::mul_by_u64_scalar(
+                                    tile1, tile2, write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Sub(_) => {
+                            Arc::new(move |tile1, tile2, _comp_bw, write_back_mu| {
+                                functions::map_fn::sub_u64_scalar(
+                                    tile1, tile2, write_back_mu,
+                                )
                             })
                         }
                         e => {
@@ -2802,6 +2876,24 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
+                    // GH#3: F32 constant replayed off a U64 ref. The ragged-mask
+                    // iota row is refed by the scan index stream (U64 scalar);
+                    // only the ref's CARDINALITY drives the replay, its values
+                    // are never read, so any tile type is sound here.
+                    (Type::F32(_), Type::U64(_)) => {
+                        make_linear_offchip_load_ref!(
+                            channel_map_collection,
+                            operation,
+                            linear_offchip_load_ref,
+                            hbm_config,
+                            tile_u64,
+                            tile_f32,
+                            f32_bytes,
+                            mem_context,
+                            builder,
+                            channel_depth
+                        );
+                    }
                     dtype => panic!(
                         "Unsupported data type for LinearOffChipLoadRef operation {:?}",
                         dtype
@@ -2926,6 +3018,19 @@ fn build_from_proto<'a>(
                         } else {
                             None
                         };
+                        // The index tap is a u64 channel, not `OT`: it carries
+                        // a COUNT, and at tile_N=32 the count exceeds bf16's
+                        // exact-integer range on long requests.
+                        let index_snd = if scan_index_is_consumed(step_graph, operation.id) {
+                            Some(channel_map_collection.tile_u64.get_sender(
+                                operation.id,
+                                Some(2),
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                            ))
+                        } else {
+                            None
+                        };
 
                         fn pick(
                             f: elemto_elem_func::ElemElemFn,
@@ -2983,6 +3088,7 @@ fn build_from_proto<'a>(
                                 ctr,
                                 next_snd,
                                 prior_snd,
+                                index_snd,
                                 f1,
                                 f2,
                                 init,
