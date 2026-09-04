@@ -265,6 +265,17 @@ pub fn sub<T: Debug + ndarray::LinalgScalar + Default>(
     flop_per_cycle: u64,
     write_back_mu: bool,
 ) -> (u64, Tile<T>) {
+    sub_with(in1, in2, flop_per_cycle, write_back_mu, |a, b| a.sub(b))
+}
+
+pub fn sub_u64_wrapping(in1: &Tile<u64>, in2: &Tile<u64>, bw: u64, wb: bool) -> (u64, Tile<u64>) {
+    sub_with(in1, in2, bw, wb, u64::wrapping_sub)
+}
+
+fn sub_with<T: Debug + ndarray::LinalgScalar + Default>(
+    in1: &Tile<T>, in2: &Tile<T>, flop_per_cycle: u64, write_back_mu: bool,
+    subtract: impl Fn(T, T) -> T,
+) -> (u64, Tile<T>) {
     assert_eq!(in1.shape.len(), 2);
     assert_eq!(in2.shape.len(), 2);
     let in1_shape_0 = in1.shape[0];
@@ -297,7 +308,7 @@ pub fn sub<T: Debug + ndarray::LinalgScalar + Default>(
                     let i1 = i.min(in2_shape_0 - 1);
                     let j1 = j.min(in2_shape_1 - 1);
                     let val2 = arr2.get((i1, j1)).unwrap();
-                    let out_val = val1.sub(*val2);
+                    let out_val = subtract(*val1, *val2);
                     out_arr[[i, j]] = out_val;
                 }
             }

@@ -776,7 +776,7 @@ fn build_from_proto<'a>(
                         // by maxN (4096), nowhere near the sign bit.
                         elemto_elem_func::ElemElemFn::Sub(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::sub(tile1, tile2, comp_bw, write_back_mu)
+                                functions::map_fn::sub_u64_wrapping(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
                         e => {
@@ -3169,6 +3169,28 @@ fn build_from_proto<'a>(
                     other => todo!("Scan: dtype pair {:?} not wired", other),
                 }
             }
+            OpType::ContextDeinterleave(op) => {
+                assert!(matches!(op.dtype.unwrap().r#type, Some(Type::F32(_))),
+                        "ContextDeinterleave currently supports F32 tiles");
+                let input = channel_map_collection.tile_f32.get_receiver(
+                    op.input_id, op.stream_idx, builder, channel_depth);
+                let outputs = (0..op.lanes).map(|lane| {
+                    channel_map_collection.tile_f32.get_sender(
+                        operation.id, Some(lane), builder, channel_depth)
+                }).collect();
+                add_child!(builder, crate::operator::context_lanes::ContextDeinterleave::new(input, outputs));
+            }
+            OpType::ContextInterleave(op) => {
+                assert!(matches!(op.dtype.unwrap().r#type, Some(Type::F32(_))),
+                        "ContextInterleave currently supports F32 tiles");
+                let inputs = op.inputs.into_iter().map(|input| {
+                    channel_map_collection.tile_f32.get_receiver(
+                        input.input_id, input.stream_idx, builder, channel_depth)
+                }).collect();
+                let output = channel_map_collection.tile_f32.get_sender(
+                    operation.id, None, builder, channel_depth);
+                add_child!(builder, crate::operator::context_lanes::ContextInterleave::new(inputs, output));
+            }
             OpType::Scan(scan) => match scan.dtype_a.clone().unwrap().r#type.clone().unwrap() {
                 Type::F32(_) => {
                     let in1 = channel_map_collection.tile_f32.get_receiver(
@@ -3486,6 +3508,9 @@ fn build_from_proto<'a>(
                         .functional_sim
                     {
                         match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::NegInf(_) => Arc::new(move || {
+                                Tile::new_neg_inf([tile_row, tile_col], f32_bytes, accum.write_back_mu)
+                            }),
                             init_func::InitFn::Zero(_zero) => Arc::new(move || {
                                 Tile::new_zero([tile_row, tile_col], f32_bytes, accum.write_back_mu)
                             }),
@@ -3501,7 +3526,6 @@ fn build_from_proto<'a>(
                                 // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
                                 Tile::new_empty([0, 0], f32_bytes, accum.write_back_mu)
                             }),
-                            _ => todo!(),
                         }
                     } else {
                         Arc::new(move || {

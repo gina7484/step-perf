@@ -134,6 +134,10 @@ fn extract_inputs(op: &Operation) -> Vec<(u32, u32)> {
         OpType::TakeLast(t) => push_input(&mut inputs, t.input_id, t.stream_idx),
         OpType::StaticStreamify(s) => push_input(&mut inputs, s.input_id, s.stream_idx),
         OpType::AccumBuffer(a) => push_input(&mut inputs, a.input_id, a.stream_idx),
+        OpType::ContextDeinterleave(a) => push_input(&mut inputs, a.input_id, a.stream_idx),
+        OpType::ContextInterleave(a) => {
+            for input in &a.inputs { push_input(&mut inputs, input.input_id, input.stream_idx); }
+        }
     }
     inputs
 }
@@ -197,6 +201,8 @@ fn op_display(op: &Operation) -> String {
         Some(OpType::TakeLast(_)) => "TakeLast",
         Some(OpType::StaticStreamify(_)) => "StaticStreamify",
         Some(OpType::AccumBuffer(_)) => "AccumBuffer",
+        Some(OpType::ContextDeinterleave(_)) => "ContextDeinterleave",
+        Some(OpType::ContextInterleave(_)) => "ContextInterleave",
         None => "Unknown",
     }
     .to_string()
