@@ -11,6 +11,7 @@ pub mod expand;
 pub mod flatmap;
 pub mod flatmap_decomp;
 pub mod flatten;
+pub mod gina_scan;
 pub mod parallelize;
 pub mod partition;
 pub mod promote;

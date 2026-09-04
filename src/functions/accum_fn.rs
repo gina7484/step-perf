@@ -256,3 +256,29 @@ pub fn signal_req_all_read<T: Debug>(
         None => (1, Tile::new_blank(vec![1, 1], 8, write_back_mu)),
     }
 }
+
+/// Return the incoming tile unchanged. This is the zero-compute fold used by
+/// `Accum(Last)` to select the final value of each rank-delimited group.
+pub fn last<T: Debug + Clone>(
+    in_data: &Tile<T>,
+    _accumulator: &Tile<T>,
+    _flop_per_cycle: u64,
+    write_back_mu: bool,
+    _id: u32,
+) -> (u64, Tile<T>) {
+    let output = match &in_data.underlying {
+        Some(arr) => Tile::new_padded(
+            arr.clone(),
+            in_data.bytes_per_elem,
+            write_back_mu,
+            in_data.offset,
+        ),
+        None => Tile::new_blank_padded(
+            in_data.shape.clone(),
+            in_data.bytes_per_elem,
+            write_back_mu,
+            in_data.offset,
+        ),
+    };
+    (0, output)
+}

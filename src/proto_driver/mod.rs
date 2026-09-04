@@ -9,14 +9,15 @@ use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::accum_buff::AccumBuff;
-use crate::operator::take_last::TakeLast;
-use crate::operator::scan::{Scan, ScanConfig};
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
 use crate::operator::flatmap_decomp::{
     FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRowStreamify,
 };
+use crate::operator::gina_scan::{GinaScan, ScanConfig as GinaScanConfig};
 use crate::operator::parallelize::Parallelize;
+use crate::operator::scan::{Scan as NathanScan, ScanConfig as NathanScanConfig};
+use crate::operator::take_last::TakeLast;
 use crate::primitives::select::MultiHotN;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -3082,7 +3083,7 @@ fn build_from_proto<'a>(
 
                         add_child!(
                             builder,
-                            Scan::<SimpleEvent, f32, f32>::new(
+                            NathanScan::<SimpleEvent, f32, f32>::new(
                                 in1,
                                 in2,
                                 ctr,
@@ -3129,7 +3130,7 @@ fn build_from_proto<'a>(
                                     }
                                     cf
                                 },
-                                ScanConfig {
+                                NathanScanConfig {
                                     compute_bw: scan.compute_bw as u64,
                                     write_back_mu: scan.write_back_mu,
                                 },
@@ -3140,9 +3141,118 @@ fn build_from_proto<'a>(
                     other => todo!("Scan: dtype pair {:?} not wired", other),
                 }
             }
-            OpType::Scan(scan) => {
-                todo!("Gina Scan {} functional lowering is added in the next migration task", operation.id)
-            }
+            OpType::Scan(scan) => match scan.dtype_a.clone().unwrap().r#type.clone().unwrap() {
+                Type::F32(_) => {
+                    let in1 = channel_map_collection.tile_f32.get_receiver(
+                        scan.input_id1,
+                        scan.stream_idx1,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, scan.input_id1, channel_depth),
+                    );
+                    let in2 = scan.input_id2.map(|id| {
+                        channel_map_collection.tile_f32.get_receiver(
+                            id,
+                            scan.stream_idx2,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, id, channel_depth),
+                        )
+                    });
+                    let ctr = scan.ctr_id.map(|id| {
+                        channel_map_collection.tile_u64.get_receiver(
+                            id,
+                            scan.ctr_stream_idx,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, id, channel_depth),
+                        )
+                    });
+
+                    let out = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        if scan.emit_both { Some(0) } else { None },
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let paired_out = scan.emit_both.then(|| {
+                        channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            Some(1),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        )
+                    });
+
+                    fn pick(
+                        function: accum_func::AccumFn,
+                        id: u32,
+                    ) -> Arc<
+                        dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > {
+                        match function {
+                            accum_func::AccumFn::Add(_) => Arc::new(move |data, accum, bw, wb| {
+                                functions::accum_fn::add(data, accum, bw, wb, id)
+                            }),
+                            accum_func::AccumFn::Mul(_) => Arc::new(move |data, accum, bw, wb| {
+                                functions::accum_fn::mul(data, accum, bw, wb, id)
+                            }),
+                            accum_func::AccumFn::Max(_) => Arc::new(move |data, accum, bw, wb| {
+                                functions::map_fn::max(data, accum, bw, wb)
+                            }),
+                            accum_func::AccumFn::Last(_) => Arc::new(move |data, accum, bw, wb| {
+                                functions::accum_fn::last(data, accum, bw, wb, id)
+                            }),
+                            other => {
+                                todo!("Scan {}: unsupported accumulation function {:?}", id, other)
+                            }
+                        }
+                    }
+
+                    let fn1 = pick(scan.fn1.clone().unwrap().accum_fn.unwrap(), operation.id);
+                    let fn2 = scan
+                        .fn2
+                        .clone()
+                        .map(|function| pick(function.accum_fn.unwrap(), operation.id));
+                    let rows = scan.tile_row as usize;
+                    let cols = scan.tile_col as usize;
+                    let write_back_mu = scan.write_back_mu;
+                    let init: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
+                        match scan.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_) => Arc::new(move || {
+                                Tile::new_zero([rows, cols], f32_bytes, write_back_mu)
+                            }),
+                            init_func::InitFn::NegInf(_) => Arc::new(move || {
+                                Tile::new_neg_inf([rows, cols], f32_bytes, write_back_mu)
+                            }),
+                            init_func::InitFn::Empty(_) => Arc::new(move || {
+                                Tile::new_empty([rows, cols], f32_bytes, write_back_mu)
+                            }),
+                            init_func::InitFn::DynEmpty(_) => {
+                                Arc::new(move || Tile::new_empty([0, 0], f32_bytes, write_back_mu))
+                            }
+                        };
+
+                    add_child!(
+                        builder,
+                        GinaScan::<SimpleEvent, f32, f32>::new(
+                            in1,
+                            in2,
+                            out,
+                            paired_out,
+                            ctr,
+                            fn1,
+                            fn2,
+                            init,
+                            scan.rank,
+                            GinaScanConfig {
+                                compute_bw: scan.compute_bw as u64,
+                                write_back_mu,
+                                inclusive: scan.inclusive,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                other => todo!("Scan: dtype {:?} not wired", other),
+            },
             OpType::Flatten(flatten) => {
                 match flatten.dtype.clone().unwrap().r#type.clone().unwrap() {
                     Type::F32(_) => {
@@ -3281,6 +3391,33 @@ fn build_from_proto<'a>(
                         accum_func::AccumFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::accum_fn::add(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    operation.id,
+                                )
+                            })
+                        }
+                        accum_func::AccumFn::Mul(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::mul(
+                                    tile1,
+                                    tile2,
+                                    comp_bw,
+                                    write_back_mu,
+                                    operation.id,
+                                )
+                            })
+                        }
+                        accum_func::AccumFn::Max(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::max(tile1, tile2, comp_bw, write_back_mu)
+                            })
+                        }
+                        accum_func::AccumFn::Last(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::accum_fn::last(
                                     tile1,
                                     tile2,
                                     comp_bw,

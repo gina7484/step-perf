@@ -149,3 +149,16 @@ impl<T: Clone + num::Zero> Tile<T> {
         }
     }
 }
+
+impl Tile<f32> {
+    /// A fully-active negative-infinity tile, the identity for Max.
+    pub fn new_neg_inf(arr_shape: [usize; 2], bytes_per_elem: usize, read_from_mu: bool) -> Self {
+        Self {
+            shape: arr_shape.to_vec(),
+            bytes_per_elem,
+            read_from_mu,
+            underlying: Some(ndarray::ArcArray2::from_elem(arr_shape, f32::NEG_INFINITY)),
+            offset: arr_shape[0],
+        }
+    }
+}
