@@ -2952,7 +2952,7 @@ fn build_from_proto<'a>(
             // chunk_factor > 1 is REJECTED by the operator rather than silently
             // folding all C chunk recurrences into one. Validate C=1 FA against
             // the naive layer before trusting anything here.
-            OpType::Scan(scan) => {
+            OpType::NathanScan(scan) => {
                 if std::env::var("STEP_PERF_OP_TRACE").is_ok() {
                     eprintln!("[BUILD Scan id={} in1={} in2={:?} ctr={} ctr_idx={:?}]",
                         operation.id, scan.input_id1, scan.input_id2, scan.ctr_id, scan.ctr_stream_idx);
@@ -3139,6 +3139,9 @@ fn build_from_proto<'a>(
                     }
                     other => todo!("Scan: dtype pair {:?} not wired", other),
                 }
+            }
+            OpType::Scan(scan) => {
+                todo!("Gina Scan {} functional lowering is added in the next migration task", operation.id)
             }
             OpType::Flatten(flatten) => {
                 match flatten.dtype.clone().unwrap().r#type.clone().unwrap() {
