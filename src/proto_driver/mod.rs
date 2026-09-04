@@ -1394,6 +1394,34 @@ fn build_from_proto<'a>(
                             resp: resp_snd,
                         });
                     }
+                    Type::U64(_) => {
+                        let raddr = channel_map_collection.tile_u64.get_receiver(
+                            random_off_chip_load.raddr_id,
+                            random_off_chip_load.raddr_stream_idx,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, random_off_chip_load.raddr_id, channel_depth),
+                        );
+                        let on_chip_snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id, None, builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+                        add_child!(builder, RandomOffChipLoad::<SimpleEvent, _>::new(
+                            to_usize_vec(random_off_chip_load.tensor_shape_tiled),
+                            random_off_chip_load.npy_path,
+                            random_off_chip_load.tile_row as usize,
+                            random_off_chip_load.tile_col as usize,
+                            8,
+                            random_off_chip_load.base_addr_byte as u64,
+                            hbm_config.addr_offset,
+                            random_off_chip_load.par_dispatch as usize,
+                            addr_snd, resp_rcv, raddr, on_chip_snd,
+                            random_off_chip_load.transposed,
+                            operation.id, random_off_chip_load.track_traffic,
+                        ));
+                        mem_context.add_reader(ReadBundle { addr: addr_rcv, resp: resp_snd });
+                    }
                     _ => todo!(),
                 }
             }

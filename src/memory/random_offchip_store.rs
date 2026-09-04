@@ -8,7 +8,7 @@ use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
 use crate::memory::aw_trace::trace_aw_write;
-use crate::primitives::elem::{Bufferizable, Elem};
+use crate::primitives::elem::Elem;
 use crate::primitives::tile::Tile;
 use crate::ramulator::hbm_context::ParAddrs;
 use crate::utils::events::LoggableEventSimple;
@@ -136,8 +136,10 @@ where
         // Calculate the write addresses for the given tile
         let n_bytes = wdata.bytes_per_elem;
 
-        let tile_offset = wdata.size_in_bytes();
-        let base_addr_i = self.base_addr_byte + (waddr * tile_offset as u64);
+        let base_addr_i = self.base_addr_byte + super::tile_base_addr(
+            waddr, *self.tensor_shape_tiled.last().unwrap(),
+            self.tile_row, self.tile_col, n_bytes,
+        );
         let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * n_bytes;
 
         let mut tile_addrs = vec![];

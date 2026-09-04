@@ -173,8 +173,10 @@ where
     /// Generate addresses for a specific tile index
     fn generate_tile_addresses(&self, tile_idx: u64) -> Vec<u64> {
         // Calculate the base address for this tile
-        let tile_offset = self.tile_row * self.tile_col * self.n_byte;
-        let base_addr_i = self.base_addr_byte + (tile_idx * tile_offset as u64);
+        let base_addr_i = self.base_addr_byte + super::tile_base_addr(
+            tile_idx, *self.tensor_shape_tiled.last().unwrap(),
+            self.tile_row, self.tile_col, self.n_byte,
+        );
         let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * self.n_byte;
 
         // Generate all addresses for this tile
