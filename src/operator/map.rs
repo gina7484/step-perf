@@ -667,7 +667,7 @@ where
 mod tests {
     use crate::{
         functions::map_fn,
-        operator::map::BinaryMap,
+        operator::map::{BinaryMap, UnaryMap, UnaryMapConfig},
         primitives::{elem::Elem, tile::Tile},
         utils::events::SimpleEvent,
     };
@@ -752,6 +752,53 @@ mod tests {
             || expected_out_stream_data.into_iter(),
             out_data_rcv,
             tolerance_fn,
+        ));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn i64_to_u64_preserves_stop_levels() {
+        let mut ctx = ProgramBuilder::default();
+        let (input_snd, input_rcv) = ctx.unbounded();
+        let (output_snd, output_rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(
+            || {
+                vec![
+                    Elem::Val(Tile::new(ndarray::arr2(&[[0_i64]]).into_shared(), 8, false)),
+                    Elem::ValStop(
+                        Tile::new(ndarray::arr2(&[[7_i64]]).into_shared(), 8, false),
+                        2,
+                    ),
+                ]
+                .into_iter()
+            },
+            input_snd,
+        ));
+        ctx.add_child(UnaryMap::<SimpleEvent, i64, u64>::new(
+            input_rcv,
+            output_snd,
+            Arc::new(map_fn::i64_u64),
+            UnaryMapConfig {
+                compute_bw: 1,
+                write_back_mu: false,
+            },
+            19,
+        ));
+        ctx.add_child(ApproxCheckerContext::new(
+            || {
+                vec![
+                    Elem::Val(Tile::new(ndarray::arr2(&[[0_u64]]).into_shared(), 8, false)),
+                    Elem::ValStop(
+                        Tile::new(ndarray::arr2(&[[7_u64]]).into_shared(), 8, false),
+                        2,
+                    ),
+                ]
+                .into_iter()
+            },
+            output_rcv,
+            |actual, expected| actual == expected,
         ));
         ctx.initialize(Default::default())
             .unwrap()

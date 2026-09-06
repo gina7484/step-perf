@@ -6,6 +6,7 @@ use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 use serde::Serialize;
 
+use super::random_tile_address::random_tile_byte_addresses;
 use crate::primitives::elem::Elem;
 use crate::primitives::tile::Tile;
 use crate::ramulator::hbm_context::ParAddrs;
@@ -70,6 +71,11 @@ where
         id: u32,
         track_traffic: bool,
     ) -> Self {
+        assert!(
+            tensor_shape_tiled.len() >= 2,
+            "RandomOffChipLoad requires allocation rank >= 2, got {}",
+            tensor_shape_tiled.len()
+        );
         let underlying = match std::fs::File::open(npy_path) {
             Ok(mut file) => {
                 // Read the data and shape of the `.npy` file
@@ -173,21 +179,16 @@ where
 
     /// Generate addresses for a specific tile index
     fn generate_tile_addresses(&self, tile_idx: u64) -> Vec<u64> {
-        // Calculate the base address for this tile
-        let tile_offset = self.tile_row * self.tile_col * self.n_byte;
-        let base_addr_i = self.base_addr_byte + (tile_idx * tile_offset as u64);
-        let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * self.n_byte;
-
-        // Generate all addresses for this tile
-        let mut tile_addrs = vec![];
-        for r in 0..self.tile_row {
-            for c in (0..(self.tile_col * self.n_byte)).step_by(self.addr_offset as usize) {
-                let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
-                tile_addrs.push(addr);
-            }
-        }
-
-        tile_addrs
+        random_tile_byte_addresses(
+            &self.tensor_shape_tiled,
+            tile_idx,
+            self.tile_row,
+            self.tile_col,
+            self.n_byte,
+            self.base_addr_byte,
+            self.addr_offset,
+        )
+        .unwrap_or_else(|error| panic!("[RandomOffChipLoad {}] {error}", self.id))
     }
 
     /// Create tile data for a specific tile index

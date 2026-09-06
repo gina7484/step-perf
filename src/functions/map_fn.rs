@@ -1232,6 +1232,73 @@ pub fn floor_divide_scalar<T: Debug + Copy + num_traits::PrimInt>(
     }
 }
 
+// remainder_scalar(x, d) follows Python/PyTorch remainder signs rather than
+// Rust's truncating `%` result when the operands have different signs.
+pub fn remainder_scalar(
+    in_data: &Tile<i64>,
+    divisor: i64,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<i64>) {
+    assert_ne!(divisor, 0, "RemainderImmediate divisor must be nonzero");
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_padded(
+                arr.mapv(|x| {
+                    let rem = x.checked_rem(divisor).unwrap_or(0);
+                    if rem != 0 && (rem < 0) != (divisor < 0) {
+                        rem + divisor
+                    } else {
+                        rem
+                    }
+                })
+                .to_shared(),
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(
+                vec![shape_0, shape_1],
+                in_data.bytes_per_elem,
+                write_back_mu,
+                offset,
+            ),
+        ),
+    }
+}
+
+pub fn i64_u64(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
+    assert_eq!(in_data.shape.len(), 2);
+    let shape_0 = in_data.shape[0];
+    let shape_1 = in_data.shape[1];
+    let offset = in_data.offset;
+
+    match &in_data.underlying {
+        Some(arr) => {
+            if let Some(negative) = arr.iter().find(|&&value| value < 0) {
+                panic!("I64ToU64 cannot convert negative value {negative}");
+            }
+            (
+                div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+                Tile::new_padded(arr.mapv(|x| x as u64).to_shared(), 8, write_back_mu, offset),
+            )
+        }
+        None => (
+            div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
+            Tile::new_blank_padded(vec![shape_0, shape_1], 8, write_back_mu, offset),
+        ),
+    }
+}
+
 // empty_like(x): uninitialized tensor with the same shape/dtype as the input. The
 // contents are unspecified in PyTorch; we emit zeros so functional simulation stays
 // deterministic. 1 FLOP/elem.
@@ -1851,6 +1918,54 @@ mod tests {
         assert_eq!(o[[0, 1]], 1);
         assert_eq!(o[[0, 2]], 2);
         assert_eq!(o[[0, 3]], 3);
+    }
+
+    #[test]
+    fn test_remainder_scalar() {
+        let arr = Array2::from_shape_vec((1, 5), vec![0i64, 4, 5, 9, 12]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = remainder_scalar(&in_data, 5, 1, false);
+        assert_eq!(
+            out.underlying.unwrap().as_slice().unwrap(),
+            &[0, 4, 0, 4, 2]
+        );
+    }
+
+    #[test]
+    fn test_remainder_scalar_matches_signed_semantics() {
+        let arr = Array2::from_shape_vec((1, 2), vec![-1i64, 1]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_, positive_divisor) = remainder_scalar(&in_data, 5, 1, false);
+        assert_eq!(
+            positive_divisor.underlying.unwrap().as_slice().unwrap(),
+            &[4, 1]
+        );
+
+        let (_, negative_divisor) = remainder_scalar(&in_data, -5, 1, false);
+        assert_eq!(
+            negative_divisor.underlying.unwrap().as_slice().unwrap(),
+            &[-1, -4]
+        );
+    }
+
+    #[test]
+    fn test_i64_to_u64() {
+        let arr = Array2::from_shape_vec((1, 3), vec![0i64, 7, i64::MAX]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let (_cycles, out) = i64_u64(&in_data, 1, false);
+        assert_eq!(
+            out.underlying.unwrap().as_slice().unwrap(),
+            &[0, 7, i64::MAX as u64]
+        );
+        assert_eq!(out.bytes_per_elem, 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "I64ToU64 cannot convert negative value -1")]
+    fn test_i64_to_u64_rejects_negative_values() {
+        let arr = Array2::from_shape_vec((1, 1), vec![-1i64]).unwrap();
+        let in_data = Tile::new(arr.to_shared(), 8, false);
+        let _ = i64_u64(&in_data, 1, false);
     }
 
     #[test]

@@ -6,7 +6,8 @@ use dam::logging::LogEvent;
 use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
-use crate::primitives::elem::{Bufferizable, Elem};
+use super::random_tile_address::random_tile_byte_addresses;
+use crate::primitives::elem::Elem;
 use crate::primitives::tile::Tile;
 use crate::ramulator::hbm_context::ParAddrs;
 use crate::utils::events::LoggableEventSimple;
@@ -64,6 +65,11 @@ where
         id: u32,
         ack_based_on_waddr: bool,
     ) -> Self {
+        assert!(
+            tensor_shape_tiled.len() >= 2,
+            "RandomOffChipStore requires allocation rank >= 2, got {}",
+            tensor_shape_tiled.len()
+        );
         let underlying = match std::fs::File::open(&npy_path) {
             Ok(mut file) => {
                 // Read the data and shape of the `.npy` file
@@ -93,10 +99,9 @@ where
                 panic!("Failed to open file: {error}");
             }
         };
-        assert_eq!(
-            tensor_shape_tiled.len(),
-            2,
-            "Only 2D tensors are supported for now in RandomOffChipStore"
+        assert!(
+            underlying.is_none() || tensor_shape_tiled.len() == 2,
+            "RandomOffChipStore functional updates require allocation rank 2; timing-only stores support rank >= 2"
         );
 
         let ctx = Self {
@@ -130,20 +135,21 @@ where
     }
 
     fn send_write_request(&mut self, waddr: u64, wdata: &Tile<T>) {
-        // Calculate the write addresses for the given tile
-        let n_bytes = wdata.bytes_per_elem;
-
-        let tile_offset = wdata.size_in_bytes();
-        let base_addr_i = self.base_addr_byte + (waddr * tile_offset as u64);
-        let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * n_bytes;
-
-        let mut tile_addrs = vec![];
-        for r in 0..self.tile_row {
-            for c in (0..(self.tile_col * n_bytes)).step_by(self.addr_offset as usize) {
-                let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
-                tile_addrs.push(addr);
-            }
-        }
+        assert_eq!(
+            wdata.bytes_per_elem, self.n_byte,
+            "[RandomOffChipStore {}] write-data element width does not match the configured dtype",
+            self.id
+        );
+        let tile_addrs = random_tile_byte_addresses(
+            &self.tensor_shape_tiled,
+            waddr,
+            self.tile_row,
+            self.tile_col,
+            self.n_byte,
+            self.base_addr_byte,
+            self.addr_offset,
+        )
+        .unwrap_or_else(|error| panic!("[RandomOffChipStore {}] {error}", self.id));
 
         // Send write request to HBM
         let send_request_time = self.time.tick();
@@ -192,8 +198,6 @@ where
 
                 // Calculate the total number of tiles in each dimension
                 let total_tiles_col = self.tensor_shape_tiled.last().unwrap();
-                let total_tiles_row = self.tensor_shape_tiled[self.tensor_shape_tiled.len() - 2];
-
                 // Calculate the tile position in the 2D grid of tiles
                 let tile_row_idx = tile_idx / total_tiles_col;
                 let tile_col_idx = tile_idx % total_tiles_col;

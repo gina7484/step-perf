@@ -9,6 +9,7 @@ use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::accum_buff::AccumBuff;
+use crate::operator::counter::Counter;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
 use crate::operator::flatmap_decomp::{
@@ -882,6 +883,17 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::RemainderConstant(rem) => {
+                            let divisor = rem.constant;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::remainder_scalar(
+                                    tile,
+                                    divisor,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::EmptyLike(_) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::empty_like(tile, comp_bw, write_back_mu)
@@ -1059,6 +1071,42 @@ fn build_from_proto<'a>(
                         e => {
                             panic!("Unsupported unary map function type {:?}", e)
                         }
+                    };
+
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
+                (Type::I64(_), Type::U64(_)) => {
+                    let rcv = channel_map_collection.tile_i64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_u64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::I64ToU64(_) => {
+                            Arc::new(functions::map_fn::i64_u64)
+                        }
+                        e => panic!("Unsupported unary map function type {:?}", e),
                     };
 
                     add_child!(
@@ -1762,7 +1810,7 @@ fn build_from_proto<'a>(
                                 random_off_chip_store.tile_row as usize,
                                 random_off_chip_store.tile_col as usize,
                                 dtype_bytes,
-                                0,
+                                random_off_chip_store.base_addr_byte,
                                 hbm_config.addr_offset,
                                 random_off_chip_store.par_dispatch as usize,
                                 addr_snd,
@@ -1822,7 +1870,53 @@ fn build_from_proto<'a>(
                                 random_off_chip_load.tile_row as usize,
                                 random_off_chip_load.tile_col as usize,
                                 dtype_bytes,
-                                0,
+                                random_off_chip_load.base_addr_byte,
+                                hbm_config.addr_offset,
+                                random_off_chip_load.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                raddr,
+                                on_chip_snd,
+                                random_off_chip_load.transposed,
+                                operation.id,
+                                random_off_chip_load.track_traffic,
+                            )
+                        );
+
+                        mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
+                    Type::I64(_) => {
+                        let raddr = channel_map_collection.tile_u64.get_receiver(
+                            random_off_chip_load.raddr_id,
+                            random_off_chip_load.raddr_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                random_off_chip_load.raddr_id,
+                                channel_depth,
+                            ),
+                        );
+                        let on_chip_snd = channel_map_collection.tile_i64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        add_child!(
+                            builder,
+                            RandomOffChipLoad::<SimpleEvent, _>::new(
+                                to_usize_vec(random_off_chip_load.tensor_shape_tiled),
+                                random_off_chip_load.npy_path,
+                                random_off_chip_load.tile_row as usize,
+                                random_off_chip_load.tile_col as usize,
+                                dtype_bytes,
+                                random_off_chip_load.base_addr_byte,
                                 hbm_config.addr_offset,
                                 random_off_chip_load.par_dispatch as usize,
                                 addr_snd,
@@ -3094,6 +3188,15 @@ fn build_from_proto<'a>(
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
+                            file_printer_context.input_id,
+                            file_printer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, FilePrinterContext::new(rcv, operation.id));
+                    }
+                    Type::I64(_) => {
+                        let rcv = channel_map_collection.tile_i64.get_receiver(
                             file_printer_context.input_id,
                             file_printer_context.stream_idx,
                             builder,
@@ -4756,6 +4859,15 @@ fn build_from_proto<'a>(
                     }
                     dtype => panic!("Unsupported data type for EagerMerge operation {:?}", dtype),
                 }
+            }
+            OpType::Counter(counter) => {
+                let sender = channel_map_collection.tile_u64.get_sender(
+                    operation.id,
+                    None,
+                    builder,
+                    get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                );
+                add_child!(builder, Counter::new(counter.count, sender, operation.id));
             }
             OpType::FlatmapCounter(flatmap_counter) => {
                 match flatmap_counter

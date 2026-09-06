@@ -6,6 +6,7 @@ pub mod metadata_gen;
 pub mod offchip_store;
 pub mod random_offchip_load;
 pub mod random_offchip_store;
+pub mod random_tile_address;
 
 /// PMU bandwidth (bytes/cycle)
 pub static PMU_BW: u64 = 64;

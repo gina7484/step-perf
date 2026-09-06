@@ -1,3 +1,4 @@
+use super::counter::count_range_elems;
 use crate::primitives::elem::{Elem, StopType};
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
@@ -335,49 +336,23 @@ where
                 self.id
             );
         });
-        for i in 0..data_usize - 1 {
-            let t_value = <T>::try_from(i).unwrap_or_else(|_| {
-                panic!("[Counter {}] Failed to convert index to T", self.id);
-            });
+        for elem in count_range_elems(
+            data_usize,
+            scalar_tile.bytes_per_elem,
+            scalar_tile.read_from_mu,
+            stop_level,
+            self.id,
+        ) {
             self.out_stream
                 .enqueue(
                     &self.time,
                     ChannelElement {
                         time: self.time.tick(),
-                        data: Elem::Val(Tile::<T>::new(
-                            ndarray::arr2(&[[t_value]]).into_shared(),
-                            scalar_tile.bytes_per_elem,
-                            scalar_tile.read_from_mu,
-                        )),
+                        data: elem,
                     },
                 )
                 .unwrap();
         }
-
-        let t_value = <T>::try_from(data_usize - 1).unwrap_or_else(|_| {
-            panic!("[Counter {}] Failed to convert index to T", self.id);
-        });
-        let stop_level = if stop_level.is_none() {
-            1
-        } else {
-            stop_level.unwrap() + 1
-        };
-        self.out_stream
-            .enqueue(
-                &self.time,
-                ChannelElement {
-                    time: self.time.tick(),
-                    data: Elem::ValStop(
-                        Tile::<T>::new(
-                            ndarray::arr2(&[[t_value]]).into_shared(),
-                            scalar_tile.bytes_per_elem,
-                            scalar_tile.read_from_mu,
-                        ),
-                        stop_level,
-                    ),
-                },
-            )
-            .unwrap();
     }
 }
 
@@ -664,7 +639,7 @@ mod tests {
                             BYTES_PER_ELEM,
                             READ_FROM_MU,
                         ),
-                        0,
+                        2,
                     ),
                 ]
                 .into_iter()
@@ -677,7 +652,7 @@ mod tests {
         // Expected output:
         // From first input (3): 0, 1, 2 (last with stop_level=1)
         // From second input (2): 0, 1 (last with stop_level=1)
-        // From third input (4): 0, 1, 2, 3 (last with stop_level=1)
+        // From third input (4): 0, 1, 2, 3 (last with stop_level=3)
         ctx.add_child(ApproxCheckerContext::new(
             move || {
                 let mut expected = vec![];
@@ -710,7 +685,8 @@ mod tests {
                     }
                 }
 
-                // Third input (count=4, with stop_level=0): generates 0, 1, 2, 3
+                // Third input closes two outer dimensions. FlatmapCounter
+                // appends its range dimension, so the final stop is 3.
                 for i in 0..4 {
                     let tile = Tile::<VT>::new(
                         ndarray::arr2(&[[i]]).into_shared(),
@@ -718,7 +694,7 @@ mod tests {
                         READ_FROM_MU,
                     );
                     if i == 3 {
-                        expected.push(Elem::ValStop(tile, 1));
+                        expected.push(Elem::ValStop(tile, 3));
                     } else {
                         expected.push(Elem::Val(tile));
                     }
@@ -733,6 +709,19 @@ mod tests {
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "count must be positive")]
+    fn flatmap_counter_rejects_zero_count() {
+        let mut ctx = ProgramBuilder::default();
+        let (_in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, _out_rcv) = ctx.unbounded();
+        let counter = FlatmapCounter::<u64>::new(in_rcv, out_snd, 23);
+        counter.gen_stream(
+            Tile::new(ndarray::arr2(&[[0_u64]]).into_shared(), 8, false),
+            None,
+        );
     }
 
     #[test]
