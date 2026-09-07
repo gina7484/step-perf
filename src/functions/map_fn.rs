@@ -1299,6 +1299,65 @@ pub fn i64_u64(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) ->
     }
 }
 
+/// Tile-local last-dimension gather.
+///
+/// `source` is `[R, C]`; `index` is `[1, R]`, the physical form of a logical
+/// `[R, 1]` vector after STeP's trailing-unit normalization. One value is read
+/// from each source row and the result is returned as `[1, R]`.
+pub fn gather<T: Clone>(
+    source: &Tile<T>,
+    index: &Tile<i64>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    assert_eq!(source.shape.len(), 2, "Gather source must be a 2D tile");
+    assert_eq!(index.shape.len(), 2, "Gather index must be a 2D tile");
+    let rows = source.shape[0];
+    let cols = source.shape[1];
+    assert_eq!(
+        index.shape,
+        vec![1, rows],
+        "Gather requires source [R, C] and index [1, R] tiles"
+    );
+
+    let cycles = div_ceil(rows as u64, flop_per_cycle);
+    match (&source.underlying, &index.underlying) {
+        (Some(source_array), Some(index_array)) => {
+            let mut values = Vec::with_capacity(rows);
+            for row in 0..rows {
+                let raw_index = index_array[[0, row]];
+                let column = usize::try_from(raw_index).unwrap_or_else(|_| {
+                    panic!("Gather index {raw_index} at row {row} is negative")
+                });
+                assert!(
+                    column < cols,
+                    "Gather index {raw_index} at row {row} is out of bounds for width {cols}"
+                );
+                values.push(source_array[[row, column]].clone());
+            }
+            let output = Array2::from_shape_vec((1, rows), values).unwrap();
+            (
+                cycles,
+                Tile::new_padded(
+                    output.to_shared(),
+                    source.bytes_per_elem,
+                    write_back_mu,
+                    index.offset,
+                ),
+            )
+        }
+        _ => (
+            cycles,
+            Tile::new_blank_padded(
+                vec![1, rows],
+                source.bytes_per_elem,
+                write_back_mu,
+                index.offset,
+            ),
+        ),
+    }
+}
+
 // empty_like(x): uninitialized tensor with the same shape/dtype as the input. The
 // contents are unspecified in PyTorch; we emit zeros so functional simulation stays
 // deterministic. 1 FLOP/elem.
@@ -1966,6 +2025,67 @@ mod tests {
         let arr = Array2::from_shape_vec((1, 1), vec![-1i64]).unwrap();
         let in_data = Tile::new(arr.to_shared(), 8, false);
         let _ = i64_u64(&in_data, 1, false);
+    }
+
+    #[test]
+    fn test_gather_selects_one_value_per_source_row() {
+        let source = Array2::from_shape_vec(
+            (3, 4),
+            vec![10i64, 11, 12, 13, 20, 21, 22, 23, 30, 31, 32, 33],
+        )
+        .unwrap();
+        let index = Array2::from_shape_vec((1, 3), vec![3i64, 0, 2]).unwrap();
+        let (cycles, output) = gather(
+            &Tile::new(source.to_shared(), 8, false),
+            &Tile::new(index.to_shared(), 8, false),
+            2,
+            false,
+        );
+
+        assert_eq!(cycles, 2);
+        assert_eq!(output.shape, vec![1, 3]);
+        assert_eq!(
+            output.underlying.unwrap().as_slice().unwrap(),
+            &[13, 20, 32]
+        );
+    }
+
+    #[test]
+    fn test_gather_blank_input_preserves_output_shape() {
+        let source: Tile<f32> = Tile::new_blank(vec![2, 4], 4, false);
+        let index: Tile<i64> = Tile::new_blank(vec![1, 2], 8, false);
+        let (_, output) = gather(&source, &index, 1, true);
+
+        assert_eq!(output.shape, vec![1, 2]);
+        assert_eq!(output.bytes_per_elem, 4);
+        assert!(output.underlying.is_none());
+        assert!(output.read_from_mu);
+    }
+
+    #[test]
+    #[should_panic(expected = "Gather index -1 at row 0 is negative")]
+    fn test_gather_rejects_negative_indices() {
+        let source = Array2::from_shape_vec((1, 2), vec![10i64, 11]).unwrap();
+        let index = Array2::from_shape_vec((1, 1), vec![-1i64]).unwrap();
+        let _ = gather(
+            &Tile::new(source.to_shared(), 8, false),
+            &Tile::new(index.to_shared(), 8, false),
+            1,
+            false,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Gather index 2 at row 0 is out of bounds for width 2")]
+    fn test_gather_rejects_out_of_bounds_indices() {
+        let source = Array2::from_shape_vec((1, 2), vec![10i64, 11]).unwrap();
+        let index = Array2::from_shape_vec((1, 1), vec![2i64]).unwrap();
+        let _ = gather(
+            &Tile::new(source.to_shared(), 8, false),
+            &Tile::new(index.to_shared(), 8, false),
+            1,
+            false,
+        );
     }
 
     #[test]

@@ -894,6 +894,21 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::MulConstant(mul_constant) => {
+                            let constant = mul_constant
+                                .constant
+                                .map(|value| value as i64)
+                                .or(mul_constant.constant_float.map(|value| value as i64))
+                                .expect("integer multiply requires a scalar constant");
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mul_constant(
+                                    tile,
+                                    constant,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::EmptyLike(_) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::empty_like(tile, comp_bw, write_back_mu)
@@ -1222,6 +1237,112 @@ fn build_from_proto<'a>(
                         e => {
                             panic!("Unsupported binary map function type {:?}", e)
                         }
+                    };
+                    add_child!(
+                        builder,
+                        BinaryMap::<SimpleEvent, _, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
+                }
+                (Type::I64(_), Type::I64(_), Type::I64(_)) => {
+                    let rcv1 = channel_map_collection.tile_i64.get_receiver(
+                        binary_map.input_id1,
+                        binary_map.stream_idx1,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
+                    );
+                    let rcv2 = channel_map_collection.tile_i64.get_receiver(
+                        binary_map.input_id2,
+                        binary_map.stream_idx2,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
+                    );
+                    let snd = channel_map_collection.tile_i64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, &Tile<i64>, u64, bool) -> (u64, Tile<i64>) + Send + Sync,
+                    > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Gather(_) => {
+                            Arc::new(move |source, index, comp_bw, write_back_mu| {
+                                functions::map_fn::gather(source, index, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Add(_) => {
+                            Arc::new(move |lhs, rhs, comp_bw, write_back_mu| {
+                                functions::map_fn::add(lhs, rhs, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => panic!("Unsupported binary map function type {:?}", e),
+                    };
+                    add_child!(
+                        builder,
+                        BinaryMap::<SimpleEvent, _, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
+                }
+                (Type::F32(_), Type::I64(_), Type::F32(_))
+                | (Type::Bf16(_), Type::I64(_), Type::Bf16(_)) => {
+                    let rcv1 = channel_map_collection.tile_f32.get_receiver(
+                        binary_map.input_id1,
+                        binary_map.stream_idx1,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
+                    );
+                    let rcv2 = channel_map_collection.tile_i64.get_receiver(
+                        binary_map.input_id2,
+                        binary_map.stream_idx2,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
+                    );
+                    let snd = channel_map_collection.tile_f32.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<f32>, &Tile<i64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
+                    > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Gather(_) => {
+                            Arc::new(move |source, index, comp_bw, write_back_mu| {
+                                functions::map_fn::gather(source, index, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => panic!("Unsupported binary map function type {:?}", e),
                     };
                     add_child!(
                         builder,
@@ -2307,6 +2428,16 @@ fn build_from_proto<'a>(
                             operation,
                             broadcast,
                             tile_f32,
+                            builder,
+                            channel_depth
+                        );
+                    }
+                    Type::I64(_) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            tile_i64,
                             builder,
                             channel_depth
                         );
@@ -3701,6 +3832,28 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            Flatten::new(rcv, snd, flatten.min_rank, flatten.max_rank,)
+                        );
+                    }
+                    Type::I64(_) => {
+                        let rcv = channel_map_collection.tile_i64.get_receiver(
+                            flatten.input_id,
+                            flatten.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                flatten.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_i64.get_sender(
                             operation.id,
                             None,
                             builder,
