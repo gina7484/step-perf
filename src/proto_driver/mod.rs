@@ -1606,6 +1606,44 @@ fn build_from_proto<'a>(
                             resp: resp_snd,
                         });
                     }
+                    Type::I64(_) => {
+                        let on_chip_snd = channel_map_collection.tile_i64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let (addr_snd, addr_rcv) = builder.unbounded();
+                        let (resp_snd, resp_rcv) = builder.unbounded();
+
+                        add_child!(
+                            builder,
+                            LinearOffChipLoad::<SimpleEvent, _>::new(
+                                to_usize_vec(linear_off_chip_load.tensor_shape_tiled),
+                                to_usize_vec(linear_off_chip_load.stride),
+                                to_usize_vec(linear_off_chip_load.out_shape_tiled),
+                                linear_off_chip_load.npy_path,
+                                linear_off_chip_load.tile_row as usize,
+                                linear_off_chip_load.tile_col as usize,
+                                std::mem::size_of::<i64>(),
+                                0,
+                                hbm_config.addr_offset,
+                                linear_off_chip_load.par_dispatch as usize,
+                                linear_off_chip_load.simulate_ramulator,
+                                addr_snd,
+                                resp_rcv,
+                                on_chip_snd,
+                                linear_off_chip_load.transposed,
+                                linear_off_chip_load.add_outer_singular_dim,
+                                operation.id,
+                            )
+                        );
+
+                        mem_context.add_reader(ReadBundle {
+                            addr: addr_rcv,
+                            resp: resp_snd,
+                        });
+                    }
                     _ => todo!(),
                 }
             }
@@ -2719,6 +2757,46 @@ fn build_from_proto<'a>(
                         }
 
                         let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            StaticReassemble::<SimpleEvent, _>::new(
+                                rcv_list,
+                                snd,
+                                static_reassemble.reassemble_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                    write_back_mu: static_reassemble.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
+                    }
+                    Type::I64(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in static_reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(static_reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_i64.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.tile_i64.get_sender(
                             operation.id,
                             None,
                             builder,
@@ -4158,6 +4236,35 @@ fn build_from_proto<'a>(
                                 retile_streamify.split_row,
                                 retile_streamify.filter_mask,
                                 retile_streamify.chunk as usize, // chunk size (default: 1 for backward compatibility)
+                                operation.id,
+                            )
+                        );
+                    }
+                    Type::I64(_) => {
+                        let rcv = channel_map_collection.tile_i64.get_receiver(
+                            retile_streamify.input_id,
+                            retile_streamify.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                retile_streamify.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_i64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            RetileStreamify::<_>::new(
+                                rcv,
+                                snd,
+                                retile_streamify.split_row,
+                                retile_streamify.filter_mask,
+                                retile_streamify.chunk as usize,
                                 operation.id,
                             )
                         );
