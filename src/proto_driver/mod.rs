@@ -2032,6 +2032,69 @@ fn build_from_proto<'a>(
                             dtype => panic!("Unsupported data type {:?}", dtype),
                         }
                     }
+                    Type::U64(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_u64.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        match reassemble
+                            .control_dtype
+                            .clone()
+                            .unwrap()
+                            .r#type
+                            .clone()
+                            .unwrap()
+                        {
+                            Type::MultiHot(_) => {
+                                let control_rcv = channel_map_collection.multihot.get_receiver(
+                                    reassemble.control_id,
+                                    reassemble.control_stream_idx,
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        reassemble.control_id,
+                                        channel_depth,
+                                    ),
+                                );
+                                add_child!(
+                                    builder,
+                                    FlatReassemble::<SimpleEvent, _, _>::new(
+                                        rcv_list,
+                                        control_rcv,
+                                        snd,
+                                        reassemble.reassemble_rank,
+                                        FlatReassembleConfig {
+                                            switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                            write_back_mu: reassemble.write_back_mu,
+                                        },
+                                        operation.id,
+                                    )
+                                )
+                            }
+                            dtype => panic!("Unsupported data type {:?}", dtype),
+                        }
+                    }
                     Type::MultiHot(_) => {
                         let mut rcv_list = vec![];
                         for (rcv_id, stream_idx) in reassemble
@@ -4345,6 +4408,9 @@ pub fn parse_proto<'a>(
     db_name: Option<String>,
     dump_prefix: Option<String>,
 ) -> (bool, u64, std::time::Duration) {
+    // Dynamic-tile expressions are parsed inside operator coroutines. May's
+    // default 4K-word stack overflows in the symbolic parser on MoE graphs.
+    dam::shim::config().set_stack_size(128 * 1024);
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
     if std::env::var("STEP_PERF_TRACE").is_ok() || std::env::var("STEP_PERF_GRAPH_JSON").is_ok() {
