@@ -68,6 +68,13 @@ where
         add_outer_singular_dim: bool,
         id: u32,
     ) -> Self {
+        // A rank-one allocation is stored as one row of tiles. Keep its
+        // output iteration rank unchanged; the extra axis only shapes storage.
+        let tensor_shape_tiled = if tensor_shape_tiled.len() == 1 {
+            vec![1, tensor_shape_tiled[0]]
+        } else {
+            tensor_shape_tiled
+        };
         let underlying = match std::fs::File::open(npy_path) {
             Ok(mut file) => {
                 // Read the data and shape of the `.npy` file

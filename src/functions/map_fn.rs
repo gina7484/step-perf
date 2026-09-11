@@ -1232,6 +1232,32 @@ pub fn floor_divide_scalar<T: Debug + Copy + num_traits::PrimInt>(
     }
 }
 
+/// Unsigned tile remainder used by paged-cache address arithmetic.
+pub fn remainder_u64(
+    in_data: &Tile<u64>,
+    divisor: u64,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<u64>) {
+    assert_ne!(divisor, 0, "RemainderImmediate divisor must be nonzero");
+    let cycles = div_ceil(in_data.shape.iter().product::<usize>() as u64, flop_per_cycle);
+    let output = match &in_data.underlying {
+        Some(arr) => Tile::new_padded(
+            arr.mapv(|x| x % divisor).to_shared(),
+            in_data.bytes_per_elem,
+            write_back_mu,
+            in_data.offset,
+        ),
+        None => Tile::new_blank_padded(
+            in_data.shape.clone(),
+            in_data.bytes_per_elem,
+            write_back_mu,
+            in_data.offset,
+        ),
+    };
+    (cycles, output)
+}
+
 // remainder_scalar(x, d) follows Python/PyTorch remainder signs rather than
 // Rust's truncating `%` result when the operands have different signs.
 pub fn remainder_scalar(
@@ -1352,9 +1378,9 @@ pub fn i64_u64(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) ->
 /// `source` is `[R, C]`; `index` is `[1, R]`, the physical form of a logical
 /// `[R, 1]` vector after STeP's trailing-unit normalization. One value is read
 /// from each source row and the result is returned as `[1, R]`.
-pub fn gather<T: Clone>(
+pub fn gather<T: Clone, I: Copy + Debug + std::fmt::Display + TryInto<usize>>(
     source: &Tile<T>,
-    index: &Tile<i64>,
+    index: &Tile<I>,
     flop_per_cycle: u64,
     write_back_mu: bool,
 ) -> (u64, Tile<T>) {
@@ -1374,7 +1400,7 @@ pub fn gather<T: Clone>(
             let mut values = Vec::with_capacity(rows);
             for row in 0..rows {
                 let raw_index = index_array[[0, row]];
-                let column = usize::try_from(raw_index).unwrap_or_else(|_| {
+                let column = raw_index.try_into().unwrap_or_else(|_| {
                     panic!("Gather index {raw_index} at row {row} is negative")
                 });
                 assert!(

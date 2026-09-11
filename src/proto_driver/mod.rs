@@ -449,6 +449,20 @@ fn build_from_proto<'a>(
                     let map_fn: Arc<
                         dyn Fn(&Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
                     > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::FloorDivideConstant(fd) => {
+                            let divisor = u64::try_from(fd.constant.expect("integer divisor")).expect("positive divisor");
+                            assert!(divisor > 0);
+                            Arc::new(move |tile, bw, write_back| {
+                                functions::map_fn::floor_divide_scalar(tile, divisor, bw, write_back)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::RemainderConstant(rem) => {
+                            let divisor = u64::try_from(rem.constant).expect("positive divisor");
+                            assert!(divisor > 0);
+                            Arc::new(move |tile, bw, write_back| {
+                                functions::map_fn::remainder_u64(tile, divisor, bw, write_back)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::MulConstant(mul_constant) => {
                             Arc::new(move |tile1, comp_bw, write_back_mu| {
                                 functions::map_fn::mul_constant(
@@ -1289,6 +1303,56 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Add(_) => {
                             Arc::new(move |lhs, rhs, comp_bw, write_back_mu| {
                                 functions::map_fn::add(lhs, rhs, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => panic!("Unsupported binary map function type {:?}", e),
+                    };
+                    add_child!(
+                        builder,
+                        BinaryMap::<SimpleEvent, _, _, _>::new(
+                            rcv1,
+                            rcv2,
+                            snd,
+                            map_fn,
+                            binary_map.compute_bw as u64,
+                            binary_map.write_back_mu,
+                            operation.id,
+                        )
+                    );
+                }
+                (Type::I64(_), Type::U64(_), Type::I64(_)) => {
+                    let rcv1 = channel_map_collection.tile_i64.get_receiver(
+                        binary_map.input_id1,
+                        binary_map.stream_idx1,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id1,
+                            channel_depth,
+                        ),
+                    );
+                    let rcv2 = channel_map_collection.tile_u64.get_receiver(
+                        binary_map.input_id2,
+                        binary_map.stream_idx2,
+                        builder,
+                        get_chan_depth(
+                            &sim_config.config_dict,
+                            binary_map.input_id2,
+                            channel_depth,
+                        ),
+                    );
+                    let snd = channel_map_collection.tile_i64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<i64>, &Tile<u64>, u64, bool) -> (u64, Tile<i64>) + Send + Sync,
+                    > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Gather(_) => {
+                            Arc::new(move |source, index, comp_bw, write_back_mu| {
+                                functions::map_fn::gather(source, index, comp_bw, write_back_mu)
                             })
                         }
                         e => panic!("Unsupported binary map function type {:?}", e),
@@ -2371,6 +2435,44 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            RepeatRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                snd,
+                                repeat_ref.rank,
+                                operation.id,
+                            )
+                        );
+                    }
+                    (Type::I64(_), Type::U64(_)) => {
+                        let in_rcv = channel_map_collection.tile_i64.get_receiver(
+                            repeat_ref.input_id,
+                            repeat_ref.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_ref.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let ref_rcv = channel_map_collection.tile_u64.get_receiver(
+                            repeat_ref.ref_id,
+                            repeat_ref.ref_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_ref.ref_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_i64.get_sender(
                             operation.id,
                             None,
                             builder,
