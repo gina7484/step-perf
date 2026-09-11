@@ -1337,6 +1337,13 @@ fn build_from_proto<'a>(
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, &Tile<i64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
                     > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Mask(mask) => {
+                            Arc::new(move |data, count, comp_bw, write_back_mu| {
+                                functions::map_fn::mask(
+                                    data, count, mask.row, mask.val, comp_bw, write_back_mu,
+                                )
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::Gather(_) => {
                             Arc::new(move |source, index, comp_bw, write_back_mu| {
                                 functions::map_fn::gather(source, index, comp_bw, write_back_mu)
@@ -1475,7 +1482,8 @@ fn build_from_proto<'a>(
                     );
                 }
 
-                (Type::F32(_), Type::U64(_), Type::F32(_)) => {
+                (Type::F32(_), Type::U64(_), Type::F32(_))
+                | (Type::Bf16(_), Type::U64(_), Type::Bf16(_)) => {
                     // create
                     let rcv1 = channel_map_collection.tile_f32.get_receiver(
                         binary_map.input_id1,
@@ -1506,6 +1514,13 @@ fn build_from_proto<'a>(
                     let map_fn: Arc<
                         dyn Fn(&Tile<f32>, &Tile<u64>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
                     > = match binary_map.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Mask(mask) => {
+                            Arc::new(move |data, count, comp_bw, write_back_mu| {
+                                functions::map_fn::mask(
+                                    data, count, mask.row, mask.val, comp_bw, write_back_mu,
+                                )
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::SetOffset(set_offset) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::set_offset(tile1, tile2, write_back_mu)
@@ -4048,6 +4063,41 @@ fn build_from_proto<'a>(
                             )
                         );
                     }
+                }
+                (Type::U64(_), Type::U64(_)) => {
+                    let rcv = channel_map_collection.tile_u64.get_receiver(
+                        accum.input_id, accum.stream_idx, builder,
+                        get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_u64.get_sender(
+                        operation.id, None, builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let func: Arc<
+                        dyn Fn(&Tile<u64>, &Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
+                    > = match accum.func.unwrap().accum_fn.unwrap() {
+                        accum_func::AccumFn::Add(_) => Arc::new(move |tile, state, bw, write_back| {
+                            functions::accum_fn::add(tile, state, bw, write_back, operation.id)
+                        }),
+                        other => panic!("Unsupported u64 accumulation function {:?}", other),
+                    };
+                    let tile_row = accum.tile_row as usize;
+                    let tile_col = accum.tile_col as usize;
+                    let init_accum: Arc<dyn Fn() -> Tile<u64> + Send + Sync> =
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_) => Arc::new(move || {
+                                Tile::new_zero([tile_row, tile_col], 8, accum.write_back_mu)
+                            }),
+                            other => panic!("Unsupported u64 accumulation initializer {:?}", other),
+                        };
+                    add_child!(builder, Accum::<SimpleEvent, _, _>::new(
+                        rcv, snd, func, init_accum, accum.rank,
+                        AccumConfig {
+                            compute_bw: accum.compute_bw as u64,
+                            write_back_mu: accum.write_back_mu,
+                        },
+                        operation.id,
+                    ));
                 }
                 (Type::F32(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.tile_f32.get_receiver(

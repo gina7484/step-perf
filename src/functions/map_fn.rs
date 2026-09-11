@@ -1276,6 +1276,54 @@ pub fn remainder_scalar(
     }
 }
 
+/// Keep a valid prefix along one axis and fill the rest without changing metadata.
+/// Charge one comparison/select per output element, including blank tiles.
+pub fn mask<I: Copy + TryInto<usize>>(
+    data: &Tile<f32>,
+    count: &Tile<I>,
+    row: bool,
+    val: f32,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+) -> (u64, Tile<f32>) {
+    assert_eq!(data.shape.len(), 2, "Mask data must be a 2D tile");
+    assert_eq!(count.shape, vec![1, 1], "Mask valid count must be scalar");
+    let extent = data.shape[if row { 0 } else { 1 }];
+    let valid = count.underlying.as_ref().map(|arr| {
+        let valid = arr[[0, 0]]
+            .try_into()
+            .ok()
+            .expect("Mask valid count must be nonnegative and fit usize");
+        assert!(valid <= extent, "Mask valid count exceeds axis extent");
+        valid
+    });
+    let cycles = div_ceil((data.shape[0] * data.shape[1]) as u64, flop_per_cycle);
+    let output = match (&data.underlying, valid) {
+        (Some(arr), Some(valid)) => {
+            let output = Array2::from_shape_fn((data.shape[0], data.shape[1]), |(i, j)| {
+                if (if row { i } else { j }) < valid {
+                    arr[[i, j]]
+                } else {
+                    val
+                }
+            });
+            Tile::new_padded(
+                output.to_shared(),
+                data.bytes_per_elem,
+                write_back_mu,
+                data.offset,
+            )
+        }
+        _ => Tile::new_blank_padded(
+            data.shape.clone(),
+            data.bytes_per_elem,
+            write_back_mu,
+            data.offset,
+        ),
+    };
+    (cycles, output)
+}
+
 pub fn i64_u64(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
@@ -2025,6 +2073,78 @@ mod tests {
         let arr = Array2::from_shape_vec((1, 1), vec![-1i64]).unwrap();
         let in_data = Tile::new(arr.to_shared(), 8, false);
         let _ = i64_u64(&in_data, 1, false);
+    }
+
+    #[test]
+    fn test_mask_rows_columns_and_boundaries() {
+        let arr = Array2::from_shape_vec((3, 4), (0..12).map(|v| v as f32).collect()).unwrap();
+        for row in [true, false] {
+            let extent = if row { 3 } else { 4 };
+            for valid in [0, 2, extent] {
+                let data = Tile::new_padded(arr.clone().to_shared(), 2, false, 1);
+                let count = Tile::new(
+                    Array2::from_elem((1, 1), valid as u64).to_shared(),
+                    8,
+                    false,
+                );
+                let (cycles, out) = mask(&data, &count, row, f32::NEG_INFINITY, 5, true);
+                assert_eq!(cycles, 3);
+                assert_eq!(out.shape, vec![3, 4]);
+                assert_eq!(out.bytes_per_elem, 2);
+                assert_eq!(out.offset, 1);
+                assert!(out.read_from_mu);
+                let out = out.underlying.unwrap();
+                for ((i, j), value) in out.indexed_iter() {
+                    assert_eq!(
+                        *value,
+                        if (if row { i } else { j }) < valid {
+                            arr[[i, j]]
+                        } else {
+                            f32::NEG_INFINITY
+                        }
+                    );
+                }
+                assert_eq!(data.underlying.unwrap(), arr);
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_signed_count_fill_value_and_blank_inputs() {
+        let data = Tile::new(Array2::from_elem((2, 3), 5.0f32).to_shared(), 4, false);
+        let count = Tile::new(Array2::from_elem((1, 1), 1i64).to_shared(), 8, false);
+        let (_, out) = mask(&data, &count, false, -7.0, 4, false);
+        assert_eq!(
+            out.underlying.unwrap().as_slice().unwrap(),
+            &[5.0, -7.0, -7.0, 5.0, -7.0, -7.0]
+        );
+        for (data, count) in [
+            (data.drop_underlying(), count.clone()),
+            (data.clone(), count.drop_underlying()),
+        ] {
+            let (cycles, out) = mask(&data, &count, false, 0.0, 4, true);
+            assert_eq!(cycles, 2);
+            assert_eq!(out.shape, data.shape);
+            assert_eq!(out.offset, data.offset);
+            assert!(out.read_from_mu);
+            assert!(out.underlying.is_none());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Mask valid count must be nonnegative")]
+    fn test_mask_rejects_negative_count() {
+        let data = Tile::new_blank(vec![2, 3], 4, false);
+        let count = Tile::new(Array2::from_elem((1, 1), -1i64).to_shared(), 8, false);
+        mask(&data, &count, true, 0.0, 1, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mask valid count exceeds axis extent")]
+    fn test_mask_rejects_count_above_extent() {
+        let data = Tile::new_blank(vec![2, 3], 4, false);
+        let count = Tile::new(Array2::from_elem((1, 1), 4u64).to_shared(), 8, false);
+        mask(&data, &count, false, 0.0, 1, false);
     }
 
     #[test]
