@@ -18,7 +18,6 @@ pub mod promote;
 pub mod reassemble;
 pub mod repeat;
 pub mod reshape;
-pub mod scan;
 pub mod static_reassemble;
 pub mod streamify;
 pub mod take_last;
