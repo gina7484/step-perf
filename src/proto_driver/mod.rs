@@ -2968,28 +2968,6 @@ fn build_from_proto<'a>(
                     _ => todo!("TakeLast: only F32 is wired"),
                 }
             }
-            OpType::ContextDeinterleave(op) => {
-                assert!(matches!(op.dtype.unwrap().r#type, Some(Type::F32(_))),
-                        "ContextDeinterleave currently supports F32 tiles");
-                let input = channel_map_collection.tile_f32.get_receiver(
-                    op.input_id, op.stream_idx, builder, channel_depth);
-                let outputs = (0..op.lanes).map(|lane| {
-                    channel_map_collection.tile_f32.get_sender(
-                        operation.id, Some(lane), builder, channel_depth)
-                }).collect();
-                add_child!(builder, crate::operator::context_lanes::ContextDeinterleave::new(input, outputs));
-            }
-            OpType::ContextInterleave(op) => {
-                assert!(matches!(op.dtype.unwrap().r#type, Some(Type::F32(_))),
-                        "ContextInterleave currently supports F32 tiles");
-                let inputs = op.inputs.into_iter().map(|input| {
-                    channel_map_collection.tile_f32.get_receiver(
-                        input.input_id, input.stream_idx, builder, channel_depth)
-                }).collect();
-                let output = channel_map_collection.tile_f32.get_sender(
-                    operation.id, None, builder, channel_depth);
-                add_child!(builder, crate::operator::context_lanes::ContextInterleave::new(inputs, output));
-            }
             OpType::Scan(scan) => match scan.dtype_a.clone().unwrap().r#type.clone().unwrap() {
                 Type::F32(_) => {
                     let in1 = channel_map_collection.tile_f32.get_receiver(

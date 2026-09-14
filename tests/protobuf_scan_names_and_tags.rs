@@ -33,3 +33,11 @@ fn retired_scan_wire_tag_is_unknown() {
     let decoded = Operation::decode([0x8a, 0x03, 0x00].as_slice()).unwrap();
     assert!(decoded.op_type.is_none());
 }
+
+#[test]
+fn retired_lane_routing_wire_tags_are_unknown() {
+    for key in [0xc2, 0xca] { // length-delimited tags 56 and 57
+        let decoded = Operation::decode([key, 0x03, 0x00].as_slice()).unwrap();
+        assert!(decoded.op_type.is_none());
+    }
+}
