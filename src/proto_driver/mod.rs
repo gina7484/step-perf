@@ -31,6 +31,7 @@ use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::{Reshape, ReshapeNoPadStream, ReshapePadStream};
 use crate::operator::static_reassemble::StaticReassemble;
+use crate::operator::shuffle::{Shuffle, ShuffleConfig};
 use crate::operator::streamify::Streamify;
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
@@ -1541,6 +1542,68 @@ fn build_from_proto<'a>(
                         );
                     }
                     dtype => panic!("Unsupported data type for Broadcast operation {:?}", dtype),
+                }
+            }
+            OpType::Shuffle(shuffle) => {
+                let num_buckets = match shuffle.index_dtype.unwrap().r#type.unwrap() {
+                    Type::MultiHot(mask) => mask.width as usize,
+                    dtype => panic!("Unsupported Shuffle index type {:?}", dtype),
+                };
+                let index_rcv = channel_map_collection.multihot.get_receiver(
+                    shuffle.index_id,
+                    shuffle.index_stream_idx,
+                    builder,
+                    get_chan_depth(&sim_config.config_dict, shuffle.index_id, channel_depth),
+                );
+                let output_depth = get_chan_depth(
+                    &sim_config.config_dict,
+                    operation.id,
+                    channel_depth,
+                );
+                let index_snd = channel_map_collection.multihot.get_sender(
+                    operation.id,
+                    Some(1),
+                    builder,
+                    output_depth,
+                );
+                macro_rules! add_shuffle {
+                    ($channel:ident) => {{
+                        let input_rcv = channel_map_collection.$channel.get_receiver(
+                            shuffle.input_id,
+                            shuffle.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                shuffle.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let data_snd = channel_map_collection.$channel.get_sender(
+                            operation.id,
+                            Some(0),
+                            builder,
+                            output_depth,
+                        );
+                        builder.add_child(Shuffle::<SimpleEvent, _>::new(
+                            input_rcv,
+                            index_rcv,
+                            data_snd,
+                            index_snd,
+                            ShuffleConfig {
+                                rank: shuffle.rank,
+                                num_buckets,
+                                write_back_mu: shuffle.write_back_mu,
+                            },
+                            operation.id,
+                        ));
+                    }};
+                }
+                match shuffle.input_dtype.unwrap().r#type.unwrap() {
+                    Type::F32(_) | Type::F16(_) => add_shuffle!(tile_f32),
+                    Type::U64(_) => add_shuffle!(tile_u64),
+                    Type::I64(_) => add_shuffle!(tile_i64),
+                    Type::Bool(_) => add_shuffle!(tile_bool),
+                    dtype => panic!("Unsupported Shuffle input type {:?}", dtype),
                 }
             }
             OpType::FlatPartition(flat_partition) => {

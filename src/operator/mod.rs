@@ -18,6 +18,7 @@ pub mod repeat;
 pub mod static_reassemble;
 pub mod reshape;
 pub mod streamify;
+pub mod shuffle;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;

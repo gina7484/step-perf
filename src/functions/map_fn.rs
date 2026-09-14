@@ -805,6 +805,7 @@ pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::elem::Bufferizable;
 
     #[test]
     fn test_row_wise_sum() {
