@@ -8,6 +8,7 @@ pub mod ramulator;
 pub mod test;
 pub mod utils;
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::repeat;
 use std::sync::Arc;
@@ -23,6 +24,8 @@ use crate::ramulator::hbm_context::HBMConfig;
 
 #[pyfunction]
 #[pyo3(signature = (proto, logging, hbm_config, sim_config, db_name=None, dump_prefix=None))]
+/// Return passed, cycles, duration_ms, duration_s, and a traffic dictionary.
+/// Traffic contains total_bytes, read_bytes, and write_bytes measured by HBM.
 fn run_graph(
     py: Python,
     proto: String,
@@ -34,7 +37,7 @@ fn run_graph(
     // `<dump_prefix>.nodes.txt` describing the graph it built. Useful for
     // debugging `builder.initialize` failures.
     dump_prefix: Option<String>,
-) -> (bool, u64, u128, u64) {
+) -> (bool, u64, u128, u64, HashMap<String, u64>) {
     let step_graph: ProgramGraph = {
         let file_contents = fs::read(proto).unwrap();
         ProgramGraph::decode(file_contents.as_slice()).unwrap()
@@ -42,7 +45,7 @@ fn run_graph(
 
     println!("Successfully read proto file");
 
-    let (passed, cycles, duration) =
+    let (passed, cycles, duration, traffic_stats) =
         parse_proto(step_graph, logging, hbm_config, sim_config, db_name.clone(), dump_prefix);
 
     if logging {
@@ -52,10 +55,14 @@ fn run_graph(
         );
     }
 
-    // Convert duration to milliseconds as f64 for Python (better precision for short durations)
     let duration_milliseconds = duration.as_millis();
     let duration_seconds = duration.as_secs();
-    return (passed, cycles, duration_milliseconds, duration_seconds);
+    let traffic = HashMap::from([
+        ("total_bytes".to_string(), traffic_stats.total_bytes()),
+        ("read_bytes".to_string(), traffic_stats.read_bytes()),
+        ("write_bytes".to_string(), traffic_stats.write_bytes()),
+    ]);
+    (passed, cycles, duration_milliseconds, duration_seconds, traffic)
 }
 
 #[pymodule]

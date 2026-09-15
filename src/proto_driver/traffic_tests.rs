@@ -78,8 +78,12 @@ fn graph_traffic_counts_full_requests_and_hbm_bypass() {
         assert_eq!(stats.write_bytes(), write_bytes);
         assert_eq!(stats.total_bytes(), read_bytes + write_bytes);
 
-        let (passed, cycles, _) = parse_proto(graph, false, hbm_config, sim_config, None, None);
+        let (passed, cycles, _, returned_stats) =
+            parse_proto(graph, false, hbm_config, sim_config, None, None);
         assert!(passed);
         assert!(cycles > 0);
+        assert_eq!(returned_stats.read_bytes(), read_bytes);
+        assert_eq!(returned_stats.write_bytes(), write_bytes);
+        assert_eq!(returned_stats.total_bytes(), read_bytes + write_bytes);
     }
 }

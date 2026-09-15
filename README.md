@@ -10,7 +10,20 @@ ragged and data-dependent shapes.
 Each address counts as `HBMConfig.addr_offset` bytes. Repeated accesses count
 again, and partially used requests count at their full request size. Loads with
 `simulate_ramulator=false` bypass HBM and contribute no traffic to this report.
-The Rust `parse_proto` and Python `run_graph` return tuples are unchanged.
+
+Python callers can read the counters from the final item in the return tuple:
+
+```python
+cycles, duration_ms, duration_s, traffic = simulate(...)
+print(traffic["total_bytes"])
+print(traffic["read_bytes"])
+print(traffic["write_bytes"])
+```
+
+The lower-level `step_perf.run_graph(...)` returns
+`(passed, cycles, duration_ms, duration_s, traffic)`. Rust `parse_proto` returns
+`(passed, cycles, duration, traffic_stats)`, where `traffic_stats` is an
+`Arc<HBMTrafficStats>`.
 
 ## Get Started:
 To run the tests that use Ramulator:
@@ -85,4 +98,3 @@ If the data arriaved on cycle `x` and is reapted `y` times, the data is enqueued
 #### LinearOffChipLoadRef
 
 #### OffChipStore
-

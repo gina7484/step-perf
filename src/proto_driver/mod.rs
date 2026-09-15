@@ -5358,7 +5358,7 @@ pub fn parse_proto<'a>(
     sim_config: SimConfig,
     db_name: Option<String>,
     dump_prefix: Option<String>,
-) -> (bool, u64, std::time::Duration) {
+) -> (bool, u64, std::time::Duration, Arc<HBMTrafficStats>) {
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
     let traffic_stats = build_from_proto(
@@ -5406,5 +5406,5 @@ pub fn parse_proto<'a>(
         traffic_stats.read_bytes(),
         traffic_stats.write_bytes(),
     );
-    (passed, cycles, duration)
+    (passed, cycles, duration, traffic_stats)
 }

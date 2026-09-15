@@ -41,7 +41,7 @@ mod test {
 
         println!("Successfully read proto file");
 
-        let (passed, cycles, duration) = parse_proto(
+        let (passed, cycles, duration, _) = parse_proto(
             step_graph,
             logging,
             HBMConfig {
