@@ -9,10 +9,14 @@ use derive_more::Constructor;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use serde_json::de::Read;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 #[derive(Debug, Clone)]
 pub struct HBMConfig {
-    pub addr_offset: u64, // number of bytes read for each request
+    pub addr_offset: u64, // number of bytes transferred for each read or write request
     pub channel_num: usize,
     pub per_channel_latency: u64,
     pub per_channel_init_interval: u64,
@@ -228,11 +232,37 @@ pub struct WriteBundle {
     pub resp: Sender<u64>,
 }
 
+/// Traffic received by one HBM context, measured in bytes at request granularity.
+/// Each address contributes `HBMConfig::addr_offset` bytes, including repeated
+/// addresses and requests for partially used blocks. Responses add no traffic.
+#[derive(Debug, Default)]
+pub struct HBMTrafficStats {
+    read_bytes: AtomicU64,
+    write_bytes: AtomicU64,
+}
+
+impl HBMTrafficStats {
+    pub fn read_bytes(&self) -> u64 {
+        self.read_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn write_bytes(&self) -> u64 {
+        self.write_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Read after the simulation finishes to get the graph's final total.
+    pub fn total_bytes(&self) -> u64 {
+        self.read_bytes() + self.write_bytes()
+    }
+}
+
 #[context_macro]
 pub struct HBMContext {
     channels: Vec<ChannelBundle>,
     readers: Vec<ReadBundle>,
     writers: Vec<WriteBundle>,
+    bytes_per_request: u64,
+    traffic_stats: Arc<HBMTrafficStats>,
 }
 
 impl Context for HBMContext {
@@ -366,6 +396,8 @@ impl HBMContext {
             channels,
             readers: vec![],
             writers: vec![],
+            bytes_per_request: config.addr_offset,
+            traffic_stats: Arc::new(HBMTrafficStats::default()),
             context_info: Default::default(),
         };
 
@@ -375,6 +407,12 @@ impl HBMContext {
         }
 
         ctx
+    }
+
+    /// Retain this handle before moving the context into the program builder.
+    /// Its counters contain the final traffic once the simulation finishes.
+    pub fn traffic_stats(&self) -> Arc<HBMTrafficStats> {
+        Arc::clone(&self.traffic_stats)
     }
 
     pub fn add_reader(&mut self, ReadBundle { addr, resp }: ReadBundle) {
@@ -403,10 +441,14 @@ impl HBMContext {
                     let element_visible_time = elem_time.time();
                     if context_time >= element_visible_time {
                         // If the response is visible at the current time, we can dequeue it
+                        let bytes = addr_vec.addrs.len() as u64 * self.bytes_per_request;
                         for addr_i in addr_vec.addrs {
                             requests.push(Request::new(false, addr_i, i));
                         }
                         reader.addr.dequeue(&self.time).unwrap();
+                        self.traffic_stats
+                            .read_bytes
+                            .fetch_add(bytes, Ordering::Relaxed);
                     } else {
                         // If not, we skip this response
                         continue;
@@ -426,10 +468,14 @@ impl HBMContext {
                     let context_time = self.time.tick().time();
                     let element_visible_time = elem_time.time();
                     if context_time >= element_visible_time {
+                        let bytes = addr_vec.addrs.len() as u64 * self.bytes_per_request;
                         for addr_i in addr_vec.addrs {
                             requests.push(Request::new(true, addr_i, i));
                         }
                         writer.addr.dequeue(&self.time).unwrap();
+                        self.traffic_stats
+                            .write_bytes
+                            .fetch_add(bytes, Ordering::Relaxed);
                     }
                 }
                 PeekResult::Nothing(_time) => continue,
@@ -521,13 +567,124 @@ impl HBMContext {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use dam::{
         channel::ChannelElement,
         simulation::{InitializationOptions, ProgramBuilder, RunOptions},
         utility_contexts::{FunctionContext, GeneratorContext},
     };
 
-    use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ParAddrs, ReadBundle};
+    use crate::ramulator::hbm_context::{
+        HBMConfig, HBMContext, HBMTrafficStats, ParAddrs, ReadBundle, WriteBundle,
+    };
+
+    fn simulate_traffic(
+        bytes_per_request: u64,
+        bundles: Vec<(bool, Vec<Vec<u64>>)>,
+    ) -> Arc<HBMTrafficStats> {
+        let mut parent = ProgramBuilder::default();
+        let mut mem_context = HBMContext::new(
+            &mut parent,
+            HBMConfig {
+                addr_offset: bytes_per_request,
+                channel_num: 2,
+                per_channel_latency: 3,
+                per_channel_init_interval: 2,
+                per_channel_outstanding: 1,
+                per_channel_start_up_time: 5,
+            },
+        );
+        let stats = mem_context.traffic_stats();
+        assert_eq!(stats.read_bytes(), 0);
+        assert_eq!(stats.write_bytes(), 0);
+        assert_eq!(stats.total_bytes(), 0);
+
+        for (is_write, batches) in bundles {
+            let (addr_snd, addr_rcv) = parent.unbounded();
+            let (resp_snd, resp_rcv) = parent.unbounded();
+            let mut expected: Vec<u64> = batches.iter().flatten().copied().collect();
+            expected.sort_unstable();
+
+            let mut source = FunctionContext::new();
+            addr_snd.attach_sender(&source);
+            source.set_run(move |time| {
+                for (i, addrs) in batches.into_iter().enumerate() {
+                    // Future timestamps exercise repeated peeks before dequeue.
+                    addr_snd
+                        .enqueue(
+                            time,
+                            ChannelElement {
+                                time: time.tick() + 7 * (i as u64 + 1),
+                                data: ParAddrs::new(addrs),
+                            },
+                        )
+                        .unwrap();
+                }
+            });
+            parent.add_child(source);
+
+            let mut sink = FunctionContext::new();
+            resp_rcv.attach_receiver(&sink);
+            sink.set_run(move |time| {
+                let mut received = vec![];
+                while let Ok(response) = resp_rcv.dequeue(time) {
+                    received.push(response.data);
+                }
+                received.sort_unstable();
+                assert_eq!(received, expected);
+            });
+            parent.add_child(sink);
+
+            if is_write {
+                mem_context.add_writer(WriteBundle::new(addr_rcv, resp_snd));
+            } else {
+                mem_context.add_reader(ReadBundle::new(addr_rcv, resp_snd));
+            }
+        }
+
+        parent.add_child(mem_context);
+        let executed = parent
+            .initialize(InitializationOptions::default())
+            .unwrap()
+            .run(RunOptions::default());
+        assert!(executed.passed());
+        stats
+    }
+
+    #[test]
+    fn traffic_counts_variable_read_and_write_batches() {
+        let stats = simulate_traffic(
+            32,
+            vec![
+                (false, vec![vec![0, 32, 0], vec![], vec![64], vec![0]]),
+                (false, vec![vec![], vec![0]]),
+                (true, vec![vec![0], vec![32, 0]]),
+                (true, vec![vec![0, 64], vec![]]),
+            ],
+        );
+
+        assert_eq!(stats.read_bytes(), 6 * 32);
+        assert_eq!(stats.write_bytes(), 5 * 32);
+        assert_eq!(stats.total_bytes(), 11 * 32);
+    }
+
+    #[test]
+    fn traffic_is_independent_for_each_simulation() {
+        let reads = simulate_traffic(128, vec![(false, vec![vec![0, 128, 0]])]);
+        let writes = simulate_traffic(64, vec![(true, vec![vec![0, 64]])]);
+        let empty = simulate_traffic(64, vec![]);
+
+        assert_eq!(reads.read_bytes(), 384);
+        assert_eq!(reads.write_bytes(), 0);
+        assert_eq!(reads.total_bytes(), 384);
+        assert_eq!(writes.read_bytes(), 0);
+        assert_eq!(writes.write_bytes(), 128);
+        assert_eq!(writes.total_bytes(), 128);
+        assert_eq!(empty.read_bytes(), 0);
+        assert_eq!(empty.write_bytes(), 0);
+        assert_eq!(empty.total_bytes(), 0);
+    }
 
     #[test]
     fn read_from_two_bundle() {

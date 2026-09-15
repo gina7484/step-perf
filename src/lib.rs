@@ -45,11 +45,6 @@ fn run_graph(
     let (passed, cycles, duration) =
         parse_proto(step_graph, logging, hbm_config, sim_config, db_name.clone(), dump_prefix);
 
-    println!(
-        "Passed: {}, Elapsed Cycles: {}, Duration: {:?}",
-        passed, cycles, duration
-    );
-
     if logging {
         println!(
             "Log saved to {}",

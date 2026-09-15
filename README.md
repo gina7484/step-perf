@@ -1,5 +1,17 @@
 # step-perf
 
+## Simulation traffic report
+
+Each graph simulation reports total off-chip traffic in bytes alongside elapsed
+cycles and duration, with separate read and write totals. `HBMContext` counts the
+addresses it receives at runtime, so the total follows the accesses issued for
+ragged and data-dependent shapes.
+
+Each address counts as `HBMConfig.addr_offset` bytes. Repeated accesses count
+again, and partially used requests count at their full request size. Loads with
+`simulate_ramulator=false` bypass HBM and contribute no traffic to this report.
+The Rust `parse_proto` and Python `run_graph` return tuples are unchanged.
+
 ## Get Started:
 To run the tests that use Ramulator:
 ```bash

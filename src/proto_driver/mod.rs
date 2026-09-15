@@ -1,6 +1,9 @@
 pub mod configs;
 pub mod proto_headers;
 
+#[cfg(test)]
+mod traffic_tests;
+
 use crate::functions;
 use crate::memory::dyn_linear_offchip_load::DynLinearOffChipLoad;
 use crate::memory::dyn_offchip_store::DynOffChipStore;
@@ -63,7 +66,9 @@ use crate::proto_driver::proto_headers::graph_proto::{
     accum_func, buffer, data_type::Type, elemto_elem_func, init_func, operation::OpType,
     ProgramGraph,
 };
-use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
+use crate::ramulator::hbm_context::{
+    HBMConfig, HBMContext, HBMTrafficStats, ReadBundle, WriteBundle,
+};
 use crate::utils::{
     cast::{to_u64_vec, to_usize_vec},
     events::SimpleEvent,
@@ -235,9 +240,10 @@ fn build_from_proto<'a>(
     hbm_config: &HBMConfig,
     sim_config: &SimConfig,
     dump_prefix: Option<String>,
-) {
+) -> Arc<HBMTrafficStats> {
     let channel_depth = sim_config.channel_depth;
     let mut mem_context = HBMContext::new(builder, hbm_config.clone());
+    let traffic_stats = mem_context.traffic_stats();
 
     // Graph dump (file 1: proto operators). Built here, before the loop below
     // consumes `step_graph.operators`. `begin()` arms the per-node channel
@@ -289,6 +295,13 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Exp(exp) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::exp(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Clamp(clamp) => {
+                            let min = clamp.min_float.or(clamp.min.map(|v| v as f32));
+                            let max = clamp.max_float.or(clamp.max.map(|v| v as f32));
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::clamp(tile, min, max, comp_bw, write_back_mu)
                             })
                         }
                         elemto_elem_func::ElemElemFn::Pow2(pow2) => {
@@ -4917,7 +4930,12 @@ fn build_from_proto<'a>(
                                         reshape.write_back_mu,
                                         0,
                                     ),
-                                    _ => todo!(),
+                                    init_func::InitFn::NegInf(_) => Tile::new_neg_inf(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        reshape.write_back_mu,
+                                    ),
+                                    other => panic!("Unsupported float padding function {:?}", other),
                                 };
                                 Some(pad_val)
                             }
@@ -5329,6 +5347,8 @@ fn build_from_proto<'a>(
         }
         crate::utils::graph_dump::end();
     }
+
+    traffic_stats
 }
 
 pub fn parse_proto<'a>(
@@ -5341,7 +5361,7 @@ pub fn parse_proto<'a>(
 ) -> (bool, u64, std::time::Duration) {
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
-    build_from_proto(
+    let traffic_stats = build_from_proto(
         step_graph,
         &mut channel_map_collection,
         &mut builder,
@@ -5375,9 +5395,16 @@ pub fn parse_proto<'a>(
     let executed = initialized.run(run_options);
     let duration = start.elapsed();
 
-    println!("Duration: {:?}", duration);
-
     let cycles = executed.elapsed_cycles().unwrap();
     let passed = executed.passed();
+    println!(
+        "Passed: {}, Elapsed Cycles: {}, Duration: {:?}, Off-chip Traffic: {} bytes, Read: {} bytes, Write: {} bytes",
+        passed,
+        cycles,
+        duration,
+        traffic_stats.total_bytes(),
+        traffic_stats.read_bytes(),
+        traffic_stats.write_bytes(),
+    );
     (passed, cycles, duration)
 }
