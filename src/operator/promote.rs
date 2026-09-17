@@ -1,10 +1,11 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
 
 #[context_macro]
 pub struct PromoteOuter<T: DAMType> {
-    in_stream: Receiver<Elem<T>>,
-    out_stream: Sender<Elem<T>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
+    out_stream: ProfiledSender<Elem<T>>,
 }
 
 impl<T: DAMType> PromoteOuter<T>
@@ -13,8 +14,8 @@ where
 {
     pub fn new(in_stream: Receiver<Elem<T>>, out_stream: Sender<Elem<T>>) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
@@ -86,8 +87,8 @@ impl<T: DAMType> Context for PromoteOuter<T> {
 
 #[context_macro]
 pub struct Promote<T: DAMType> {
-    in_stream: Receiver<Elem<T>>,
-    out_stream: Sender<Elem<T>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
+    out_stream: ProfiledSender<Elem<T>>,
     promote_rank: StopType,
 }
 
@@ -101,8 +102,8 @@ where
         promote_rank: StopType,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             promote_rank,
             context_info: Default::default(),
         };

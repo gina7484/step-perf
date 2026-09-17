@@ -1,3 +1,4 @@
+use crate::utils::request_profile::ProfiledReceiver;
 use std::{fs::File, marker::PhantomData};
 
 use dam::context_tools::*;
@@ -28,7 +29,7 @@ pub struct OffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub addr_offset: u64,    // The data received per request
     pub par_dispatch: usize,
     // Sender & Receiver (DAM details)
-    pub on_chip_rcv: Receiver<Elem<Tile<T>>>,
+    pub on_chip_rcv: ProfiledReceiver<Elem<Tile<T>>>,
     pub addr_snd: Sender<ParAddrs>,
     pub ack_rcv: Receiver<u64>,
     pub id: u32,
@@ -62,7 +63,7 @@ where
             store_path,
             base_addr_byte,
             addr_offset,
-            on_chip_rcv,
+            on_chip_rcv: on_chip_rcv.into(),
             par_dispatch,
             addr_snd,
             ack_rcv,
@@ -232,6 +233,7 @@ where
             tile_idx += 1;
 
             // Send write request to HBM
+            let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
             let send_request_time = self.time.tick();
             for (idx, addr_chunk) in tile_addrs
                 .iter()
@@ -257,6 +259,12 @@ where
             }
 
             let read_finish_time = self.time.tick();
+            self.on_chip_rcv.record_memory_current(
+                send_request_time.time(),
+                read_finish_time.time(),
+                profile_bytes,
+                true,
+            );
 
             dam::logging::log_event(&E::new(
                 "OffChipStore".to_string(),
@@ -281,7 +289,7 @@ pub struct OffChipStoreRamulator<E: LoggableEventSimple, T: DAMType> {
     pub store_path: Option<String>,
     pub base_addr_byte: u64, // The base address for the given tensor
     pub addr_offset: u64,    // The data received per request
-    pub on_chip_rcv: Receiver<Elem<Tile<T>>>,
+    pub on_chip_rcv: ProfiledReceiver<Elem<Tile<T>>>,
     pub addr_snd: Sender<u64>,
     pub wdata_snd: Sender<MemoryData>,
     pub ack_rcv: Receiver<bool>,
@@ -316,7 +324,7 @@ where
             store_path,
             base_addr_byte,
             addr_offset,
-            on_chip_rcv,
+            on_chip_rcv: on_chip_rcv.into(),
             addr_snd,
             wdata_snd,
             ack_rcv,
@@ -478,6 +486,7 @@ where
             tile_idx += 1;
 
             // Send write request to HBM
+            let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
             let send_request_time = self.time.tick();
             for (idx, addr) in tile_addrs.iter().enumerate() {
                 self.addr_snd
@@ -507,6 +516,12 @@ where
             }
 
             let read_finish_time = self.time.tick();
+            self.on_chip_rcv.record_memory_current(
+                send_request_time.time(),
+                read_finish_time.time(),
+                profile_bytes,
+                true,
+            );
 
             dam::logging::log_event(&E::new(
                 "OffChipStore".to_string(),

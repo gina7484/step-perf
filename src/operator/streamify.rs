@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
 
 use dam::context_tools::*;
@@ -14,8 +15,8 @@ use crate::utils::events::LoggableEventSimple;
 pub struct Streamify<E: LoggableEventSimple, T: Bufferizable + Clone> {
     pub repeat_factor: Vec<usize>, // The number of repeated linear reads to do for each buffer
     pub rank: StopType,
-    pub in_stream: Receiver<Elem<Buffer<T>>>,
-    pub out_stream: Sender<Elem<T>>,
+    pub in_stream: ProfiledReceiver<Elem<Buffer<T>>>,
+    pub out_stream: ProfiledSender<Elem<T>>,
     pub id: u32,
     _phantom: PhantomData<E>,
 }
@@ -37,8 +38,8 @@ where
         let ctx = Self {
             repeat_factor,
             rank,
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
             _phantom: PhantomData,
@@ -248,8 +249,8 @@ where
 pub struct StaticStreamify<E: LoggableEventSimple, T: Bufferizable + Clone> {
     pub stride: Vec<usize>,
     pub out_shape: Vec<usize>,
-    pub in_stream: Receiver<Elem<Buffer<T>>>,
-    pub out_stream: Sender<Elem<T>>,
+    pub in_stream: ProfiledReceiver<Elem<Buffer<T>>>,
+    pub out_stream: ProfiledSender<Elem<T>>,
     pub id: u32,
     _phantom: PhantomData<E>,
 }
@@ -271,8 +272,8 @@ where
         let ctx = Self {
             stride,
             out_shape,
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
             _phantom: PhantomData,

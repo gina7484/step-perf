@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::fs::File;
 use std::marker::PhantomData;
 
@@ -29,9 +30,9 @@ pub struct RandomOffChipStore<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<ParAddrs>,
     pub ack_rcv: Receiver<u64>,
     // Channel facing on-chip memory
-    pub waddr: Receiver<Elem<Tile<u64>>>,
-    pub wdata: Receiver<Elem<Tile<T>>>,
-    pub wack: Option<Sender<Elem<bool>>>,
+    pub waddr: ProfiledReceiver<Elem<Tile<u64>>>,
+    pub wdata: ProfiledReceiver<Elem<Tile<T>>>,
+    pub wack: Option<ProfiledSender<Elem<bool>>>,
     pub ack_based_on_waddr: bool, // if true, the ack stream's shape will be based on the waddr,
     // otherwise it is based on the wdata.
     pub id: u32,
@@ -116,9 +117,9 @@ where
             par_dispatch,
             addr_snd,
             ack_rcv,
-            waddr,
-            wdata,
-            wack,
+            waddr: waddr.into(),
+            wdata: wdata.into(),
+            wack: wack.map(Into::into),
             id,
             ack_based_on_waddr,
             _phantom: PhantomData,
@@ -152,6 +153,7 @@ where
         .unwrap_or_else(|error| panic!("[RandomOffChipStore {}] {error}", self.id));
 
         // Send write request to HBM
+        let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
         let send_request_time = self.time.tick();
         for (idx, addr_chunk) in tile_addrs
             .iter()
@@ -177,6 +179,12 @@ where
         }
 
         let read_finish_time = self.time.tick();
+        self.wdata.record_memory_current(
+            send_request_time.time(),
+            read_finish_time.time(),
+            profile_bytes,
+            true,
+        );
 
         dam::logging::log_event(&E::new(
             "RandomOffChipStore".to_string(),

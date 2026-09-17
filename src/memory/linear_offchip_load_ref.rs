@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
 
 use dam::context_tools::*;
@@ -30,10 +31,10 @@ pub struct LinearOffChipLoadRef<E: LoggableEventSimple, T: DAMType, R: DAMType> 
     // the output stream, so the load costs no memory time.
     pub simulate_ramulator: bool,
     // Sender & Receiver (DAM details)
-    pub ref_rcv: Receiver<Elem<R>>,
+    pub ref_rcv: ProfiledReceiver<Elem<R>>,
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
-    pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub on_chip_snd: ProfiledSender<Elem<Tile<T>>>,
     pub transposed: bool,
     pub id: u32,
     pub trigger_rank: u32,
@@ -110,10 +111,10 @@ where
             addr_offset,
             par_dispatch,
             simulate_ramulator,
-            ref_rcv,
+            ref_rcv: ref_rcv.into(),
             addr_snd,
             resp_addr_rcv,
-            on_chip_snd,
+            on_chip_snd: on_chip_snd.into(),
             transposed,
             id,
             trigger_rank,
@@ -312,6 +313,7 @@ where
                 }
             };
 
+            let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
             let send_request_time = self.time.tick();
 
             // When the ramulator isn't simulated, the tile is handed to the
@@ -343,6 +345,14 @@ where
             }
 
             let read_finish_time = self.time.tick();
+            if self.simulate_ramulator {
+                self.on_chip_snd.record_memory(
+                    send_request_time.time(),
+                    read_finish_time.time(),
+                    profile_bytes,
+                    false,
+                );
+            }
 
             dam::logging::log_event(&E::new(
                 "LinearOffChipLoadRef".to_string(),

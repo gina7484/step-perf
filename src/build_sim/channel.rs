@@ -110,6 +110,7 @@ where
         capacity: Option<usize>,
     ) -> Receiver<Elem<T>> {
         let rcv = self.get_receiver_inner(id, idx, builder, capacity);
+        crate::utils::request_profile::register_endpoint(rcv.id(), false, id, idx);
         // Graph-dump hook: record the channel the calling node receives on.
         graph_dump::capture_channel(rcv.id(), graph_dump::Dir::In, idx, std::any::type_name::<T>());
         rcv
@@ -221,6 +222,7 @@ where
         capacity: Option<usize>,
     ) -> Sender<Elem<T>> {
         let snd = self.get_sender_inner(id, idx, builder, capacity);
+        crate::utils::request_profile::register_endpoint(snd.id(), true, id, idx);
         // Graph-dump hook: record the channel the calling node sends on.
         graph_dump::capture_channel(snd.id(), graph_dump::Dir::Out, idx, std::any::type_name::<T>());
         snd

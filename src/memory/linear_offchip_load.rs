@@ -1,3 +1,4 @@
+use crate::utils::request_profile::ProfiledSender;
 use std::marker::PhantomData;
 
 use dam::context_tools::*;
@@ -32,7 +33,7 @@ pub struct LinearOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     // Sender & Receiver (DAM details)
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
-    pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub on_chip_snd: ProfiledSender<Elem<Tile<T>>>,
     pub transposed: bool,
     // Whether the output stream carries a leading size-1 dim on top of
     // `out_shape_tiled`. When false the stream is one rank shorter, so the
@@ -119,7 +120,7 @@ where
             simulate_ramulator,
             addr_snd,
             resp_addr_rcv,
-            on_chip_snd,
+            on_chip_snd: on_chip_snd.into(),
             transposed,
             add_outer_singular_dim,
             id,
@@ -345,6 +346,7 @@ where
                 }
             };
 
+            let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
             let send_request_time = self.time.tick();
 
             // When the ramulator isn't simulated, the tile is handed to the
@@ -376,6 +378,14 @@ where
             }
 
             let read_finish_time = self.time.tick();
+            if self.simulate_ramulator {
+                self.on_chip_snd.record_memory(
+                    send_request_time.time(),
+                    read_finish_time.time(),
+                    profile_bytes,
+                    false,
+                );
+            }
 
             dam::logging::log_event(&E::new(
                 "LinearOffChipLoad".to_string(),

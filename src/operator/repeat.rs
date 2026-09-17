@@ -1,11 +1,12 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
 
 #[context_macro]
 pub struct RepeatStatic<T: Clone> {
-    in_stream: Receiver<Elem<T>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
     repeat_factor: usize,
-    out_stream: Sender<Elem<T>>,
+    out_stream: ProfiledSender<Elem<T>>,
 }
 
 impl<T: DAMType> RepeatStatic<T>
@@ -18,9 +19,9 @@ where
         out_stream: Sender<Elem<T>>,
     ) -> Self {
         let ctx = Self {
-            in_stream,
+            in_stream: in_stream.into(),
             repeat_factor,
-            out_stream,
+            out_stream: out_stream.into(),
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
@@ -97,9 +98,9 @@ impl<T: DAMType> Context for RepeatStatic<T> {
 
 #[context_macro]
 pub struct RepeatRef<T: Clone, R: Clone> {
-    in_stream: Receiver<Elem<T>>,
-    ref_stream: Receiver<Elem<R>>,
-    out_stream: Sender<Elem<T>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
+    ref_stream: ProfiledReceiver<Elem<R>>,
+    out_stream: ProfiledSender<Elem<T>>,
     rank: StopType,
     id: u32,
 }
@@ -116,9 +117,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            ref_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            ref_stream: ref_stream.into(),
+            out_stream: out_stream.into(),
             rank,
             id,
             context_info: Default::default(),

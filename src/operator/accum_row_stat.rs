@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
 
 use ndarray::Array2;
@@ -81,8 +82,8 @@ impl GroupState {
 /// from tile shapes and are independent of how the value is computed here.
 #[context_macro]
 pub struct AccumRowStat<E> {
-    in_stream: Receiver<Elem<Tile<f32>>>,
-    out_stream: Sender<Elem<Tile<f32>>>,
+    in_stream: ProfiledReceiver<Elem<Tile<f32>>>,
+    out_stream: ProfiledSender<Elem<Tile<f32>>>,
     rank: StopType,
     bytes_per_elem: usize,
     config: AccumRowStatConfig,
@@ -104,8 +105,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             rank,
             bytes_per_elem,
             config,

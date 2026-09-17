@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::memory::PMU_BW;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::{
@@ -17,9 +18,9 @@ pub struct FlatPartitionConfig {
 
 #[context_macro]
 pub struct FlatPartition<E, A: DAMType, SELT: DAMType> {
-    in_stream: Receiver<Elem<A>>,
-    sel_stream: Receiver<Elem<SELT>>,
-    out_streams: Vec<Sender<Elem<A>>>,
+    in_stream: ProfiledReceiver<Elem<A>>,
+    sel_stream: ProfiledReceiver<Elem<SELT>>,
+    out_streams: Vec<ProfiledSender<Elem<A>>>,
     partition_rank: StopType,
     config: FlatPartitionConfig,
     id: u32,
@@ -47,9 +48,9 @@ where
         sel_npy_path: String,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            sel_stream,
-            out_streams,
+            in_stream: in_stream.into(),
+            sel_stream: sel_stream.into(),
+            out_streams: out_streams.into_iter().map(Into::into).collect(),
             partition_rank,
             config,
             id,

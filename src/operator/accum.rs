@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::PMU_BW;
@@ -14,8 +15,8 @@ pub struct AccumConfig {
 
 #[context_macro]
 pub struct Accum<E, T: DAMType, OT: DAMType> {
-    in_stream: Receiver<Elem<Tile<T>>>,
-    out_stream: Sender<Elem<Tile<OT>>>,
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    out_stream: ProfiledSender<Elem<Tile<OT>>>,
     func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
     rank: StopType,
@@ -43,8 +44,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             func,
             init_accum,
             rank,

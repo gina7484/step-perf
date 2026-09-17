@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
 
 use dam::context_tools::*;
@@ -19,11 +20,11 @@ use crate::utils::events::LoggableEventSimple;
 /// `out_stream`: Same shape as the `ref_stream`
 #[context_macro]
 pub struct DynStreamify<E: LoggableEventSimple, T: Bufferizable + Clone, R: Clone> {
-    pub in_stream: Receiver<Elem<Buffer<T>>>,
+    pub in_stream: ProfiledReceiver<Elem<Buffer<T>>>,
     pub bufferized_rank: StopType,
     pub repeat_rank: StopType,
-    pub ref_stream: Receiver<Elem<R>>,
-    pub out_stream: Sender<Elem<T>>,
+    pub ref_stream: ProfiledReceiver<Elem<R>>,
+    pub out_stream: ProfiledSender<Elem<T>>,
     pub id: u32,
     _phantom: PhantomData<E>,
 }
@@ -47,9 +48,9 @@ where
         let ctx = Self {
             bufferized_rank,
             repeat_rank,
-            ref_stream,
-            in_stream,
-            out_stream,
+            ref_stream: ref_stream.into(),
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
             _phantom: PhantomData,

@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::PMU_BW;
@@ -20,9 +21,9 @@ use dam::{context_tools::*, logging::LogEvent};
 ///   To accurately model on-chip memory accesses, one has to create a similar context as ramulator context for PMUs.
 #[context_macro]
 pub struct BinaryMap<E, A: DAMType, B: DAMType, O: DAMType> {
-    in1_stream: Receiver<Elem<Tile<A>>>,
-    in2_stream: Receiver<Elem<Tile<B>>>,
-    out_stream: Sender<Elem<Tile<O>>>,
+    in1_stream: ProfiledReceiver<Elem<Tile<A>>>,
+    in2_stream: ProfiledReceiver<Elem<Tile<B>>>,
+    out_stream: ProfiledSender<Elem<Tile<O>>>,
     func: Arc<dyn Fn(&Tile<A>, &Tile<B>, u64, bool) -> (u64, Tile<O>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
@@ -51,9 +52,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in1_stream,
-            in2_stream,
-            out_stream,
+            in1_stream: in1_stream.into(),
+            in2_stream: in2_stream.into(),
+            out_stream: out_stream.into(),
             func,
             compute_bw,
             write_back_mu,
@@ -177,9 +178,9 @@ where
 
 #[context_macro]
 pub struct BinaryMapMultiHot<E, A: DAMType, B: DAMType> {
-    in1_stream: Receiver<Elem<Tile<A>>>,
-    in2_stream: Receiver<Elem<Tile<B>>>,
-    out_stream: Sender<Elem<MultiHotN>>,
+    in1_stream: ProfiledReceiver<Elem<Tile<A>>>,
+    in2_stream: ProfiledReceiver<Elem<Tile<B>>>,
+    out_stream: ProfiledSender<Elem<MultiHotN>>,
     func: Arc<dyn Fn(&Tile<A>, &Tile<B>, u64, bool) -> (u64, MultiHotN) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
@@ -206,9 +207,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in1_stream,
-            in2_stream,
-            out_stream,
+            in1_stream: in1_stream.into(),
+            in2_stream: in2_stream.into(),
+            out_stream: out_stream.into(),
             func,
             compute_bw,
             write_back_mu,
@@ -334,8 +335,8 @@ pub struct UnaryMapConfig {
 
 #[context_macro]
 pub struct UnaryMap<E, T: DAMType, OT: DAMType> {
-    in_stream: Receiver<Elem<Tile<T>>>,
-    out_stream: Sender<Elem<Tile<OT>>>,
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    out_stream: ProfiledSender<Elem<Tile<OT>>>,
     func: Arc<dyn Fn(&Tile<T>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, FLOPs per cycle -> cycles
     config: UnaryMapConfig,
     id: u32,
@@ -359,8 +360,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             func,
             config,
             id,
@@ -447,8 +448,8 @@ where
 
 #[context_macro]
 pub struct UnaryMapMultiHot<E, OT: DAMType> {
-    in_stream: Receiver<Elem<MultiHotN>>,
-    out_stream: Sender<Elem<Tile<OT>>>,
+    in_stream: ProfiledReceiver<Elem<MultiHotN>>,
+    out_stream: ProfiledSender<Elem<Tile<OT>>>,
     func: Arc<dyn Fn(&MultiHotN, u64, bool) -> (u64, Tile<OT>) + Send + Sync>,
     config: UnaryMapConfig,
     id: u32,
@@ -470,8 +471,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             func,
             config,
             id,
@@ -556,8 +557,8 @@ where
 
 #[context_macro]
 pub struct UnaryMapToMultiHot<E, IT: DAMType> {
-    in_stream: Receiver<Elem<Tile<IT>>>,
-    out_stream: Sender<Elem<MultiHotN>>,
+    in_stream: ProfiledReceiver<Elem<Tile<IT>>>,
+    out_stream: ProfiledSender<Elem<MultiHotN>>,
     func: Arc<dyn Fn(&Tile<IT>, u64, bool) -> (u64, MultiHotN) + Send + Sync>,
     config: UnaryMapConfig,
     id: u32,
@@ -579,8 +580,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             func,
             config,
             id,

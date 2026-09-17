@@ -1,3 +1,4 @@
+use crate::utils::request_profile::ProfiledSender;
 use crate::primitives::{elem::Elem, tile::Tile};
 use dam::context_tools::*;
 
@@ -7,7 +8,7 @@ use ndarray::{Array2, IntoDimension, IxDyn, IxDynImpl};
 #[context_macro]
 pub struct MetadataGen<T: Clone> {
     pub underlying: ndarray::ArcArray<T, IxDyn>,
-    pub snd: Sender<Elem<Tile<u64>>>,
+    pub snd: ProfiledSender<Elem<Tile<u64>>>,
     pub id: u32,
 }
 
@@ -30,7 +31,7 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
 
         let ctx = Self {
             underlying,
-            snd,
+            snd: snd.into(),
             id,
             context_info: Default::default(),
         };

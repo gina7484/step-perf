@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
 
 use dam::context_tools::*;
@@ -36,8 +37,8 @@ pub struct RandomOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
     // Channel facing on-chip memory
-    pub raddr: Receiver<Elem<Tile<u64>>>,
-    pub rdata: Sender<Elem<Tile<T>>>,
+    pub raddr: ProfiledReceiver<Elem<Tile<u64>>>,
+    pub rdata: ProfiledSender<Elem<Tile<T>>>,
     pub transposed: bool,
     pub id: u32,
     // Traffic tracking
@@ -160,8 +161,8 @@ where
             par_dispatch,
             addr_snd,
             resp_addr_rcv,
-            raddr,
-            rdata,
+            raddr: raddr.into(),
+            rdata: rdata.into(),
             transposed,
             id,
             track_traffic,
@@ -262,6 +263,7 @@ where
                     let tile_addrs = self.generate_tile_addresses(tile_idx);
 
                     // Send read request to HBM
+                    let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
                     let send_request_time = self.time.tick();
                     for (idx, addr_chunk) in tile_addrs
                         .iter()
@@ -287,6 +289,12 @@ where
                     }
 
                     let read_finish_time = self.time.tick();
+                    self.rdata.record_memory(
+                        send_request_time.time(),
+                        read_finish_time.time(),
+                        profile_bytes,
+                        false,
+                    );
 
                     // Track traffic if enabled
                     if self.track_traffic {
@@ -325,6 +333,7 @@ where
                     let tile_addrs = self.generate_tile_addresses(tile_idx);
 
                     // Send read request to HBM
+                    let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
                     let send_request_time = self.time.tick();
                     for (idx, addr_chunk) in tile_addrs
                         .iter()
@@ -350,6 +359,12 @@ where
                     }
 
                     let read_finish_time = self.time.tick();
+                    self.rdata.record_memory(
+                        send_request_time.time(),
+                        read_finish_time.time(),
+                        profile_bytes,
+                        false,
+                    );
 
                     // Track traffic if enabled
                     if self.track_traffic {

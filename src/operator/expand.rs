@@ -1,12 +1,13 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
 
 #[context_macro]
 pub struct ExpandRef<T: Clone, R: Clone> {
-    in_stream: Receiver<Elem<T>>,
-    ref_stream: Receiver<Elem<R>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
+    ref_stream: ProfiledReceiver<Elem<R>>,
     expand_rank: StopType,
-    out_stream: Sender<Elem<T>>,
+    out_stream: ProfiledSender<Elem<T>>,
     id: u32,
 }
 
@@ -22,10 +23,10 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            ref_stream,
+            in_stream: in_stream.into(),
+            ref_stream: ref_stream.into(),
             expand_rank,
-            out_stream,
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };

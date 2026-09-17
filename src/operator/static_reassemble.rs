@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::operator::partition::FlatPartitionConfig;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::utils::events::LoggableEventSimple;
@@ -6,8 +7,8 @@ use std::marker::PhantomData;
 
 #[context_macro]
 pub struct StaticReassemble<E, A: DAMType> {
-    in_streams: Vec<Receiver<Elem<A>>>,
-    out_stream: Sender<Elem<A>>,
+    in_streams: Vec<ProfiledReceiver<Elem<A>>>,
+    out_stream: ProfiledSender<Elem<A>>,
     reassemble_rank: StopType,
     config: FlatPartitionConfig,
     id: u32,
@@ -38,8 +39,8 @@ where
             "StaticReassemble needs one switch-cycle value per input stream"
         );
         let ctx = Self {
-            in_streams,
-            out_stream,
+            in_streams: in_streams.into_iter().map(Into::into).collect(),
+            out_stream: out_stream.into(),
             reassemble_rank,
             config,
             id,

@@ -1,3 +1,4 @@
+use dam::channel::adapters::RecvAdapter;
 use core::panic;
 
 use dam::{
@@ -65,7 +66,7 @@ where
     pub fn from_stream<
         E: LoggableEventSimple + LogEvent + std::marker::Sync + std::marker::Send,
     >(
-        stream: &Receiver<Elem<T>>,
+        stream: &impl RecvAdapter<Elem<T>>,
         manager: &TimeManager,
         rank: usize,
         id: u32,

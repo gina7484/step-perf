@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 // This is an operator that will be abstracted as a FlatMap operator
 
 use crate::primitives::elem::{Elem, StopType};
@@ -9,8 +10,8 @@ use ndarray::Array2;
 
 #[context_macro]
 pub struct RetileStreamify<T: Clone> {
-    in_stream: Receiver<Elem<Tile<T>>>,
-    out_stream: Sender<Elem<Tile<T>>>,
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    out_stream: ProfiledSender<Elem<Tile<T>>>,
     split_row: bool,
     filter_mask: bool,
     chunk: usize,
@@ -30,8 +31,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             split_row,
             filter_mask,
             chunk,
@@ -236,8 +237,8 @@ where
 
 #[context_macro]
 pub struct ExpertAddrGen<SEL: Clone + SelectAdapter> {
-    in_stream: Receiver<Elem<SEL>>, // Index of the expert
-    out_stream: Sender<Elem<Tile<u64>>>,
+    in_stream: ProfiledReceiver<Elem<SEL>>, // Index of the expert
+    out_stream: ProfiledSender<Elem<Tile<u64>>>,
     num_tile_per_expert: u64,
     expert_addr_base: u64,
     id: u32,
@@ -255,8 +256,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             num_tile_per_expert,
             expert_addr_base,
             id,
@@ -374,8 +375,8 @@ impl<T: DAMType + num_traits::AsPrimitive<u64>> DynAddrBase for Tile<T> {
 /// `stride = [1, 1]`, `out_shape_tiled = [n, 1]`.
 #[context_macro]
 pub struct DynAddrGen<IN: Clone + DynAddrBase> {
-    in_stream: Receiver<Elem<IN>>,
-    out_stream: Sender<Elem<Tile<u64>>>,
+    in_stream: ProfiledReceiver<Elem<IN>>,
+    out_stream: ProfiledSender<Elem<Tile<u64>>>,
     /// Slab-relative tile index + the stop token that closes at it, for every
     /// position of the view. Precomputed once: the walk does not depend on the
     /// input element, only the base address does.
@@ -410,8 +411,8 @@ where
         );
 
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             view: Self::generate_view(&tensor_shape_tiled, &stride, &out_shape_tiled),
             slab_tiles: tensor_shape_tiled.iter().product::<usize>() as u64,
             addr_base,
@@ -553,10 +554,10 @@ where
 
 #[context_macro]
 pub struct CacheReadAddrGen {
-    idx_stream: Receiver<Elem<Tile<u64>>>, // Index of the request
-    seq_len_stream: Receiver<Elem<Tile<u64>>>, // Sequence length
+    idx_stream: ProfiledReceiver<Elem<Tile<u64>>>, // Index of the request
+    seq_len_stream: ProfiledReceiver<Elem<Tile<u64>>>, // Sequence length
     offset_per_idx: u64,
-    out_stream: Sender<Elem<Tile<u64>>>,
+    out_stream: ProfiledSender<Elem<Tile<u64>>>,
     id: u32,
 }
 
@@ -569,10 +570,10 @@ impl CacheReadAddrGen {
         id: u32,
     ) -> Self {
         let ctx = Self {
-            idx_stream,
-            seq_len_stream,
+            idx_stream: idx_stream.into(),
+            seq_len_stream: seq_len_stream.into(),
             offset_per_idx,
-            out_stream,
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };
@@ -719,8 +720,8 @@ impl Context for CacheReadAddrGen {
 
 #[context_macro]
 pub struct FilterLastTile {
-    seq_len_stream: Receiver<Elem<Tile<u64>>>,
-    out_stream: Sender<Elem<MultiHotN>>,
+    seq_len_stream: ProfiledReceiver<Elem<Tile<u64>>>,
+    out_stream: ProfiledSender<Elem<MultiHotN>>,
     id: u32,
 }
 
@@ -731,8 +732,8 @@ impl FilterLastTile {
         id: u32,
     ) -> Self {
         let ctx = Self {
-            seq_len_stream,
-            out_stream,
+            seq_len_stream: seq_len_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };

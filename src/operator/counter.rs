@@ -1,3 +1,4 @@
+use crate::utils::request_profile::ProfiledSender;
 use crate::primitives::elem::{Elem, StopType};
 use crate::primitives::tile::Tile;
 use dam::context_tools::*;
@@ -38,7 +39,7 @@ where
 #[context_macro]
 pub struct Counter {
     count: u64,
-    out_stream: Sender<Elem<Tile<u64>>>,
+    out_stream: ProfiledSender<Elem<Tile<u64>>>,
     id: u32,
 }
 
@@ -46,7 +47,7 @@ impl Counter {
     pub fn new(count: u64, out_stream: Sender<Elem<Tile<u64>>>, id: u32) -> Self {
         let ctx = Self {
             count,
-            out_stream,
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };

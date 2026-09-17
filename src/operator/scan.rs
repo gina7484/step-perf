@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::PMU_BW;
@@ -39,9 +40,9 @@ type Fold<T, OT> = Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>)
 /// consumes `fn1`'s result, so their cycles add.
 #[context_macro]
 pub struct Scan<E, T: DAMType, OT: DAMType> {
-    in1_stream: Receiver<Elem<Tile<T>>>,
-    in2_stream: Option<Receiver<Elem<Tile<T>>>>,
-    out_stream: Sender<Elem<Tile<OT>>>,
+    in1_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    in2_stream: Option<ProfiledReceiver<Elem<Tile<T>>>>,
+    out_stream: ProfiledSender<Elem<Tile<OT>>>,
     fn1: Fold<T, OT>,
     fn2: Option<Fold<T, OT>>,
     init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
@@ -79,9 +80,9 @@ where
         );
 
         let ctx = Self {
-            in1_stream,
-            in2_stream,
-            out_stream,
+            in1_stream: in1_stream.into(),
+            in2_stream: in2_stream.map(Into::into),
+            out_stream: out_stream.into(),
             fn1,
             fn2,
             init_accum,

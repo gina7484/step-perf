@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use dam::{
     channel::{Receiver, Sender},
     context::Context,
@@ -11,8 +12,8 @@ use crate::primitives::{elem::Elem, tile::Tile};
 
 #[context_macro]
 pub struct BroadcastContext<T: Clone> {
-    receiver: Receiver<Elem<T>>,
-    targets: Vec<Sender<Elem<T>>>,
+    receiver: ProfiledReceiver<Elem<T>>,
+    targets: Vec<ProfiledSender<Elem<T>>>,
 }
 
 impl<T: DAMType> Context for BroadcastContext<T>
@@ -45,7 +46,7 @@ where
     /// Sets up a broadcast context with an empty target list.
     pub fn new(receiver: Receiver<Elem<T>>) -> Self {
         let x = Self {
-            receiver,
+            receiver: receiver.into(),
             targets: vec![],
             context_info: Default::default(),
         };
@@ -56,6 +57,6 @@ where
     /// Registers a target for the broadcast
     pub fn add_target(&mut self, target: Sender<Elem<T>>) {
         target.attach_sender(self);
-        self.targets.push(target);
+        self.targets.push(target.into());
     }
 }

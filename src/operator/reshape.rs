@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::{
     elem::{Elem, StopType},
     tile::Tile,
@@ -7,8 +8,8 @@ use ndarray::Array2;
 
 #[context_macro]
 pub struct Reshape<InputType: Clone> {
-    in_stream: Receiver<Elem<InputType>>,
-    out_stream: Sender<Elem<InputType>>,
+    in_stream: ProfiledReceiver<Elem<InputType>>,
+    out_stream: ProfiledSender<Elem<InputType>>,
     split_dim: usize,
     chunk_size: usize,
     pad_val: Option<InputType>,
@@ -32,8 +33,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             split_dim,
             chunk_size,
             pad_val,
@@ -227,9 +228,9 @@ impl<InputType: DAMType> Context for Reshape<InputType> {
 
 #[context_macro]
 pub struct ReshapePadStream<InputType: Clone> {
-    in_stream: Receiver<Elem<InputType>>,
-    out_stream: Sender<Elem<InputType>>,
-    mask_stream: Sender<Elem<Tile<bool>>>,
+    in_stream: ProfiledReceiver<Elem<InputType>>,
+    out_stream: ProfiledSender<Elem<InputType>>,
+    mask_stream: ProfiledSender<Elem<Tile<bool>>>,
     split_dim: usize,
     chunk_size: usize,
     pad_val: Option<InputType>,
@@ -254,9 +255,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
-            mask_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
+            mask_stream: mask_stream.into(),
             split_dim,
             chunk_size,
             pad_val,
@@ -550,8 +551,8 @@ impl<InputType: DAMType> Context for ReshapePadStream<InputType> {
 
 #[context_macro]
 pub struct ReshapeNoPadStream<InputType: Clone> {
-    in_stream: Receiver<Elem<InputType>>,
-    out_stream: Sender<Elem<InputType>>,
+    in_stream: ProfiledReceiver<Elem<InputType>>,
+    out_stream: ProfiledSender<Elem<InputType>>,
     split_dim: usize,
     chunk_size: usize,
     pad_val: Option<InputType>,
@@ -575,8 +576,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             split_dim,
             chunk_size,
             pad_val,

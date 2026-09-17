@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::operator::partition::FlatPartitionConfig;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::utils::events::LoggableEventSimple;
@@ -6,8 +7,8 @@ use std::marker::PhantomData;
 
 #[context_macro]
 pub struct Parallelize<E, A: DAMType> {
-    in_stream: Receiver<Elem<A>>,
-    out_streams: Vec<Sender<Elem<A>>>,
+    in_stream: ProfiledReceiver<Elem<A>>,
+    out_streams: Vec<ProfiledSender<Elem<A>>>,
     parallelize_rank: StopType,
     output_dim: u32,
     config: FlatPartitionConfig,
@@ -41,8 +42,8 @@ where
             "Parallelize needs one switch-cycle value per output stream"
         );
         let ctx = Self {
-            in_stream,
-            out_streams,
+            in_stream: in_stream.into(),
+            out_streams: out_streams.into_iter().map(Into::into).collect(),
             parallelize_rank,
             output_dim,
             config,

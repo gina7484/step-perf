@@ -258,6 +258,7 @@ fn build_from_proto<'a>(
 
     for operation in step_graph.operators {
         crate::utils::graph_dump::set_current_op(operation.id);
+        crate::utils::request_profile::set_current_op(operation.id);
         // if operation.id == 23 || operation.id == 24 || operation.id == 25 {
         //     println!("processing {:?}\n", operation);
         // }
@@ -5370,6 +5371,7 @@ pub fn parse_proto<'a>(
         dump_prefix,
     );
 
+    crate::utils::request_profile::end_build();
     let initialized = builder.initialize(Default::default()).unwrap();
     let run_options = match logging {
         true => {

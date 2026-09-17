@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::select::SelectAdapter;
 use dam::channel::PeekResult;
@@ -5,9 +6,9 @@ use dam::context_tools::*;
 
 #[context_macro]
 pub struct EagerMerge<A: DAMType, SELT: DAMType> {
-    in_streams: Vec<Receiver<Elem<A>>>,
-    sel_stream: Sender<Elem<SELT>>,
-    out_stream: Sender<Elem<A>>,
+    in_streams: Vec<ProfiledReceiver<Elem<A>>>,
+    sel_stream: ProfiledSender<Elem<SELT>>,
+    out_stream: ProfiledSender<Elem<A>>,
     input_rank: StopType,
     id: u32,
 }
@@ -25,9 +26,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_streams,
-            sel_stream,
-            out_stream,
+            in_streams: in_streams.into_iter().map(Into::into).collect(),
+            sel_stream: sel_stream.into(),
+            out_stream: out_stream.into(),
             input_rank,
             id,
             context_info: Default::default(),
@@ -224,7 +225,7 @@ mod tests {
             bytes_per_element: usize,
         ) -> Self {
             let ctx = Self {
-                out_stream,
+                out_stream: out_stream.into(),
                 num_matrices,
                 offset,
                 bytes_per_element,

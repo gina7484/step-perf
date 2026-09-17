@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::memory::PMU_BW;
@@ -12,9 +13,9 @@ use serde::{Deserialize, Serialize};
 /// This is necesssary for operation patterns like matmul where the
 #[context_macro]
 pub struct BinaryMapAccum<E, T: DAMType, OT: DAMType> {
-    in1_stream: Receiver<Elem<Tile<T>>>,
-    in2_stream: Receiver<Elem<Tile<T>>>,
-    out_stream: Sender<Elem<Tile<OT>>>,
+    in1_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    in2_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    out_stream: ProfiledSender<Elem<Tile<OT>>>,
     func: Arc<dyn Fn(&Tile<T>, &Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     init_accum: Arc<dyn Fn() -> Tile<OT> + Sync + Send>,
     rank: StopType,
@@ -47,9 +48,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in1_stream,
-            in2_stream,
-            out_stream,
+            in1_stream: in1_stream.into(),
+            in2_stream: in2_stream.into(),
+            out_stream: out_stream.into(),
             func,
             init_accum,
             rank,

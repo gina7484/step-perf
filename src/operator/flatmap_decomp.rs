@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use super::counter::count_range_elems;
 use crate::primitives::elem::{Elem, StopType};
 use crate::primitives::tile::Tile;
@@ -6,9 +7,9 @@ use dam::types::DAMType;
 
 #[context_macro]
 pub struct FlatmapFilterRowStreamify<T: Clone> {
-    in_stream: Receiver<Elem<Tile<T>>>,      // tile shape: [R,C]
-    mask_stream: Receiver<Elem<Tile<bool>>>, // tile shape: [R,1]
-    out_stream: Sender<Elem<Tile<T>>>,       // tile shape: [1,C]
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>,      // tile shape: [R,C]
+    mask_stream: ProfiledReceiver<Elem<Tile<bool>>>, // tile shape: [R,1]
+    out_stream: ProfiledSender<Elem<Tile<T>>>,       // tile shape: [1,C]
     id: u32,
 }
 
@@ -23,9 +24,9 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            mask_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            mask_stream: mask_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };
@@ -189,8 +190,8 @@ where
 
 #[context_macro]
 pub struct FlatmapRowStreamify<T: Clone> {
-    in_stream: Receiver<Elem<Tile<T>>>, // tile shape: [R,C]
-    out_stream: Sender<Elem<Tile<T>>>,  // tile shape: [1,C]
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>, // tile shape: [R,C]
+    out_stream: ProfiledSender<Elem<Tile<T>>>,  // tile shape: [1,C]
     id: u32,
 }
 
@@ -204,8 +205,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };
@@ -302,8 +303,8 @@ where
 
 #[context_macro]
 pub struct FlatmapCounter<T: Clone> {
-    in_stream: Receiver<Elem<Tile<T>>>, // tile shape: [1,1]
-    out_stream: Sender<Elem<Tile<T>>>,  // tile shape: [1,1]
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>, // tile shape: [1,1]
+    out_stream: ProfiledSender<Elem<Tile<T>>>,  // tile shape: [1,1]
     id: u32,
 }
 
@@ -317,8 +318,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };

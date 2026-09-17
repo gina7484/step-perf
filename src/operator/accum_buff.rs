@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::{marker::PhantomData, sync::Arc};
 
 use ndarray::ArcArray;
@@ -44,8 +45,8 @@ use dam::{context_tools::*, logging::LogEvent};
 /// [`Buffer`] carries the correct shape.
 #[context_macro]
 pub struct AccumBuff<E, T: DAMType, OT: DAMType> {
-    in_stream: Receiver<Elem<Tile<T>>>,
-    out_stream: Sender<Elem<Buffer<Tile<OT>>>>,
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    out_stream: ProfiledSender<Elem<Buffer<Tile<OT>>>>,
     func: Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>, // bytes, bytes, FLOPs per cycle -> cycles
     init_accum: Arc<dyn Fn(usize, usize) -> Tile<OT> + Sync + Send>,
     /// Stop level at which one complete reduction group flushes: the stop level
@@ -95,8 +96,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             func,
             init_accum,
             rank,

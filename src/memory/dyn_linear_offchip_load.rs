@@ -1,3 +1,4 @@
+use crate::utils::request_profile::ProfiledSender;
 use serde_json;
 use std::marker::PhantomData;
 
@@ -28,7 +29,7 @@ pub struct DynLinearOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     // Sender & Receiver (DAM details)
     pub addr_snd: Sender<ParAddrs>,
     pub resp_addr_rcv: Receiver<u64>,
-    pub on_chip_snd: Sender<Elem<Tile<T>>>,
+    pub on_chip_snd: ProfiledSender<Elem<Tile<T>>>,
     pub id: u32,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
@@ -98,7 +99,7 @@ where
             par_dispatch,
             addr_snd,
             resp_addr_rcv,
-            on_chip_snd,
+            on_chip_snd: on_chip_snd.into(),
             id,
             context_info: Default::default(),
             _phantom: PhantomData,
@@ -285,6 +286,7 @@ where
             };
 
             // Send read request to HBM
+            let profile_bytes = tile_addrs.len() as u64 * self.addr_offset;
             let send_request_time = self.time.tick();
             for (idx, addr_chunk) in tile_addrs
                 .iter()
@@ -310,6 +312,12 @@ where
             }
 
             let read_finish_time = self.time.tick();
+            self.on_chip_snd.record_memory(
+                send_request_time.time(),
+                read_finish_time.time(),
+                profile_bytes,
+                false,
+            );
 
             dam::logging::log_event(&E::new(
                 "DynLinearOffChipLoad".to_string(),

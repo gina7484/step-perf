@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
 
 use dam::{context_tools::*, logging::LogEvent};
@@ -13,8 +14,8 @@ use crate::{
 
 #[context_macro]
 pub struct Bufferize<E, T: Clone> {
-    in_stream: Receiver<Elem<T>>,
-    out_stream: Sender<Elem<Buffer<T>>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
+    out_stream: ProfiledSender<Elem<Buffer<T>>>,
     rank: StopType,
     id: u32,
     _phantom: PhantomData<E>,
@@ -35,8 +36,8 @@ where
         id: u32,
     ) -> Self {
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             rank,
             id,
             context_info: Default::default(),

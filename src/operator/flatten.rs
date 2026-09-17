@@ -1,10 +1,11 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
 
 #[context_macro]
 pub struct Flatten<T: DAMType> {
-    in_stream: Receiver<Elem<T>>,
-    out_stream: Sender<Elem<T>>,
+    in_stream: ProfiledReceiver<Elem<T>>,
+    out_stream: ProfiledSender<Elem<T>>,
     min_rank: StopType,
     max_rank: StopType,
 }
@@ -21,8 +22,8 @@ where
     ) -> Self {
         assert!(min_rank < max_rank, "min_rank must be less than max_rank");
         let ctx = Self {
-            in_stream,
-            out_stream,
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
             min_rank,
             max_rank,
             context_info: Default::default(),

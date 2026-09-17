@@ -1,3 +1,4 @@
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::memory::PMU_BW;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::{
@@ -18,9 +19,9 @@ pub struct FlatReassembleConfig {
 
 #[context_macro]
 pub struct FlatReassemble<E, A: DAMType, SELT: DAMType> {
-    in_streams: Vec<Receiver<Elem<A>>>,
-    sel_stream: Receiver<Elem<SELT>>,
-    out_stream: Sender<Elem<A>>,
+    in_streams: Vec<ProfiledReceiver<Elem<A>>>,
+    sel_stream: ProfiledReceiver<Elem<SELT>>,
+    out_stream: ProfiledSender<Elem<A>>,
     reassemble_rank: StopType,
     config: FlatReassembleConfig,
     id: u32,
@@ -48,9 +49,9 @@ where
         sel_npy_path: String,
     ) -> Self {
         let ctx = Self {
-            in_streams,
-            sel_stream,
-            out_stream,
+            in_streams: in_streams.into_iter().map(Into::into).collect(),
+            sel_stream: sel_stream.into(),
+            out_stream: out_stream.into(),
             reassemble_rank,
             config,
             id,
