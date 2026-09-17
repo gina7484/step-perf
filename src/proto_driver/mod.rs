@@ -4443,6 +4443,12 @@ pub fn parse_proto<'a>(
     db_name: Option<String>,
     dump_prefix: Option<String>,
 ) -> (bool, u64, std::time::Duration) {
+    // NPY header parsing runs inside DAM coroutines. May defaults to only
+    // 4096 usize words, which overflows in the recursive parser in debug builds.
+    // Reserve at least 2 MiB, preserving a larger caller-configured stack.
+    let config = dam::shim::config();
+    let minimum_stack_words = 2 * 1024 * 1024 / std::mem::size_of::<usize>();
+    config.set_stack_size(config.get_stack_size().max(minimum_stack_words));
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
     if std::env::var("STEP_PERF_TRACE").is_ok() || std::env::var("STEP_PERF_GRAPH_JSON").is_ok() {
