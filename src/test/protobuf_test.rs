@@ -25,10 +25,45 @@ mod test {
     use crate::operator::{map::BinaryMap, repeat::RepeatStatic};
     use crate::primitives::tile::Tile;
     use crate::proto_driver::proto_headers::graph_proto::{
-        data_type::Type, elemto_elem_func, operation::OpType, ProgramGraph,
+        colocation_group, data_type::Type, elemto_elem_func, operation::OpType,
+        ColocationGroup, Operation, ProgramGraph,
     };
     use crate::ramulator::hbm_context::{HBMConfig, HBMContext, ReadBundle, WriteBundle};
     use crate::utils::{cast::to_usize_vec, events::SimpleEvent};
+
+    #[test]
+    fn colocation_labels_decode_without_implying_simulator_placement() {
+        let original = ProgramGraph {
+            operators: vec![
+                Operation {
+                    colocation_group: Some(ColocationGroup {
+                        label: Some(colocation_group::Label::StringLabel("1".to_owned())),
+                    }),
+                    ..Default::default()
+                },
+                Operation {
+                    colocation_group: Some(ColocationGroup {
+                        label: Some(colocation_group::Label::IntegerLabel("1".to_owned())),
+                    }),
+                    ..Default::default()
+                },
+                Operation::default(),
+            ],
+            ..Default::default()
+        };
+
+        let decoded = ProgramGraph::decode(original.encode_to_vec().as_slice()).unwrap();
+
+        assert!(matches!(
+            decoded.operators[0].colocation_group.as_ref().unwrap().label,
+            Some(colocation_group::Label::StringLabel(ref value)) if value == "1"
+        ));
+        assert!(matches!(
+            decoded.operators[1].colocation_group.as_ref().unwrap().label,
+            Some(colocation_group::Label::IntegerLabel(ref value)) if value == "1"
+        ));
+        assert!(decoded.operators[2].colocation_group.is_none());
+    }
 
     #[test]
     fn run_graph() {
