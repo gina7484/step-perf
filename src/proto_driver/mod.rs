@@ -248,7 +248,27 @@ fn build_from_proto<'a>(
         // if operation.id == 23 || operation.id == 24 || operation.id == 25 {
         //     println!("processing {:?}\n", operation);
         // }
-        match operation.op_type.clone().unwrap() {
+        let mut op_type = operation.op_type.clone().unwrap();
+        if !sim_config.functional_sim {
+            // Serialized graphs may contain numerical tensors even when this run
+            // only models timing. Match the blank accumulators by leaving floating
+            // loads unmaterialized. Integer data, masks, metadata and dynamic shape
+            // files still carry real control information and must remain available.
+            let payload = match &mut op_type {
+                OpType::LinearOffChipLoad(load) => Some((&load.dtype, &mut load.npy_path)),
+                OpType::LinearOffChipLoadRef(load) => Some((&load.dtype, &mut load.npy_path)),
+                OpType::DynLinearOffChipLoad(load) => Some((&load.dtype, &mut load.npy_path)),
+                OpType::RandomOffChipLoad(load) => Some((&load.dtype, &mut load.npy_path)),
+                _ => None,
+            };
+            if let Some((dtype, path)) = payload {
+                if matches!(dtype.as_ref().and_then(|d| d.r#type.as_ref()),
+                    Some(Type::F32(_) | Type::F16(_))) {
+                    *path = None;
+                }
+            }
+        }
+        match op_type {
             OpType::Unarymap(unarymap) => match (
                 unarymap.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 unarymap.dtype_b.clone().unwrap().r#type.clone().unwrap(),
