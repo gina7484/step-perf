@@ -1092,7 +1092,9 @@ pub fn cache_write_addr_gen(
 ) -> (u64, Tile<u64>) {
     let idx_val = idx.underlying.as_ref().unwrap()[[0, 0]];
     let len_val = len.underlying.as_ref().unwrap()[[0, 0]];
-    let addr = idx_val * offset_per_idx + len_val;
+    // len is the number of cache tiles including the current token. Append
+    // updates the final existing tile, matching the hardware KV last_only walk.
+    let addr = idx_val * offset_per_idx + len_val.saturating_sub(1);
 
     (
         1,

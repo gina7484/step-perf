@@ -3192,6 +3192,10 @@ fn build_from_proto<'a>(
                         let init: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
                             if sim_config.functional_sim {
                                 match scan.init_func.clone().unwrap().init_fn.unwrap() {
+                                    init_func::InitFn::Constant(c) => Arc::new(move || {
+                                        Tile::new(ndarray::Array2::from_elem(
+                                            (tile_row, tile_col), c.value).to_shared(), f32_bytes, wbm)
+                                    }),
                                     init_func::InitFn::Zero(_) => Arc::new(move || {
                                         Tile::new_zero([tile_row, tile_col], f32_bytes, wbm)
                                     }),
@@ -3401,6 +3405,13 @@ fn build_from_proto<'a>(
                     let func: Arc<
                         dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync,
                     > = match accum.func.unwrap().accum_fn.unwrap() {
+                        accum_func::AccumFn::Max(_) => {
+                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
+                                functions::map_fn::max(
+                                    tile1, tile2, comp_bw, write_back_mu,
+                                )
+                            })
+                        }
                         accum_func::AccumFn::Add(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::accum_fn::add(
@@ -3444,6 +3455,10 @@ fn build_from_proto<'a>(
                         .functional_sim
                     {
                         match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Constant(c) => Arc::new(move || {
+                                Tile::new(ndarray::Array2::from_elem(
+                                    (tile_row, tile_col), c.value).to_shared(), f32_bytes, accum.write_back_mu)
+                            }),
                             init_func::InitFn::Zero(_zero) => Arc::new(move || {
                                 Tile::new_zero([tile_row, tile_col], f32_bytes, accum.write_back_mu)
                             }),

@@ -63,7 +63,7 @@ where
         let underlying = match npy_path {
             Some(file_path) => {
                 // Open the file
-                let mut file = std::fs::File::open(file_path).unwrap();
+                let mut file = std::io::BufReader::new(std::fs::File::open(file_path).unwrap());
 
                 // Read the data and shape of the `.npy` file
                 let file_data = npyz::NpyFile::new(&mut file).unwrap();
