@@ -254,6 +254,14 @@ fn build_from_proto<'a>(
             // only models timing. Match the blank accumulators by leaving floating
             // loads unmaterialized. Integer data, masks, metadata and dynamic shape
             // files still carry real control information and must remain available.
+            // Timing outputs have no numerical values to save, even if the
+            // graph was originally serialized with functional output paths.
+            match &mut op_type {
+                OpType::OffChipStore(store) => store.store_path = None,
+                OpType::DynOffChipStore(store) => store.store_path = None,
+                OpType::RandomOffChipStore(store) => store.npy_path = None,
+                _ => {}
+            }
             let payload = match &mut op_type {
                 OpType::LinearOffChipLoad(load) => Some((&load.dtype, &mut load.npy_path)),
                 OpType::LinearOffChipLoadRef(load) => Some((&load.dtype, &mut load.npy_path)),

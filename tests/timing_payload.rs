@@ -50,7 +50,7 @@ fn timing_mode_ignores_float_payload_but_preserves_routing_masks() {
             init_func: Some(InitFunc { init_fn: Some(init_func::InitFn::Empty(Empty {})) }),
             dtype_a: float_type(), dtype_b: float_type(), ..Default::default()
         })),
-        op(5, operation::OpType::ConsumerContext(ConsumerContext { input_id: 4, dtype: float_type(), ..Default::default() })),
+        op(5, operation::OpType::OffChipStore(OffChipStore { input_id: 4, dtype: float_type(), tensor_shape_tiled: vec![1, 1], tile_row: 1, tile_col: 1, par_dispatch: 1, store_path: Some(dir.join("output").to_string_lossy().into()), ..Default::default() })),
         op(6, operation::OpType::ConsumerContext(ConsumerContext { input_id: 3, stream_idx: Some(1), dtype: mask_type })),
     ], ..Default::default() };
     let hbm = HBMConfig { addr_offset: 4, channel_num: 1, per_channel_latency: 1, per_channel_init_interval: 1, per_channel_outstanding: 4, per_channel_start_up_time: 0 };
