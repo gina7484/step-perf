@@ -17,6 +17,7 @@ pub mod reassemble;
 pub mod repeat;
 pub mod static_reassemble;
 pub mod reshape;
+pub mod scan;
 pub mod streamify;
 pub mod shuffle;
 
