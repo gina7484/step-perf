@@ -21,6 +21,7 @@ pub mod scan;
 pub mod static_reassemble;
 pub mod streamify;
 pub mod take_last;
+pub mod shuffle;
 
 use dam::types::StaticallySized;
 use serde::Deserialize;

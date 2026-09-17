@@ -43,6 +43,10 @@ fn extract_inputs(op: &Operation) -> Vec<(u32, u32)> {
             push_input(&mut inputs, p.input_id, p.input_stream_idx);
             push_input(&mut inputs, p.control_id, p.control_stream_idx);
         }
+        OpType::Shuffle(s) => {
+            push_input(&mut inputs, s.input_id, s.input_stream_idx);
+            push_input(&mut inputs, s.index_id, s.index_stream_idx);
+        }
         OpType::Parallelize(p) => push_input(&mut inputs, p.input_id, p.input_stream_idx),
         OpType::FlatReassemble(r) => {
             for (i, &src_id) in r.input_id_list.iter().enumerate() {
@@ -134,6 +138,7 @@ fn count_outputs(op: &Operation) -> u32 {
         return 1;
     };
     match ot {
+        OpType::Shuffle(_) => 2,
         OpType::Broadcast(b) => b.num_consumers.max(1),
         OpType::FlatPartition(p) => p.num_consumers.max(1),
         OpType::Parallelize(p) => p.num_consumers.max(1),
@@ -152,6 +157,7 @@ fn op_display(op: &Operation) -> String {
         Some(OpType::DynStreamify(_)) => "DynStreamify",
         Some(OpType::Broadcast(_)) => "Broadcast",
         Some(OpType::FlatPartition(_)) => "FlatPartition",
+        Some(OpType::Shuffle(_)) => "Shuffle",
         Some(OpType::Parallelize(_)) => "Parallelize",
         Some(OpType::FlatReassemble(_)) => "FlatReassemble",
         Some(OpType::Promote(_)) => "Promote",
