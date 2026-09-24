@@ -3026,18 +3026,8 @@ fn build_from_proto<'a>(
                     ),
                 }
             }
-            // TakeLast: keep only the final tile of the scanned axis. Needed for
-            // the FlashAttention decode graph (l_final / O_final taps); step_perf
-            // previously had NO arm for this op, so it fell through to
-            // `_ => todo!()` and any FA graph panicked with "not yet implemented"
-            // under functional_sim.
-            //
-            // CHUNKING: no change needed for chunk_factor = C > 1, and the
-            // proto has no keep_last field to honour. The C chunks arrive as C
-            // sequential Select contexts, each closed by its own stop token;
-            // this op drops interior `Val` and forwards `ValStop` unchanged, so
-            // it emits exactly C finals per logical tile for free. Confirmed by
-            // FA C=2/4/8 completing and matching C=1 on unpadded rows.
+            // The frontend records keep_last as the output's innermost static
+            // extent. Keep that many context finals without inventing stops.
             OpType::TakeLast(take_last) => {
                 if std::env::var("STEP_PERF_OP_TRACE").is_ok() {
                     eprintln!("[BUILD TakeLast id={} in={} idx={:?}]",
@@ -3061,7 +3051,11 @@ fn build_from_proto<'a>(
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        add_child!(builder, TakeLast::new(rcv, snd));
+                        let keep = match operation.out_stream_shape.last().and_then(|d| d.r#type.as_ref()) {
+                            Some(proto_headers::graph_proto::dim_shape::Type::Static(n)) => (*n as usize).max(1),
+                            _ => 1,
+                        };
+                        add_child!(builder, TakeLast::new_keep(rcv, snd, keep));
                     }
                     _ => todo!("TakeLast: only F32 is wired"),
                 }
@@ -3075,9 +3069,8 @@ fn build_from_proto<'a>(
             // `ctr` -- see the operator's header. `ctr` is still dequeued once per
             // invocation so its producer does not block.
             //
-            // chunk_factor > 1 is REJECTED by the operator rather than silently
-            // folding all C chunk recurrences into one. Validate C=1 FA against
-            // the naive layer before trusting anything here.
+            // Chunked scans retain C independent, round-robin recurrence states.
+            // TakeLast uses the serialized output shape to retain their C finals.
             OpType::Scan(scan) => {
                 if std::env::var("STEP_PERF_OP_TRACE").is_ok() {
                     eprintln!("[BUILD Scan id={} in1={} in2={:?} ctr={} ctr_idx={:?}]",
@@ -3222,43 +3215,8 @@ fn build_from_proto<'a>(
                                 f1,
                                 f2,
                                 init,
-                                // Flash-decoding chunk count C. Absent/0/1 all
-                                // mean unchunked.
-                                //
-                                // C>1 IS NOT MODELLED and now FAILS LOUDLY. It
-                                // used to return the UNCHUNKED answer silently,
-                                // which is far worse than an error: a C=2 run
-                                // completed, reported "Passed: true", and matched
-                                // C=1 on every unpadded request -- because it had
-                                // computed exactly C=1. Chunking is expressed in
-                                // the STeP graph only as a division of the Scan's
-                                // trip count, with no chunk boundary in any stream
-                                // shape, so this functional model cannot see it.
-                                // Set STEP_PERF_ALLOW_UNCHUNKED=1 to get the old
-                                // behaviour for PERFORMANCE-only runs, where the
-                                // wrong values do not matter.
-                                {
-                                    let cf = scan.chunk_factor.unwrap_or(1);
-                                    if cf > 1
-                                        && std::env::var("STEP_PERF_ALLOW_UNCHUNKED").is_err()
-                                    {
-                                        panic!(
-                                            "Scan {}: chunk_factor={} (flash decoding) is NOT \
-                                             modelled by step_perf's functional simulator. It \
-                                             would silently compute the UNCHUNKED result and \
-                                             report success. Chunking lives only in the ctr trip \
-                                             count; no stream shape carries a chunk boundary, so \
-                                             the Scan cannot introduce one without breaking \
-                                             BinaryMap's shape check against its sibling streams. \
-                                             Fix: give the graph a real chunk rank (which would \
-                                             also allow per-chunk trip counts and remove the need \
-                                             for chunk padding). Set STEP_PERF_ALLOW_UNCHUNKED=1 \
-                                             for performance-only runs.",
-                                            operation.id, cf
-                                        );
-                                    }
-                                    cf
-                                },
+                                // C independent states, dealt round-robin.
+                                scan.chunk_factor.unwrap_or(1),
                                 ScanConfig {
                                     compute_bw: scan.compute_bw as u64,
                                     write_back_mu: scan.write_back_mu,

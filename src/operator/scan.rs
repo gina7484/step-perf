@@ -12,53 +12,15 @@
 //! trip count before the data arrives, but for FUNCTIONAL evaluation the input's
 //! own stop token already says where the invocation ends: an element arriving as
 //! `ValStop(x, s>=1)` closes the scanned axis, so it is the last step and the
-//! running value resets afterwards. Driving off the tokens avoids having to
-//! reproduce the (step, sub) interleave contract, and keeps the two taps exactly
-//! aligned with the input stream. `ctr` is still DEQUEUED once per invocation so
+//! running states reset afterwards. The C recurrence states are interleaved
+//! round-robin, keeping both taps aligned with the input stream.
+//! `ctr` is still DEQUEUED once per invocation so
 //! its producer does not block forever.
 //!
-//! CHUNKING (`chunk_factor = C`): the chunk split is encoded ONLY in `ctr`.
-//!
-//! This was originally implemented on the assumption that the C chunks arrive as
-//! C stop-delimited contexts, so reset-on-stop would handle them for free. That
-//! is FALSE, and believing it made C>1 pass VACUOUSLY: measured counts showed
-//! one context per (request, head) at C=2 instead of two, one TakeLast final
-//! instead of C, so the merge epilogue's Accum summed a single term and
-//! exp(m)O / exp(m)l collapsed to O/l -- an identity pass-through that returns
-//! the unchunked answer.
-//!
-//! What is actually true: the data stream carries NO chunk stop tokens. Its only
-//! stop is at the end of each (request, head). The chunk split lives entirely in
-//! `ctr`, which carries `n_padded / C` -- the PER-CHUNK trip count. So modelling
-//! chunking requires honouring `ctr` as a trip count and SYNTHESIZING a stop at
-//! each chunk boundary, which is what `run` now does:
-//!
-//!   * one `ctr` tile is read per (request, head) -- matching the [DynB]
-//!     chunk_ctr stream, which carries ONE count shared by all C chunks;
-//!   * every `trip` elements the running value is emitted with a synthesized
-//!     stop of rank 1 and then re-initialized, opening the next chunk;
-//!   * the element that carries the input's own stop uses that stop instead, so
-//!     the last chunk closes on the real token. Total stops per (request, head)
-//!     is C: (C-1) synthesized plus 1 real.
-//!
-//! `TakeLast` then sees C finals per logical tile with no changes of its own.
-//!
-//! WHY THE FRONTEND PADS, and how to stop: because `chunk_ctr` is [DynB], ONE
-//! trip count is shared by all C chunks, which forces equal-length chunks and
-//! hence `seq_len` padded up to a multiple of C. Those pad tiles are unmasked
-//! junk (GH#3 / T5). Giving `chunk_ctr` C per-chunk counts instead --
-//! floor(n/C) + (1 if c < n mod C) -- makes them sum to exactly n, consumes the
-//! contiguous KV walk exactly, and removes the need for chunk padding AND for
-//! masking it. This operator is already written against a per-chunk `trip`, so
-//! it needs no further change to support that; the work is a frontend [B]->[B,C]
-//! shape change.
-//!
-//! `STEP_PERF_SCAN_CHUNK=off` disables chunk modelling (reproducing the old
-//! unchunked behaviour) for A/B diagnosis.
-//!
-//! At C = 1 this is byte-for-byte the behaviour validated against the naive
-//! layer (2.3e-07 max relative diff): `chunked` is false, no stop is ever
-//! synthesized, and `ctr` is read once per invocation exactly as before.
+//! Chunked scans bank C independent states and deal input tile j to j % C,
+//! matching the hardware Select. Output ordering and stop tokens are unchanged:
+//! sibling score/value streams therefore remain aligned. TakeLast retains the
+//! final C tiles (one final per context), with one ordinary stream boundary.
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::primitives::elem::Elem;
@@ -175,29 +137,12 @@ where
     Elem<Tile<u64>>: DAMType,
 {
     fn run(&mut self) {
-        // Chunk modelling is driven by `ctr`, not by stop tokens -- see the
-        // module docs. `off` restores the (wrong for C>1) unchunked behaviour.
-        // Synthesizing chunk stops here DOES NOT WORK, and the failure is
-        // structural rather than a detail to patch. A chunk boundary has to be
-        // visible in EVERY stream in the attention region, because sibling
-        // streams get paired with this one: BinaryMap panics
-        // ("The two input streams' shape don't match!", map.rs:110) as soon as
-        // this tap carries a ValStop its sibling lacks. The siblings come from
-        // the KV walk, which is driven by the UNCHUNKED seq_len and so has one
-        // context per (request, head). In hardware the boundary is consistent
-        // because Select genuinely iterates the whole region C times; in the
-        // STeP graph chunking is invisible, expressed only as a division of the
-        // trip count. Measured: C=2 dies after 6 elements (the first chunk_ctr
-        // value) with panics in map.rs and broadcast.rs.
-        //
-        // Kept behind an opt-in flag for whoever fixes the graph-level
-        // representation; see the module docs for what that needs.
-        let chunked = self.chunk_factor > 1
-            && std::env::var("STEP_PERF_SCAN_CHUNK").as_deref() == Ok("synth");
+        let chunks = self.chunk_factor as usize;
+        let mut states: Vec<Tile<OT>> = (0..chunks).map(|_| (self.init)()).collect();
         let mut running: Tile<OT> = (self.init)();
         // Per-chunk trip count for the current (request, head), read from `ctr`.
         let mut trip: u64 = 0;
-        // Elements folded into the current chunk.
+        // Elements folded across all contexts in the current invocation.
         let mut pos: u64 = 0;
         let mut need_ctr = true;
         let mut n_elems: u64 = 0;
@@ -228,14 +173,7 @@ where
                 }
             };
 
-            // Reset the running value at an invocation boundary.
-            //
-            // NOTE on `ctr`: an earlier version dequeued one ctr tile per
-            // invocation here. That over-read the channel -- invocation count
-            // derived from stop tokens does not match the ctr tile count -- and
-            // produced `DisconnectedReceiver`. `ctr` carries no information this
-            // functional model needs (boundaries come from stop tokens), so it is
-            // drained separately and defensively below instead.
+            // Consume one trip count and reset all contexts per invocation.
             n_elems += 1;
             if need_ctr {
                 // One ctr tile per (request, head). Its VALUE is the per-chunk
@@ -254,9 +192,11 @@ where
                 n_ctr += 1;
                 need_ctr = false;
                 pos = 0;
-                running = (self.init)();
+                states = (0..chunks).map(|_| (self.init)()).collect();
             }
 
+            let context = pos as usize % chunks;
+            running = states[context].clone();
             let prior = running.clone();
 
             let (c1, folded) = (self.func1)(
@@ -292,18 +232,12 @@ where
             self.time.incr_cycles(cycles);
 
             pos += 1;
-            // Honour `ctr` as the per-chunk trip count: every `trip` elements
-            // closes a chunk. The element carrying the input's real stop uses
-            // that stop instead, so the final chunk closes on the real token and
-            // the total is exactly C stops per (request, head).
-            let at_chunk_end = chunked && trip > 0 && pos >= trip;
-            let out_stop = if stop >= 1 {
-                stop
-            } else if at_chunk_end {
-                1
-            } else {
-                0
-            };
+            states[context] = running.clone();
+            let out_stop = stop;
+            if stop >= 1 && self.chunk_factor > 1 && trip > 0 {
+                assert_eq!(pos, trip * self.chunk_factor as u64,
+                    "chunked Scan {}: input extent must equal C * trip count", self.id);
+            }
             if out_stop >= 1 {
                 n_stops += 1;
             }
@@ -376,10 +310,7 @@ where
             if stop >= 1 {
                 // End of this (request, head): next one brings its own ctr.
                 need_ctr = true;
-            } else if at_chunk_end {
-                // Close this chunk and open the next one on the same request.
-                running = (self.init)();
-                pos = 0;
+
             }
         }
     }
