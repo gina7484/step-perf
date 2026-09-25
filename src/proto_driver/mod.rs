@@ -307,6 +307,16 @@ fn build_from_proto<'a>(
                                 functions::map_fn::exp(tile, comp_bw, write_back_mu)
                             })
                         }
+                        elemto_elem_func::ElemElemFn::Log(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::log(tile, comp_bw, write_back_mu)
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::Softplus(_) => {
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::softplus(tile, comp_bw, write_back_mu)
+                            })
+                        }
                         elemto_elem_func::ElemElemFn::Pow2(pow2) => {
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::pow2(tile, comp_bw, write_back_mu)

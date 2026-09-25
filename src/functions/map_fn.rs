@@ -517,6 +517,47 @@ pub fn exp<T: Debug + num_traits::Float + Copy>(
     }
 }
 
+/// Shape/padding-preserving unary float evaluation, including timing-only tiles.
+fn unary_float<T: Debug + num_traits::Float + Copy>(
+    input: &Tile<T>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+    flops_per_elem: u64,
+    eval: impl Fn(T) -> T,
+) -> (u64, Tile<T>) {
+    assert_eq!(input.shape.len(), 2);
+    let cycles = div_ceil(input.shape.iter().product::<usize>() as u64 * flops_per_elem, flop_per_cycle);
+    let result = match &input.underlying {
+        Some(arr) => Tile::new_padded(
+            arr.mapv(eval).to_shared(), input.bytes_per_elem, write_back_mu, input.offset,
+        ),
+        None => Tile::new_blank_padded(
+            input.shape.clone(), input.bytes_per_elem, write_back_mu, input.offset,
+        ),
+    };
+    (cycles, result)
+}
+
+/// Natural logarithm: +/-0 -> -inf, negative -> NaN; propagates NaN/+inf.
+pub fn log<T: Debug + num_traits::Float + Copy>(
+    input: &Tile<T>, flop_per_cycle: u64, write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    unary_float(input, flop_per_cycle, write_back_mu, 4, |x| x.ln())
+}
+
+/// beta=1 softplus. Branching avoids both overflow and inf-inf cancellation.
+pub fn softplus<T: Debug + num_traits::Float + Copy>(
+    input: &Tile<T>, flop_per_cycle: u64, write_back_mu: bool,
+) -> (u64, Tile<T>) {
+    unary_float(input, flop_per_cycle, write_back_mu, 8, |x| {
+        if x > T::zero() {
+            x + (-x).exp().ln_1p()
+        } else {
+            x.exp().ln_1p()
+        }
+    })
+}
+
 // pow2(x) = 2^x (~ 4 FLOPs per element)
 pub fn pow2<T: Debug + num_traits::Float + Copy>(
     in_data: &Tile<T>,
