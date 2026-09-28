@@ -100,7 +100,7 @@ mod test {
 
         let (on_chip_snd1, on_chip_rcv1) = ctx.bounded(1);
 
-        let repeat_mat1 = RepeatStatic::new(repeat_rcv1, H / tile_n_gen_q, on_chip_snd1);
+        let repeat_mat1 = RepeatStatic::new(repeat_rcv1, vec![H / tile_n_gen_q], on_chip_snd1);
 
         // Operand 2 (W_Q): [H,H]
         // Stream shape: [H, H/tileN]

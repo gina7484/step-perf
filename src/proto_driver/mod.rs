@@ -2301,7 +2301,11 @@ fn build_from_proto<'a>(
                         );
                         add_child!(
                             builder,
-                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                            RepeatStatic::<_>::new(
+                                rcv,
+                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                snd,
+                            )
                         );
                     }
                     Type::U64(_) => {
@@ -2323,7 +2327,11 @@ fn build_from_proto<'a>(
                         );
                         add_child!(
                             builder,
-                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                            RepeatStatic::<_>::new(
+                                rcv,
+                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                snd,
+                            )
                         );
                     }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
@@ -2347,7 +2355,11 @@ fn build_from_proto<'a>(
                         );
                         add_child!(
                             builder,
-                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                            RepeatStatic::<_>::new(
+                                rcv,
+                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                snd,
+                            )
                         );
                     }
                     Type::MultiHot(_) => {
@@ -2369,7 +2381,11 @@ fn build_from_proto<'a>(
                         );
                         add_child!(
                             builder,
-                            RepeatStatic::<_>::new(rcv, repeat_static.repeat_factor as usize, snd,)
+                            RepeatStatic::<_>::new(
+                                rcv,
+                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                snd,
+                            )
                         );
                     }
                     dtype => panic!(
@@ -2422,6 +2438,7 @@ fn build_from_proto<'a>(
                                 in_rcv,
                                 ref_rcv,
                                 snd,
+                                repeat_ref.expanded_rank_cnt,
                                 repeat_ref.rank,
                                 operation.id,
                             )
@@ -2460,6 +2477,7 @@ fn build_from_proto<'a>(
                                 in_rcv,
                                 ref_rcv,
                                 snd,
+                                repeat_ref.expanded_rank_cnt,
                                 repeat_ref.rank,
                                 operation.id,
                             )
@@ -2498,6 +2516,7 @@ fn build_from_proto<'a>(
                                 in_rcv,
                                 ref_rcv,
                                 snd,
+                                repeat_ref.expanded_rank_cnt,
                                 repeat_ref.rank,
                                 operation.id,
                             )
@@ -2542,6 +2561,7 @@ fn build_from_proto<'a>(
                                 in_rcv,
                                 ref_rcv,
                                 snd,
+                                repeat_ref.expanded_rank_cnt,
                                 repeat_ref.rank,
                                 operation.id,
                             )
