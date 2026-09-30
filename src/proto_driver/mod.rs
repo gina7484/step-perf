@@ -3,6 +3,8 @@ pub mod proto_headers;
 
 #[cfg(test)]
 mod traffic_tests;
+#[cfg(test)]
+mod scan_tests;
 
 use crate::functions;
 use crate::memory::dyn_linear_offchip_load::DynLinearOffChipLoad;
@@ -198,14 +200,13 @@ fn row_stat_of(accum_fn: &accum_func::AccumFn) -> Option<(RowStat, Option<u64>)>
     }
 }
 
-/// Build one of [`Scan`]'s fold closures over `f32` tiles (the channel bf16 also
-/// rides on). Mirrors the fold list in the `OpType::Accum` arm, which `Scan`
-/// reuses verbatim — the two operators differ in *when* they emit, not in how
-/// they fold.
-fn scan_fold_f32(
-    accum_fn: accum_func::AccumFn,
-    id: u32,
-) -> Arc<dyn Fn(&Tile<f32>, &Tile<f32>, u64, bool) -> (u64, Tile<f32>) + Send + Sync> {
+type ScanFold<T, OT> = Arc<dyn Fn(&Tile<T>, &Tile<OT>, u64, bool) -> (u64, Tile<OT>) + Send + Sync>;
+
+/// Build a scan fold that preserves the tile's element type.
+fn scan_fold<T>(accum_fn: accum_func::AccumFn, id: u32) -> ScanFold<T, T>
+where
+    T: std::fmt::Debug + ndarray::LinalgScalar + Default + PartialOrd,
+{
     match accum_fn {
         accum_func::AccumFn::Add(_) => Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
             functions::accum_fn::add(tile1, tile2, comp_bw, write_back_mu, id)
@@ -230,6 +231,51 @@ fn scan_fold_f32(
             })
         }
         e => panic!("Unsupported scan function type {:?}", e),
+    }
+}
+
+fn increment_fold<T: 'static>(accum_fn: accum_func::AccumFn, id: u32) -> ScanFold<T, u64> {
+    match accum_fn {
+        accum_func::AccumFn::Increment(_) => Arc::new(move |tile, state, bw, write_back| {
+            functions::accum_fn::increment(tile, state, bw, write_back, id)
+        }),
+        other => panic!(
+            "Scan_{}: {:?} cannot fold this input into uint64",
+            id, other
+        ),
+    }
+}
+
+fn scan_fold_u64(accum_fn: accum_func::AccumFn, id: u32) -> ScanFold<u64, u64> {
+    match accum_fn {
+        accum_func::AccumFn::Increment(_) => increment_fold(accum_fn, id),
+        _ => scan_fold(accum_fn, id),
+    }
+}
+
+/// Integer Max uses the smallest representable value in place of -infinity.
+fn scan_init<T: Clone + num::Zero + Send + Sync + 'static>(
+    init: init_func::InitFn,
+    shape: [usize; 2],
+    bytes: usize,
+    write_back_mu: bool,
+    minimum: T,
+) -> Arc<dyn Fn() -> Tile<T> + Send + Sync> {
+    match init {
+        init_func::InitFn::Zero(_) => Arc::new(move || Tile::new_zero(shape, bytes, write_back_mu)),
+        init_func::InitFn::NegInf(_) => Arc::new(move || {
+            Tile::new(
+                ndarray::ArcArray2::from_elem(shape, minimum.clone()),
+                bytes,
+                write_back_mu,
+            )
+        }),
+        init_func::InitFn::Empty(_) => {
+            Arc::new(move || Tile::new_empty(shape, bytes, write_back_mu))
+        }
+        init_func::InitFn::DynEmpty(_) => {
+            Arc::new(move || Tile::new_empty([0, 0], bytes, write_back_mu))
+        }
     }
 }
 
@@ -2335,6 +2381,34 @@ fn build_from_proto<'a>(
                         );
                     }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::U64(_)),
+                    }) => {
+                        let rcv = channel_map_collection.buff_tile_u64.get_receiver(
+                            repeat_static.input_id,
+                            repeat_static.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_static.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.buff_tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            RepeatStatic::<_>::new(
+                                rcv,
+                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                snd,
+                            )
+                        );
+                    }
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
                         r#type: Some(buffer::Type::F32(_)),
                     }) => {
                         let rcv = channel_map_collection.buff_tile_f32.get_receiver(
@@ -2550,6 +2624,50 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let snd = channel_map_collection.buff_tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            RepeatRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                snd,
+                                repeat_ref.expanded_rank_cnt,
+                                repeat_ref.rank,
+                                operation.id,
+                            )
+                        );
+                    }
+                    (
+                        Type::Buffer(proto_headers::graph_proto::Buffer {
+                            r#type: Some(buffer::Type::U64(_)),
+                        }),
+                        Type::U64(_),
+                    ) => {
+                        let in_rcv = channel_map_collection.buff_tile_u64.get_receiver(
+                            repeat_ref.input_id,
+                            repeat_ref.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_ref.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let ref_rcv = channel_map_collection.tile_u64.get_receiver(
+                            repeat_ref.ref_id,
+                            repeat_ref.ref_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_ref.ref_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.buff_tile_u64.get_sender(
                             operation.id,
                             None,
                             builder,
@@ -4040,6 +4158,67 @@ fn build_from_proto<'a>(
                 }
                 false => todo!("Add the same version for IndexN"),
             },
+            OpType::Accum(accum)
+                if matches!(
+                    accum.func.as_ref().and_then(|func| func.accum_fn.as_ref()),
+                    Some(accum_func::AccumFn::Increment(_))
+                ) =>
+            {
+                assert!(matches!(
+                    accum
+                        .dtype_b
+                        .as_ref()
+                        .and_then(|dtype| dtype.r#type.as_ref()),
+                    Some(Type::U64(_))
+                ));
+                assert_eq!((accum.tile_row, accum.tile_col), (1, 1));
+                assert!(matches!(
+                    accum
+                        .init_func
+                        .as_ref()
+                        .and_then(|init| init.init_fn.as_ref()),
+                    Some(init_func::InitFn::Zero(_))
+                ));
+                macro_rules! add_increment_accum {
+                    ($input_channel:ident) => {{
+                        let rcv = channel_map_collection.$input_channel.get_receiver(
+                            accum.input_id,
+                            accum.stream_idx,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let write_back_mu = accum.write_back_mu;
+                        add_child!(
+                            builder,
+                            Accum::<SimpleEvent, _, _>::new(
+                                rcv,
+                                snd,
+                                increment_fold(accum.func.unwrap().accum_fn.unwrap(), operation.id),
+                                Arc::new(move || Tile::new_zero([1, 1], 8, write_back_mu)),
+                                accum.rank,
+                                AccumConfig {
+                                    compute_bw: accum.compute_bw as u64,
+                                    write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
+                    }};
+                }
+                match accum.dtype_a.unwrap().r#type.unwrap() {
+                    Type::F32(_) | Type::Bf16(_) => add_increment_accum!(tile_f32),
+                    Type::U64(_) => add_increment_accum!(tile_u64),
+                    Type::I64(_) => add_increment_accum!(tile_i64),
+                    Type::Bool(_) => add_increment_accum!(tile_bool),
+                    other => panic!("Unsupported Increment input type {:?}", other),
+                }
+            }
             OpType::Accum(accum) => match (
                 accum.dtype_a.clone().unwrap().r#type.clone().unwrap(),
                 accum.dtype_b.clone().unwrap().r#type.clone().unwrap(),
@@ -4366,85 +4545,49 @@ fn build_from_proto<'a>(
                 _ => todo!(),
             },
             OpType::Scan(scan) => {
-                match scan.dtype_a.clone().unwrap().r#type.clone().unwrap() {
-                    // The proto carries a single dtype: input1, input2 and the
-                    // output all share it. bf16 is modelled as Tile<f32> on the
-                    // tile_f32 channel, so it rides this arm too.
-                    Type::F32(_) | Type::Bf16(_) => {
-                        let rcv1 = channel_map_collection.tile_f32.get_receiver(
+                // Older graphs omit dtype_b and use the input type for the state.
+                let input_type = scan.dtype_a.as_ref().unwrap().r#type.clone().unwrap();
+                let output_type = scan
+                    .dtype_b
+                    .as_ref()
+                    .unwrap_or(scan.dtype_a.as_ref().unwrap())
+                    .r#type
+                    .clone()
+                    .unwrap();
+                macro_rules! add_scan {
+                    ($input_channel:ident, $output_channel:ident, $fold:expr, $minimum:expr) => {{
+                        let rcv1 = channel_map_collection.$input_channel.get_receiver(
                             scan.input_id1,
                             scan.stream_idx1,
                             builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                scan.input_id1,
-                                channel_depth,
-                            ),
+                            get_chan_depth(&sim_config.config_dict, scan.input_id1, channel_depth),
                         );
-                        let rcv2 = if let Some(input_id2) = scan.input_id2 {
-                            Some(channel_map_collection.tile_f32.get_receiver(
+                        let rcv2 = scan.input_id2.map(|input_id2| {
+                            channel_map_collection.$input_channel.get_receiver(
                                 input_id2,
                                 scan.stream_idx2,
                                 builder,
-                                get_chan_depth(
-                                    &sim_config.config_dict,
-                                    input_id2,
-                                    channel_depth,
-                                ),
-                            ))
-                        } else {
-                            None
-                        };
-                        let snd = channel_map_collection.tile_f32.get_sender(
+                                get_chan_depth(&sim_config.config_dict, input_id2, channel_depth),
+                            )
+                        });
+                        let snd = channel_map_collection.$output_channel.get_sender(
                             operation.id,
                             None,
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-
-                        let fn1 = scan_fold_f32(
-                            scan.fn1.clone().unwrap().accum_fn.unwrap(),
-                            operation.id,
-                        );
+                        let make_fold = $fold;
+                        let fn1 = make_fold(scan.fn1.unwrap().accum_fn.unwrap(), operation.id);
                         let fn2 = scan
                             .fn2
-                            .clone()
-                            .map(|fn2| scan_fold_f32(fn2.accum_fn.unwrap(), operation.id));
-
-                        let tile_row = scan.tile_row as usize;
-                        let tile_col = scan.tile_col as usize;
-                        let write_back_mu = scan.write_back_mu;
-
-                        let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
-                            match scan.init_func.unwrap().init_fn.unwrap() {
-                                init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                                    Tile::new_zero(
-                                        [tile_row, tile_col],
-                                        dtype_bytes,
-                                        write_back_mu,
-                                    )
-                                }),
-                                init_func::InitFn::NegInf(_) => Arc::new(move || {
-                                    Tile::new_neg_inf(
-                                        [tile_row, tile_col],
-                                        dtype_bytes,
-                                        write_back_mu,
-                                    )
-                                }),
-                                init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                                    Tile::new_empty(
-                                        [tile_row, tile_col],
-                                        dtype_bytes,
-                                        write_back_mu,
-                                    )
-                                }),
-                                init_func::InitFn::DynEmpty(_) => Arc::new(move || {
-                                    // DynEmpty means the row or the column size is known at
-                                    // run-time, so the first fold sizes the accumulator.
-                                    Tile::new_empty([0, 0], dtype_bytes, write_back_mu)
-                                }),
-                            };
-
+                            .map(|func| make_fold(func.accum_fn.unwrap(), operation.id));
+                        let init_accum = scan_init(
+                            scan.init_func.unwrap().init_fn.unwrap(),
+                            [scan.tile_row as usize, scan.tile_col as usize],
+                            dtype_bytes,
+                            scan.write_back_mu,
+                            $minimum,
+                        );
                         add_child!(
                             builder,
                             Scan::<SimpleEvent, _, _>::new(
@@ -4463,8 +4606,28 @@ fn build_from_proto<'a>(
                                 operation.id,
                             )
                         );
+                    }};
+                }
+                match (input_type, output_type) {
+                    (Type::F32(_), Type::F32(_)) | (Type::Bf16(_), Type::Bf16(_)) => {
+                        add_scan!(tile_f32, tile_f32, scan_fold::<f32>, f32::NEG_INFINITY);
                     }
-                    e => panic!("Unsupported data type {:?} for Scan", e),
+                    (Type::U64(_), Type::U64(_)) => {
+                        add_scan!(tile_u64, tile_u64, scan_fold_u64, u64::MIN);
+                    }
+                    (Type::I64(_), Type::I64(_)) => {
+                        add_scan!(tile_i64, tile_i64, scan_fold::<i64>, i64::MIN);
+                    }
+                    (Type::F32(_) | Type::Bf16(_), Type::U64(_)) => {
+                        add_scan!(tile_f32, tile_u64, increment_fold::<f32>, u64::MIN);
+                    }
+                    (Type::I64(_), Type::U64(_)) => {
+                        add_scan!(tile_i64, tile_u64, increment_fold::<i64>, u64::MIN);
+                    }
+                    (Type::Bool(_), Type::U64(_)) => {
+                        add_scan!(tile_bool, tile_u64, increment_fold::<bool>, u64::MIN);
+                    }
+                    other => panic!("Unsupported input/output types {:?} for Scan", other),
                 }
             }
             OpType::AccumBuffer(accum) => match (

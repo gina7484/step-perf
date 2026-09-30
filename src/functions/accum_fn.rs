@@ -176,6 +176,22 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     }
 }
 
+/// Count one stream element, including inputs without an underlying data array.
+pub fn increment<T>(
+    _in_data: &Tile<T>,
+    accumulator: &Tile<u64>,
+    flop_per_cycle: u64,
+    write_back_mu: bool,
+    _id: u32,
+) -> (u64, Tile<u64>) {
+    assert_eq!(accumulator.shape, [1, 1], "Increment needs a scalar counter");
+    let output = match &accumulator.underlying {
+        Some(state) => Tile::new((state + 1).to_shared(), 8, write_back_mu),
+        None => Tile::new_blank(vec![1, 1], 8, write_back_mu),
+    };
+    (div_ceil(1, flop_per_cycle), output)
+}
+
 /// Element-wise maximum fold. Mirrors `add`, but the identity is -inf (supplied by
 /// `InitFn::NegInf`) rather than 0, so an all-negative reduction group still folds
 /// to its true maximum.
