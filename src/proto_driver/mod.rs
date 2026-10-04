@@ -4833,29 +4833,41 @@ fn build_from_proto<'a>(
                 }
             }
             OpType::MetadataGen(metadata_gen) => {
-                let snd = channel_map_collection.tile_u64.get_sender(
-                    operation.id,
-                    None,
-                    builder,
-                    get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                );
                 match metadata_gen.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    Type::U64(_) => {
-                        add_child!(
+                    Type::U64(_) | Type::ScalarU64(_) => {
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
                             builder,
-                            MetadataGen::<u64>::new(metadata_gen.npy_path, snd, operation.id,)
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                    }
-                    Type::ScalarU64(_) => {
                         add_child!(
                             builder,
                             MetadataGen::<u64>::new(metadata_gen.npy_path, snd, operation.id,)
                         );
                     }
                     Type::ScalarI64(_) => {
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
                         add_child!(
                             builder,
                             MetadataGen::<i64>::new(metadata_gen.npy_path, snd, operation.id,)
+                        );
+                    }
+                    Type::I64(_) => {
+                        let snd = channel_map_collection.tile_i64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            MetadataGen::<i64, i64>::new(metadata_gen.npy_path, snd, operation.id,)
                         );
                     }
                     dtype => panic!(

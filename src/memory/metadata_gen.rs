@@ -6,14 +6,19 @@ use itertools::enumerate;
 use ndarray::{Array2, IntoDimension, IxDyn, IxDynImpl};
 
 #[context_macro]
-pub struct MetadataGen<T: Clone> {
+pub struct MetadataGen<T: Clone, O: Default + Clone = u64> {
     pub underlying: ndarray::ArcArray<T, IxDyn>,
-    pub snd: ProfiledSender<Elem<Tile<u64>>>,
+    pub snd: ProfiledSender<Elem<Tile<O>>>,
     pub id: u32,
 }
 
-impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> MetadataGen<T> {
-    pub fn new(npy_path: String, snd: Sender<Elem<Tile<u64>>>, id: u32) -> Self {
+impl<T, O> MetadataGen<T, O>
+where
+    T: npyz::Deserialize + Clone + TryInto<O> + Send + Sync,
+    O: Default + Clone + Send + Sync,
+    Elem<Tile<O>>: dam::types::DAMType,
+{
+    pub fn new(npy_path: String, snd: Sender<Elem<Tile<O>>>, id: u32) -> Self {
         let mut file = std::fs::File::open(npy_path).unwrap();
 
         // Read the data and shape of the `.npy` file
@@ -41,21 +46,21 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
         ctx
     }
 
-    fn get_elem_array(&self) -> Vec<Elem<Tile<u64>>> {
+    fn get_elem_array(&self) -> Vec<Elem<Tile<O>>> {
         let mut result = Vec::new();
         let shape = self.underlying.shape();
 
         // Handle 1D arrays
         if shape.len() == 1 {
             for (i, val) in self.underlying.iter().enumerate() {
-                let val_u64 = val
+                let value = val
                     .clone()
                     .try_into()
-                    .unwrap_or_else(|_| panic!("Error converting T into u64"));
+                    .unwrap_or_else(|_| panic!("Metadata value does not fit the output type"));
                 if i == shape[0] - 1 {
                     result.push(Elem::ValStop(
                         Tile::new(
-                            Array2::from_shape_vec((1, 1), vec![val_u64])
+                            Array2::from_shape_vec((1, 1), vec![value])
                                 .unwrap()
                                 .to_shared(),
                             8,
@@ -65,7 +70,7 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
                     ));
                 } else {
                     result.push(Elem::Val(Tile::new(
-                        Array2::from_shape_vec((1, 1), vec![val_u64])
+                        Array2::from_shape_vec((1, 1), vec![value])
                             .unwrap()
                             .to_shared(),
                         8,
@@ -109,14 +114,14 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
                 }
             }
 
-            let val_u64 = val
+            let value = val
                 .clone()
                 .try_into()
-                .unwrap_or_else(|_| panic!("Error converting T into u64"));
+                .unwrap_or_else(|_| panic!("Metadata value does not fit the output type"));
             if let Some(stop_type) = highest_stop_token {
                 result.push(Elem::ValStop(
                     Tile::new(
-                        Array2::from_shape_vec((1, 1), vec![val_u64])
+                        Array2::from_shape_vec((1, 1), vec![value])
                             .unwrap()
                             .to_shared(),
                         8,
@@ -126,7 +131,7 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
                 ));
             } else {
                 result.push(Elem::Val(Tile::new(
-                    Array2::from_shape_vec((1, 1), vec![val_u64])
+                    Array2::from_shape_vec((1, 1), vec![value])
                         .unwrap()
                         .to_shared(),
                     8,
@@ -139,8 +144,11 @@ impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> M
     }
 }
 
-impl<T: npyz::Deserialize + Clone + TryInto<u64> + TryFrom<u64> + Send + Sync> Context
-    for MetadataGen<T>
+impl<T, O> Context for MetadataGen<T, O>
+where
+    T: npyz::Deserialize + Clone + TryInto<O> + Send + Sync,
+    O: Default + Clone + Send + Sync,
+    Elem<Tile<O>>: dam::types::DAMType,
 {
     fn run(&mut self) {
         let elems = self.get_elem_array();
