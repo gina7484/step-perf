@@ -4199,16 +4199,10 @@ fn build_from_proto<'a>(
                         builder,
                         get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
-                    add_child!(
-                        builder,
-                        GeneratorContext::new(
-                            move || {
-                                read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path)
-                                    .unwrap()
-                            },
-                            snd,
-                        )
-                    );
+                    // Parse npy headers on the host stack before entering a DAM coroutine.
+                    let values =
+                        read_multihot_elem_from_npy_iter::<i64>(&select_gen.npy_path).unwrap();
+                    add_child!(builder, GeneratorContext::new(move || values, snd));
                 }
                 false => todo!("Add the same version for IndexN"),
             },
