@@ -271,8 +271,23 @@ impl<A: DAMType + Bufferizable + EmptyFiber + 'static> Context for StructuredPar
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{operator::test_support::collect, primitives::tile::Tile};
+    use crate::operator::{
+        accum::{Accum, AccumConfig},
+        broadcast::BroadcastContext,
+        crd_dropper::CrdDropper,
+        map::{UnaryMapConfig, UnaryMapToMultiHot},
+        reshape::ReshapeNoPadStream,
+        scan::EnumerateScan,
+        static_reassemble::StaticReassemble,
+        test_support::collect,
+    };
+    use crate::{
+        functions::{accum_fn, map_fn},
+        primitives::tile::Tile,
+        utils::events::SimpleEvent,
+    };
     use dam::utility_contexts::GeneratorContext;
+    use std::sync::Arc;
 
     fn tile(value: u64) -> Tile<u64> {
         Tile::new(ndarray::ArcArray2::from_elem((1, 1), value), 8, false)
@@ -454,4 +469,143 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bounded_partition_reshape_reassemble_enumerate_dropper_pipeline() {
+        let mut builder = ProgramBuilder::default();
+        let (data_tx, data_rx) = builder.bounded(1);
+        let (sel_tx, sel_rx) = builder.bounded(1);
+        // Empty lane 0 and a long later bucket expose serial-drain deadlocks.
+        // The next groups exercise trailing empty branches and empty parents.
+        let input = vec![
+            data(1, 0),
+            data(2, 1),
+            data(3, 0),
+            data(4, 1),
+            data(5, 0),
+            data(6, 2),
+            data(0, 2),
+            data(8, 2),
+            data(9, 3),
+        ];
+        let selections = vec![
+            sel(vec![2, 3], 0, 4),
+            sel(vec![2], 0, 4),
+            sel(vec![2], 1, 4),
+            sel(vec![1], 1, 4),
+            sel(vec![], 1, 4),
+            sel(vec![], 2, 4),
+        ];
+        builder.add_child(GeneratorContext::new(move || input.into_iter(), data_tx));
+        builder.add_child(GeneratorContext::new(
+            move || selections.into_iter(),
+            sel_tx,
+        ));
+        let mut outputs = Vec::new();
+        let mut lanes = Vec::new();
+        for _ in 0..4 {
+            let (tx, rx) = builder.bounded(1);
+            let (reshape_tx, reshape_rx) = builder.bounded(1);
+            outputs.push(tx);
+            lanes.push(reshape_rx);
+            builder.add_child(ReshapeNoPadStream::new(
+                rx, reshape_tx, 2, 1, None, 3, false, 0,
+            ));
+        }
+        let partition = StructuredPartition::new(
+            &mut builder,
+            data_rx,
+            sel_rx,
+            outputs,
+            1,
+            FlatPartitionConfig {
+                switch_cycles: vec![1; 4],
+                write_back_mu: false,
+            },
+            String::new(),
+        );
+        builder.add_child(partition);
+        let (merged_tx, merged_rx) = builder.bounded(1);
+        builder.add_child(StaticReassemble::<SimpleEvent, _>::new(
+            lanes,
+            merged_tx,
+            2,
+            FlatPartitionConfig {
+                switch_cycles: vec![1; 4],
+                write_back_mu: false,
+            },
+            0,
+        ));
+        let (drop_tx, drop_rx) = builder.bounded(1);
+        let (scan_tx, scan_rx) = builder.bounded(1);
+        let mut broadcast = BroadcastContext::new(merged_rx);
+        broadcast.add_target(drop_tx);
+        broadcast.add_target(scan_tx);
+        builder.add_child(broadcast);
+        let (id_tx, id_rx) = builder.bounded(1);
+        builder.add_child(EnumerateScan::new(scan_rx, id_tx, 2, false));
+        let (last_tx, last_rx) = builder.bounded(1);
+        builder.add_child(Accum::<SimpleEvent, _, _>::new(
+            id_rx,
+            last_tx,
+            Arc::new(|x, state, bw, wb| accum_fn::last(x, state, bw, wb, 0)),
+            Arc::new(|| Tile::new_zero([1, 1], 8, false)),
+            2,
+            AccumConfig {
+                compute_bw: 1,
+                write_back_mu: false,
+            },
+            0,
+        ));
+        let (control_tx, control_rx) = builder.bounded(1);
+        builder.add_child(UnaryMapToMultiHot::<SimpleEvent, _>::new(
+            last_rx,
+            control_tx,
+            Arc::new(|x, bw, wb| map_fn::index_to_multihot(x, 4, bw, wb)),
+            UnaryMapConfig {
+                compute_bw: 1,
+                write_back_mu: false,
+            },
+            0,
+        ));
+        let (out_tx, out_rx) = builder.bounded(1);
+        let (out_sel_tx, out_sel_rx) = builder.bounded(1);
+        builder.add_child(CrdDropper::new(
+            drop_rx, control_rx, out_tx, out_sel_tx, 2, 1, false,
+        ));
+        let output = collect(&mut builder, out_rx);
+        let selections = collect(&mut builder, out_sel_rx);
+        let run = builder
+            .initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+        run.dump_failures();
+        assert!(run.passed());
+        let empty = Tile::<u64>::new_empty_fiber(vec![1, 1], 8);
+        assert_eq!(
+            *output.lock().unwrap(),
+            vec![
+                data(1, 0),
+                data(2, 1),
+                data(3, 0),
+                data(4, 1),
+                data(5, 0),
+                data(6, 2),
+                data(1, 0),
+                data(2, 3),
+                data(0, 3),
+                Elem::ValStop(empty.clone(), 3),
+                Elem::ValStop(empty, 4)
+            ]
+        );
+        assert_eq!(
+            *selections.lock().unwrap(),
+            vec![
+                sel(vec![2], 0, 4),
+                sel(vec![3], 1, 4),
+                sel(vec![1], 1, 4),
+                Elem::ValStop(MultiHotN::new_empty_fiber(4), 1),
+                Elem::ValStop(MultiHotN::new_empty_fiber(4), 2)
+            ]
+        );
+    }
 }

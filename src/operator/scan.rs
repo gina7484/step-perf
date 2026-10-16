@@ -7,6 +7,122 @@ use crate::utils::calculation::div_ceil;
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
 
+/// Exclusive scan of fiber coordinates. Empty fibers still have coordinates.
+/// Numerical input data is not needed, so timing-only tiles produce real IDs.
+#[context_macro]
+pub struct EnumerateScan<A: DAMType> {
+    input: Receiver<Elem<A>>,
+    output: Sender<Elem<Tile<u64>>>,
+    rank: StopType,
+    write_back_mu: bool,
+}
+
+impl<A: DAMType + crate::primitives::elem::EmptyFiber> EnumerateScan<A> {
+    pub fn new(
+        input: Receiver<Elem<A>>,
+        output: Sender<Elem<Tile<u64>>>,
+        rank: StopType,
+        write_back_mu: bool,
+    ) -> Self {
+        assert!(rank > 0, "Enumerate needs a positive fiber rank");
+        let ctx = Self {
+            input,
+            output,
+            rank,
+            write_back_mu,
+            context_info: Default::default(),
+        };
+        ctx.input.attach_receiver(&ctx);
+        ctx.output.attach_sender(&ctx);
+        ctx
+    }
+}
+
+impl<A: DAMType + crate::primitives::elem::EmptyFiber> Context for EnumerateScan<A> {
+    fn run(&mut self) {
+        let mut coordinate = 0u64;
+        let mut parent_open = false;
+        let mut fiber_open = false;
+        while let Ok(elem) = self.input.dequeue(&self.time) {
+            let (value, stop) = elem.data.into_parts();
+            assert!(
+                !value.is_empty_fiber() || (!fiber_open && stop >= self.rank),
+                "Enumerate: empty marker must close a whole fiber"
+            );
+            let id = Tile::new(
+                ndarray::ArcArray2::from_elem((1, 1), coordinate),
+                8,
+                self.write_back_mu,
+            );
+            self.time.incr_cycles(
+                1 + if self.write_back_mu {
+                    div_ceil(8, PMU_BW)
+                } else {
+                    0
+                },
+            );
+            self.output
+                .enqueue(
+                    &self.time,
+                    ChannelElement::new(self.time.tick(), Elem::with_stop(id, stop)),
+                )
+                .unwrap();
+            fiber_open = stop < self.rank;
+            parent_open = stop <= self.rank;
+            if stop > self.rank {
+                coordinate = 0;
+            } else if stop == self.rank {
+                coordinate = coordinate
+                    .checked_add(1)
+                    .expect("fiber coordinate overflow");
+            }
+        }
+        assert!(!parent_open, "Enumerate: stream ended before a parent stop");
+    }
+}
+
+#[cfg(test)]
+mod enumerate_tests {
+    use super::*;
+    use crate::operator::test_support::collect;
+    use dam::{simulation::ProgramBuilder, utility_contexts::GeneratorContext};
+
+    #[test]
+    fn coordinates_include_empty_fibers_and_reset_at_each_parent() {
+        let mut builder = ProgramBuilder::default();
+        let (tx, rx) = builder.bounded(1);
+        let (out_tx, out_rx) = builder.bounded(1);
+        let blank = Tile::<f32>::new_blank(vec![2, 4], 4, false);
+        let empty = Tile::<f32>::new_empty_fiber(vec![2, 4], 4);
+        let input = vec![
+            Elem::ValStop(empty.clone(), 2),
+            Elem::Val(blank.clone()),
+            Elem::ValStop(blank.clone(), 1),
+            Elem::ValStop(blank, 2),
+            Elem::ValStop(empty.clone(), 3),
+            Elem::ValStop(empty, 4),
+        ];
+        builder.add_child(GeneratorContext::new(move || input.into_iter(), tx));
+        builder.add_child(EnumerateScan::new(rx, out_tx, 2, false));
+        let output = collect(&mut builder, out_rx);
+        assert!(builder
+            .initialize(Default::default())
+            .unwrap()
+            .run(Default::default())
+            .passed());
+        let expected = [(0, 2), (1, 0), (1, 1), (1, 2), (2, 3), (0, 4)]
+            .into_iter()
+            .map(|(id, stop)| {
+                Elem::with_stop(
+                    Tile::new(ndarray::ArcArray2::from_elem((1, 1), id), 8, false),
+                    stop,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(*output.lock().unwrap(), expected);
+    }
+}
+
 pub struct ScanConfig {
     pub compute_bw: u64,
     pub write_back_mu: bool,
@@ -114,7 +230,7 @@ where
     ) -> Tile<OT> {
         assert!(
             !data1.is_empty_fiber() && data2.as_ref().map_or(true, |x| !x.is_empty_fiber()),
-            "Numerical Scan does not support empty fibers"
+            "Numerical Scan does not support empty fibers; use Enumerate for coordinates"
         );
         let mut load_cycles = 0_u64;
         if data1.read_from_mu {

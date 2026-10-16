@@ -3,6 +3,7 @@ pub mod accum_buff;
 pub mod accum_row_stat;
 pub mod bufferize;
 pub mod counter;
+pub mod crd_dropper;
 pub mod map;
 pub mod map_accum;
 // pub mod mux_demux;
