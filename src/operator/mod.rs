@@ -22,6 +22,7 @@ pub mod reshape;
 pub mod scan;
 pub mod static_reassemble;
 pub mod streamify;
+pub mod structured_partition;
 
 #[cfg(test)]
 pub(crate) mod test_support {
