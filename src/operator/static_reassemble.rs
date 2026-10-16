@@ -158,6 +158,48 @@ mod tests {
     use dam::simulation::ProgramBuilder;
     use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext};
 
+    #[test]
+    fn empty_fibers_preserve_every_lane_and_outer_boundary() {
+        use crate::operator::test_support::collect;
+        for terminal in 3..=5 {
+            for empty_mask in 0..16 {
+                let mut builder = ProgramBuilder::default();
+                let mut lanes = Vec::new();
+                let mut expected = Vec::new();
+                for lane in 0..4 {
+                    let (tx, rx) = builder.bounded(1);
+                    lanes.push(rx);
+                    let tile = if empty_mask & (1 << lane) != 0 {
+                        Tile::<u32>::new_empty_fiber(vec![1, 1], 0)
+                    } else {
+                        scalar_tile(lane)
+                    };
+                    let input = vec![Elem::ValStop(tile.clone(), terminal)];
+                    builder.add_child(GeneratorContext::new(move || input.into_iter(), tx));
+                    expected.push(Elem::ValStop(tile, if lane == 3 { terminal } else { 2 }));
+                }
+                let (tx, rx) = builder.bounded(1);
+                builder.add_child(StaticReassemble::<SimpleEvent, _>::new(
+                    lanes,
+                    tx,
+                    2,
+                    FlatPartitionConfig {
+                        switch_cycles: vec![1; 4],
+                        write_back_mu: false,
+                    },
+                    0,
+                ));
+                let output = collect(&mut builder, rx);
+                assert!(builder
+                    .initialize(Default::default())
+                    .unwrap()
+                    .run(Default::default())
+                    .passed());
+                assert_eq!(*output.lock().unwrap(), expected);
+            }
+        }
+    }
+
     fn tolerance_fn<T: PartialEq>(a: &Elem<T>, b: &Elem<T>) -> bool {
         match (a, b) {
             (Elem::Val(a_tile), Elem::Val(b_tile)) => a_tile == b_tile,

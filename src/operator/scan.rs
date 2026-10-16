@@ -112,6 +112,10 @@ where
         accumulator: &mut Tile<OT>,
         group_end: bool,
     ) -> Tile<OT> {
+        assert!(
+            !data1.is_empty_fiber() && data2.as_ref().map_or(true, |x| !x.is_empty_fiber()),
+            "Numerical Scan does not support empty fibers"
+        );
         let mut load_cycles = 0_u64;
         if data1.read_from_mu {
             load_cycles += div_ceil(data1.size_in_bytes() as u64, PMU_BW);

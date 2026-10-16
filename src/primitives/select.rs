@@ -1,6 +1,6 @@
 use dam::types::StaticallySized;
 
-use super::elem::Bufferizable;
+use super::elem::{Bufferizable, EmptyFiber};
 
 pub trait SelectAdapter {
     fn to_sel_vec(&self) -> Vec<usize>;
@@ -23,13 +23,26 @@ pub trait SelectAdapter {
 pub struct MultiHotN {
     underlying: Vec<Option<bool>>,
     read_from_mu: bool,
+    empty_fiber: bool,
 }
 
 impl MultiHotN {
+    pub fn new_empty_fiber(width: usize) -> Self {
+        Self {
+            underlying: vec![None; width],
+            read_from_mu: false,
+            empty_fiber: true,
+        }
+    }
+    pub fn is_empty_fiber(&self) -> bool {
+        self.empty_fiber
+    }
+
     pub fn new(arr: Vec<bool>, read_from_mu: bool) -> Self {
         Self {
             underlying: arr.into_iter().map(Some).collect(),
             read_from_mu,
+            empty_fiber: false,
         }
     }
 
@@ -41,11 +54,21 @@ impl MultiHotN {
         Self {
             underlying: vec![None; len],
             read_from_mu,
+            empty_fiber: false,
         }
     }
 
     pub fn len(&self) -> usize {
         self.underlying.len()
+    }
+}
+
+impl EmptyFiber for MultiHotN {
+    fn is_empty_fiber(&self) -> bool {
+        self.empty_fiber
+    }
+    fn empty_fiber_like(&self) -> Self {
+        Self::new_empty_fiber(self.len())
     }
 }
 
@@ -58,11 +81,12 @@ impl std::ops::Deref for MultiHotN {
 }
 
 impl StaticallySized for MultiHotN {
-    const SIZE: usize = bool::SIZE * 64;
+    const SIZE: usize = bool::SIZE * 64 + 1;
 }
 
 impl SelectAdapter for MultiHotN {
     fn to_sel_vec(&self) -> Vec<usize> {
+        assert!(!self.empty_fiber, "an empty parent is not a selection");
         let mut res_vec: Vec<usize> = vec![];
         for (idx, data) in self.underlying.iter().enumerate() {
             if *data == Some(true) {
@@ -80,19 +104,24 @@ impl SelectAdapter for MultiHotN {
         Self {
             underlying,
             read_from_mu,
+            empty_fiber: false,
         }
     }
 
     /// A blank (all `None`) MultiHotN is distinct from an all-`false` selection
     /// (all `Some(false)`), which carries real data with no chosen candidates.
     fn is_blank(&self) -> bool {
-        self.underlying.iter().all(Option::is_none)
+        !self.empty_fiber && self.underlying.iter().all(Option::is_none)
     }
 }
 
 impl Bufferizable for MultiHotN {
     fn size_in_bytes(&self) -> usize {
-        std::mem::size_of::<bool>() * self.underlying.len()
+        if self.empty_fiber {
+            0
+        } else {
+            std::mem::size_of::<bool>() * self.underlying.len()
+        }
     }
     fn read_from_mu(&self) -> bool {
         self.read_from_mu
@@ -100,7 +129,8 @@ impl Bufferizable for MultiHotN {
     fn clone_with_updated_read_from_mu(&self, read_from_mu: bool) -> Self {
         Self {
             underlying: self.underlying.clone(),
-            read_from_mu,
+            read_from_mu: read_from_mu && !self.empty_fiber,
+            empty_fiber: self.empty_fiber,
         }
     }
 }
@@ -191,6 +221,20 @@ impl Bufferizable for IndexN {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_parent_is_neither_blank_nor_an_all_false_selection() {
+        use super::*;
+        let empty = MultiHotN::new_empty_fiber(4);
+        assert!(empty.is_empty_fiber());
+        assert!(!empty.is_blank());
+        assert_eq!(empty.len(), 4);
+        assert_eq!(empty.size_in_bytes(), 0);
+        assert!(!empty.read_from_mu());
+        assert_eq!(empty.clone_with_updated_read_from_mu(true), empty);
+        assert_ne!(empty, MultiHotN::new_blank(4, false));
+        assert_ne!(empty, MultiHotN::new(vec![false; 4], false));
+        assert!(std::panic::catch_unwind(|| empty.to_sel_vec()).is_err());
+    }
     use super::SelectAdapter;
     use crate::primitives::elem::Bufferizable;
     use crate::primitives::select::{IndexN, MultiHotN};
@@ -212,9 +256,9 @@ mod tests {
         assert!(one_hot_b.to_sel_vec() == vec![1usize, 2usize]);
         assert!(one_hot_c.to_sel_vec() == vec![1usize, 2usize]);
 
-        assert!(one_hot_a.dam_size() == 64);
-        assert!(one_hot_b.dam_size() == 64);
-        assert!(one_hot_c.dam_size() == 64);
+        assert!(one_hot_a.dam_size() == 65);
+        assert!(one_hot_b.dam_size() == 65);
+        assert!(one_hot_c.dam_size() == 65);
 
         dbg!(one_hot_a);
         dbg!(one_hot_b);

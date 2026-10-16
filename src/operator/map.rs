@@ -125,6 +125,10 @@ where
             let start_time = self.time.tick().time();
 
             let mut load_cycle: u64 = 0;
+            assert!(
+                !tile1.is_empty_fiber() && !tile2.is_empty_fiber(),
+                "BinaryMap does not support empty fibers"
+            );
             if tile1.read_from_mu {
                 load_cycle += div_ceil(tile1.size_in_bytes() as u64, PMU_BW);
             }
@@ -278,6 +282,10 @@ where
             let start_time = self.time.tick().time();
 
             let mut load_cycle: u64 = 0;
+            assert!(
+                !tile1.is_empty_fiber() && !tile2.is_empty_fiber(),
+                "BinaryMap does not support empty fibers"
+            );
             if tile1.read_from_mu {
                 load_cycle += div_ceil(tile1.size_in_bytes() as u64, PMU_BW);
             }
@@ -400,6 +408,10 @@ where
             };
 
             let start_time = self.time.tick().time();
+            assert!(
+                !in_tile.is_empty_fiber(),
+                "UnaryMap does not support empty fibers"
+            );
             let load_cycles = if in_tile.read_from_mu {
                 div_ceil(in_tile.size_in_bytes() as u64, PMU_BW)
             } else {
@@ -509,6 +521,10 @@ where
             };
 
             let start_time = self.time.tick().time();
+            assert!(
+                !in_multihot.is_empty_fiber(),
+                "UnaryMap does not support empty selections"
+            );
             let load_cycles = if in_multihot.read_from_mu() {
                 div_ceil(in_multihot.size_in_bytes() as u64, PMU_BW)
             } else {
@@ -618,6 +634,10 @@ where
             };
 
             let start_time = self.time.tick().time();
+            assert!(
+                !in_tile.is_empty_fiber(),
+                "UnaryMap does not support empty fibers"
+            );
             let load_cycles = if in_tile.read_from_mu {
                 div_ceil(in_tile.size_in_bytes() as u64, PMU_BW)
             } else {

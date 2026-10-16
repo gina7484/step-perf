@@ -59,6 +59,10 @@ where
     }
 
     fn process_accum(&mut self, data: Tile<T>, accumulator: &mut Tile<OT>) {
+        assert!(
+            !data.is_empty_fiber(),
+            "Accum does not support empty fibers"
+        );
         let load_cycles = if data.read_from_mu {
             div_ceil(data.size_in_bytes() as u64, PMU_BW)
         } else {
@@ -82,6 +86,10 @@ where
     }
 
     fn process_accum_init(&mut self, data: Tile<T>, accumulator: &mut Tile<OT>) -> Tile<OT> {
+        assert!(
+            !data.is_empty_fiber(),
+            "Accum does not support empty fibers"
+        );
         let load_cycles = if data.read_from_mu {
             div_ceil(data.size_in_bytes() as u64, PMU_BW)
         } else {

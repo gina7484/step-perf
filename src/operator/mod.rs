@@ -23,6 +23,42 @@ pub mod scan;
 pub mod static_reassemble;
 pub mod streamify;
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use dam::{context_tools::*, simulation::ProgramBuilder};
+    use std::sync::{Arc, Mutex};
+
+    #[context_macro]
+    struct Collect<T: DAMType> {
+        input: Receiver<T>,
+        values: Arc<Mutex<Vec<T>>>,
+    }
+
+    impl<T: DAMType> Context for Collect<T> {
+        fn run(&mut self) {
+            while let Ok(elem) = self.input.dequeue(&self.time) {
+                self.values.lock().unwrap().push(elem.data);
+                self.time.incr_cycles(1);
+            }
+        }
+    }
+
+    pub fn collect<T: DAMType + 'static>(
+        builder: &mut ProgramBuilder<'_>,
+        input: Receiver<T>,
+    ) -> Arc<Mutex<Vec<T>>> {
+        let values = Arc::new(Mutex::new(Vec::new()));
+        let ctx = Collect {
+            input,
+            values: values.clone(),
+            context_info: Default::default(),
+        };
+        ctx.input.attach_receiver(&ctx);
+        builder.add_child(ctx);
+        values
+    }
+}
+
 use dam::types::StaticallySized;
 use serde::Deserialize;
 
