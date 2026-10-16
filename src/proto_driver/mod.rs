@@ -13,6 +13,7 @@ use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
 use crate::operator::accum_buff::AccumBuff;
 use crate::operator::counter::Counter;
+use crate::operator::crd_dropper::CrdDropper;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
 use crate::operator::flatmap_decomp::{
@@ -40,9 +41,10 @@ use crate::operator::partition::{FlatPartition, FlatPartitionConfig};
 use crate::operator::promote::{Promote, PromoteOuter};
 use crate::operator::reassemble::{FlatReassemble, FlatReassembleConfig};
 use crate::operator::reshape::{Reshape, ReshapeNoPadStream, ReshapePadStream};
-use crate::operator::scan::{Scan, ScanConfig};
+use crate::operator::scan::{EnumerateScan, Scan, ScanConfig};
 use crate::operator::static_reassemble::StaticReassemble;
 use crate::operator::streamify::{StaticStreamify, Streamify};
+use crate::operator::structured_partition::StructuredPartition;
 use crate::proto_driver::proto_headers::graph_proto::map_accum_func;
 use crate::utils::select_npy::read_multihot_elem_from_npy_iter;
 use dam::simulation::{
@@ -2582,6 +2584,16 @@ fn build_from_proto<'a>(
                             channel_depth
                         );
                     }
+                    Type::Bool(_) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            tile_bool,
+                            builder,
+                            channel_depth
+                        );
+                    }
                     Type::MultiHot(_) => {
                         make_broadcast!(
                             channel_map_collection,
@@ -2615,6 +2627,147 @@ fn build_from_proto<'a>(
                         );
                     }
                     dtype => panic!("Unsupported data type for Broadcast operation {:?}", dtype),
+                }
+            }
+            OpType::StructuredPartition(partition) => {
+                let width = match partition
+                    .control_dtype
+                    .as_ref()
+                    .unwrap()
+                    .r#type
+                    .as_ref()
+                    .unwrap()
+                {
+                    Type::MultiHot(selection) => selection.width,
+                    other => panic!(
+                        "StructuredPartition requires MultiHot control, got {:?}",
+                        other
+                    ),
+                };
+                assert_eq!(width, partition.num_consumers);
+                macro_rules! partition_typed {
+                    ($field:ident) => {{
+                        let input = channel_map_collection.$field.get_receiver(
+                            partition.input_id,
+                            partition.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                partition.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let control = channel_map_collection.multihot.get_receiver(
+                            partition.control_id,
+                            partition.control_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                partition.control_id,
+                                channel_depth,
+                            ),
+                        );
+                        let outputs = (0..partition.num_consumers)
+                            .map(|lane| {
+                                channel_map_collection.$field.get_sender(
+                                    operation.id,
+                                    Some(lane),
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        operation.id,
+                                        channel_depth,
+                                    ),
+                                )
+                            })
+                            .collect();
+                        let node = StructuredPartition::new(
+                            builder,
+                            input,
+                            control,
+                            outputs,
+                            partition.partition_rank,
+                            FlatPartitionConfig {
+                                switch_cycles: to_u64_vec(partition.switch_cycles),
+                                write_back_mu: partition.write_back_mu,
+                            },
+                            partition.sel_npy_path,
+                        );
+                        add_child!(builder, node);
+                    }};
+                }
+                match partition.input_dtype.unwrap().r#type.unwrap() {
+                    Type::F32(_) | Type::Bf16(_) => partition_typed!(tile_f32),
+                    Type::U64(_) => partition_typed!(tile_u64),
+                    Type::I64(_) => partition_typed!(tile_i64),
+                    Type::Bool(_) => partition_typed!(tile_bool),
+                    Type::MultiHot(_) => partition_typed!(multihot),
+                    other => panic!("Unsupported StructuredPartition data type {:?}", other),
+                }
+            }
+            OpType::CrdDropper(dropper) => {
+                assert!(
+                    matches!(
+                        dropper.control_dtype.as_ref().unwrap().r#type,
+                        Some(Type::MultiHot(_))
+                    ),
+                    "CrdDropper requires MultiHot control"
+                );
+                macro_rules! dropper_typed {
+                    ($field:ident) => {{
+                        let input = channel_map_collection.$field.get_receiver(
+                            dropper.input_id,
+                            dropper.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                dropper.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let control = channel_map_collection.multihot.get_receiver(
+                            dropper.control_id,
+                            dropper.control_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                dropper.control_id,
+                                channel_depth,
+                            ),
+                        );
+                        let output = channel_map_collection.$field.get_sender(
+                            operation.id,
+                            Some(0),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        let selections = channel_map_collection.multihot.get_sender(
+                            operation.id,
+                            Some(1),
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            CrdDropper::new(
+                                input,
+                                control,
+                                output,
+                                selections,
+                                dropper.drop_rank,
+                                dropper.switch_cycles as u64,
+                                dropper.write_back_mu
+                            )
+                        );
+                    }};
+                }
+                match dropper.input_dtype.unwrap().r#type.unwrap() {
+                    Type::F32(_) | Type::Bf16(_) => dropper_typed!(tile_f32),
+                    Type::U64(_) => dropper_typed!(tile_u64),
+                    Type::I64(_) => dropper_typed!(tile_i64),
+                    Type::Bool(_) => dropper_typed!(tile_bool),
+                    Type::MultiHot(_) => dropper_typed!(multihot),
+                    other => panic!("Unsupported CrdDropper data type {:?}", other),
                 }
             }
             OpType::FlatPartition(flat_partition) => {
@@ -2957,7 +3110,7 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    Type::F32(_) | Type::Bf16(_) => {
                         let mut rcv_list = vec![];
                         for (rcv_id, stream_idx) in static_reassemble
                             .input_id_list
@@ -2978,6 +3131,46 @@ fn build_from_proto<'a>(
                         }
 
                         let snd = channel_map_collection.tile_f32.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            StaticReassemble::<SimpleEvent, _>::new(
+                                rcv_list,
+                                snd,
+                                static_reassemble.reassemble_rank,
+                                FlatPartitionConfig {
+                                    switch_cycles: to_u64_vec(static_reassemble.switch_cycles),
+                                    write_back_mu: static_reassemble.write_back_mu,
+                                },
+                                operation.id,
+                            )
+                        );
+                    }
+                    Type::Bool(_) => {
+                        let mut rcv_list = vec![];
+                        for (rcv_id, stream_idx) in static_reassemble
+                            .input_id_list
+                            .into_iter()
+                            .zip(static_reassemble.input_stream_idx_list.into_iter())
+                        {
+                            let rcv = channel_map_collection.tile_bool.get_receiver(
+                                rcv_id,
+                                if stream_idx < 0 {
+                                    None
+                                } else {
+                                    Some(stream_idx as u32)
+                                },
+                                builder,
+                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
+                            );
+                            rcv_list.push(rcv);
+                        }
+
+                        let snd = channel_map_collection.tile_bool.get_sender(
                             operation.id,
                             None,
                             builder,
@@ -4191,9 +4384,16 @@ fn build_from_proto<'a>(
                     let func: Arc<
                         dyn Fn(&Tile<u64>, &Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
                     > = match accum.func.unwrap().accum_fn.unwrap() {
-                        accum_func::AccumFn::Add(_) => Arc::new(move |tile, state, bw, write_back| {
-                            functions::accum_fn::add(tile, state, bw, write_back, operation.id)
-                        }),
+                        accum_func::AccumFn::Add(_) => {
+                            Arc::new(move |tile, state, bw, write_back| {
+                                functions::accum_fn::add(tile, state, bw, write_back, operation.id)
+                            })
+                        }
+                        accum_func::AccumFn::Last(_) => {
+                            Arc::new(move |tile, state, bw, write_back| {
+                                functions::accum_fn::last(tile, state, bw, write_back, operation.id)
+                            })
+                        }
                         other => panic!("Unsupported u64 accumulation function {:?}", other),
                     };
                     let tile_row = accum.tile_row as usize;
@@ -4345,10 +4545,75 @@ fn build_from_proto<'a>(
                 _ => todo!(),
             },
             OpType::Scan(scan) => {
+                if let Some(accum_func::AccumFn::Enumerate(enumerate)) =
+                    scan.fn1.as_ref().and_then(|func| func.accum_fn.as_ref())
+                {
+                    assert!(
+                        !scan.inclusive && scan.input_id2.is_none() && scan.fn2.is_none(),
+                        "Enumerate requires an exclusive single-input scan"
+                    );
+                    assert_eq!(scan.rank, enumerate.rank + 1);
+                    assert_eq!((scan.tile_row, scan.tile_col), (1, 1));
+                    assert!(matches!(
+                        scan.init_func.as_ref().unwrap().init_fn,
+                        Some(init_func::InitFn::Zero(_))
+                    ));
+                    assert!(
+                        matches!(scan.dtype_b.as_ref().unwrap().r#type, Some(Type::U64(_))),
+                        "Enumerate output must be uint64"
+                    );
+                    macro_rules! enumerate_typed {
+                        ($field:ident) => {{
+                            let input = channel_map_collection.$field.get_receiver(
+                                scan.input_id1,
+                                scan.stream_idx1,
+                                builder,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    scan.input_id1,
+                                    channel_depth,
+                                ),
+                            );
+                            let output = channel_map_collection.tile_u64.get_sender(
+                                operation.id,
+                                None,
+                                builder,
+                                get_chan_depth(
+                                    &sim_config.config_dict,
+                                    operation.id,
+                                    channel_depth,
+                                ),
+                            );
+                            add_child!(
+                                builder,
+                                EnumerateScan::new(
+                                    input,
+                                    output,
+                                    enumerate.rank,
+                                    scan.write_back_mu
+                                )
+                            );
+                        }};
+                    }
+                    match scan.dtype_a.as_ref().unwrap().r#type.as_ref().unwrap() {
+                        Type::F32(_) | Type::Bf16(_) => enumerate_typed!(tile_f32),
+                        Type::U64(_) => enumerate_typed!(tile_u64),
+                        Type::I64(_) => enumerate_typed!(tile_i64),
+                        Type::Bool(_) => enumerate_typed!(tile_bool),
+                        Type::MultiHot(_) => enumerate_typed!(multihot),
+                        other => panic!("Unsupported Enumerate input {:?}", other),
+                    }
+                    continue;
+                }
+                if let Some(output_type) = &scan.dtype_b {
+                    assert_eq!(
+                        Some(output_type),
+                        scan.dtype_a.as_ref(),
+                        "ordinary Scan must preserve dtype"
+                    );
+                }
                 match scan.dtype_a.clone().unwrap().r#type.clone().unwrap() {
-                    // The proto carries a single dtype: input1, input2 and the
-                    // output all share it. bf16 is modelled as Tile<f32> on the
-                    // tile_f32 channel, so it rides this arm too.
+                    // Ordinary scans preserve dtype. bf16 shares the f32 channel.
                     Type::F32(_) | Type::Bf16(_) => {
                         let rcv1 = channel_map_collection.tile_f32.get_receiver(
                             scan.input_id1,
@@ -5005,6 +5270,76 @@ fn build_from_proto<'a>(
                                 );
                             }
                         }
+                    }
+                    Type::Bool(_) => {
+                        assert!(
+                            !reshape.have_pad_stream && reshape.pad_func.is_none(),
+                            "This dtype supports ReshapePadStream without padding"
+                        );
+                        let rcv = channel_map_collection.tile_bool.get_receiver(
+                            reshape.input_id,
+                            reshape.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                reshape.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_bool.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            ReshapeNoPadStream::new(
+                                rcv,
+                                snd,
+                                reshape.split_dim as usize,
+                                reshape.chunk_size as usize,
+                                None,
+                                reshape.input_stream_rank,
+                                false,
+                                operation.id
+                            )
+                        );
+                    }
+                    Type::I64(_) => {
+                        assert!(
+                            !reshape.have_pad_stream && reshape.pad_func.is_none(),
+                            "This dtype supports ReshapePadStream without padding"
+                        );
+                        let rcv = channel_map_collection.tile_i64.get_receiver(
+                            reshape.input_id,
+                            reshape.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                reshape.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_i64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            ReshapeNoPadStream::new(
+                                rcv,
+                                snd,
+                                reshape.split_dim as usize,
+                                reshape.chunk_size as usize,
+                                None,
+                                reshape.input_stream_rank,
+                                false,
+                                operation.id
+                            )
+                        );
                     }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
