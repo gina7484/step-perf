@@ -30,9 +30,6 @@ pub fn matmul<T: Debug + ndarray::LinalgScalar>(
     }
     assert_eq!(in1.bytes_per_elem, in2.bytes_per_elem);
 
-    // offset is propagated from the input tile
-    let offset = in1.offset;
-
     let m = in1.shape[0];
     let k = in1.shape[1];
     let n = if !weight_transposed {
@@ -53,17 +50,12 @@ pub fn matmul<T: Debug + ndarray::LinalgScalar>(
 
             (
                 div_ceil((2 * m * k * n) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    out_arr.to_shared(),
-                    in1.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
             )
         }
         (_, _) => (
             div_ceil((2 * m * k * n) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![m, n], in1.bytes_per_elem, write_back_mu, offset),
+            Tile::new_blank(vec![m, n], in1.bytes_per_elem, write_back_mu),
         ),
     }
 }
@@ -86,15 +78,6 @@ pub fn div<T: Debug + ndarray::LinalgScalar + Default>(
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
 
-    let offset = if in1_shape_0 == in2_shape_0 {
-        in1.offset.max(in2.offset)
-    } else if in1_shape_0 == 1 {
-        in2.offset
-    } else {
-        // in2_shape_0 == 1
-        in1.offset
-    };
-
     match (&in1.underlying, &in2.underlying) {
         (Some(arr1), Some(arr2)) => {
             let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
@@ -112,21 +95,15 @@ pub fn div<T: Debug + ndarray::LinalgScalar + Default>(
             }
             (
                 div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    out_arr.to_shared(),
-                    in1.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
             )
         }
         (_, _) => (
             div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![out_shape_0, out_shape_1],
                 in1.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -150,15 +127,6 @@ pub fn sub<T: Debug + ndarray::LinalgScalar + Default>(
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
 
-    let offset = if in1_shape_0 == in2_shape_0 {
-        in1.offset.max(in2.offset)
-    } else if in1_shape_0 == 1 {
-        in2.offset
-    } else {
-        // in2_shape_0 == 1
-        in1.offset
-    };
-
     match (&in1.underlying, &in2.underlying) {
         (Some(arr1), Some(arr2)) => {
             let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
@@ -176,21 +144,15 @@ pub fn sub<T: Debug + ndarray::LinalgScalar + Default>(
             }
             (
                 div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    out_arr.to_shared(),
-                    in1.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
             )
         }
         (_, _) => (
             div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![out_shape_0, out_shape_1],
                 in1.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -214,15 +176,6 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
 
-    let offset = if in1_shape_0 == in2_shape_0 {
-        in1.offset.max(in2.offset)
-    } else if in1_shape_0 == 1 {
-        in2.offset
-    } else {
-        // in2_shape_0 == 1
-        in1.offset
-    };
-
     match (&in1.underlying, &in2.underlying) {
         (Some(arr1), Some(arr2)) => {
             let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
@@ -240,21 +193,15 @@ pub fn mul<T: Debug + ndarray::LinalgScalar + Default>(
             }
             (
                 div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    out_arr.to_shared(),
-                    in1.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
             )
         }
         (_, _) => (
             div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![out_shape_0, out_shape_1],
                 in1.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -277,15 +224,6 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
     let out_shape_0 = in1_shape_0.max(in2_shape_0);
     let out_shape_1 = in1_shape_1.max(in2_shape_1);
 
-    let offset = if in1_shape_0 == in2_shape_0 {
-        in1.offset.max(in2.offset)
-    } else if in1_shape_0 == 1 {
-        in2.offset
-    } else {
-        // in2_shape_0 == 1
-        in1.offset
-    };
-
     match (&in1.underlying, &in2.underlying) {
         (Some(arr1), Some(arr2)) => {
             let mut out_arr = ndarray::Array2::default((out_shape_0, out_shape_1));
@@ -303,21 +241,15 @@ pub fn add<T: Debug + ndarray::LinalgScalar + Default>(
             }
             (
                 div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    out_arr.to_shared(),
-                    in1.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(out_arr.to_shared(), in1.bytes_per_elem, write_back_mu),
             )
         }
         (_, _) => (
             div_ceil((out_shape_0 * out_shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![out_shape_0, out_shape_1],
                 in1.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -394,25 +326,21 @@ pub fn silu<T: Debug + ndarray::LinalgScalar + num_traits::Float + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 8) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| x / (T::one() + (-x).exp())).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 8) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -429,25 +357,21 @@ pub fn exp<T: Debug + num_traits::Float + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| x.exp()).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -464,25 +388,21 @@ pub fn pow2<T: Debug + num_traits::Float + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| T::from(2.0).unwrap().powf(x)).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -499,25 +419,21 @@ pub fn tanh<T: Debug + num_traits::Float + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| x.tanh()).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -535,25 +451,21 @@ pub fn pow<T: Debug + num_traits::Float + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| x.powf(exponent)).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -570,25 +482,21 @@ pub fn rsqrt<T: Debug + num_traits::Float + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| T::one() / x.sqrt()).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 4) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -604,30 +512,18 @@ pub fn row_wise_sum<T: Debug + num_traits::Num + Copy>(
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
 
-    let offset = in_data.offset;
-
     match &in_data.underlying {
         Some(arr) => {
             // Perform row-wise sum: sum each row to get a [shape_0, 1] array
             let row_sums = arr.sum_axis(ndarray::Axis(1)).insert_axis(ndarray::Axis(1));
             (
                 div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    row_sums.to_shared(),
-                    in_data.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(row_sums.to_shared(), in_data.bytes_per_elem, write_back_mu),
             )
         }
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
-                vec![shape_0, 1],
-                in_data.bytes_per_elem,
-                write_back_mu,
-                offset,
-            ),
+            Tile::new_blank(vec![shape_0, 1], in_data.bytes_per_elem, write_back_mu),
         ),
     }
 }
@@ -641,8 +537,6 @@ pub fn row_wise_max<T: Debug + PartialOrd + Copy>(
 
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => {
@@ -663,55 +557,12 @@ pub fn row_wise_max<T: Debug + PartialOrd + Copy>(
                 .expect("row_wise_max: failed to reshape row maxima to [rows, 1]");
             (
                 div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(
-                    row_maxes.to_shared(),
-                    in_data.bytes_per_elem,
-                    write_back_mu,
-                    offset,
-                ),
+                Tile::new(row_maxes.to_shared(), in_data.bytes_per_elem, write_back_mu),
             )
         }
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
-                vec![shape_0, 1],
-                in_data.bytes_per_elem,
-                write_back_mu,
-                offset,
-            ),
-        ),
-    }
-}
-
-pub fn set_offset<T: Debug + ndarray::LinalgScalar + Default>(
-    in_data: &Tile<T>,
-    offset: &Tile<u64>,
-    write_back_mu: bool,
-) -> (u64, Tile<T>) {
-    assert_eq!(in_data.shape.len(), 2);
-    let shape_0 = in_data.shape[0];
-    let shape_1 = in_data.shape[1];
-
-    let offset_val = offset.underlying.as_ref().unwrap()[[0, 0]];
-
-    match &in_data.underlying {
-        Some(arr) => (
-            1,
-            Tile::new_padded(
-                arr.to_owned().into_shared(),
-                in_data.bytes_per_elem,
-                write_back_mu,
-                offset_val as usize,
-            ),
-        ),
-        None => (
-            1,
-            Tile::new_blank_padded(
-                vec![shape_0, shape_1],
-                in_data.bytes_per_elem,
-                write_back_mu,
-                offset_val as usize,
-            ),
+            Tile::new_blank(vec![shape_0, 1], in_data.bytes_per_elem, write_back_mu),
         ),
     }
 }
@@ -753,56 +604,6 @@ pub fn mask_row<
         None => (
             1,
             Tile::new_blank(vec![row, col], dtype_bytes, write_back_mu),
-        ),
-    }
-}
-
-pub fn row_wise_append<T: Debug + Default + Clone>(
-    in_data: &Tile<T>,
-    data_to_append: &Tile<T>,
-    write_back_mu: bool,
-) -> (u64, Tile<T>) {
-    assert_eq!(in_data.shape.len(), 2);
-    assert_eq!(data_to_append.shape.len(), 2);
-    assert_eq!(in_data.shape[1], data_to_append.shape[1]);
-
-    let shape_0 = in_data.shape[0];
-    let shape_1 = in_data.shape[1];
-
-    let offset = in_data.offset;
-    assert!(
-        offset + data_to_append.shape[0] <= shape_0,
-        "should have enough space to append new rows"
-    );
-
-    match (&in_data.underlying, &data_to_append.underlying) {
-        (Some(arr), Some(arr_to_append)) => {
-            // Create a mutable copy of the original array
-            let mut result = arr.to_owned();
-
-            // Copy data from arr_to_append into the slice starting at offset
-            let mut slice =
-                result.slice_mut(ndarray::s![offset..offset + data_to_append.shape[0], ..]);
-            slice.assign(arr_to_append);
-
-            (
-                1,
-                Tile::new_padded(
-                    result.into_shared(),
-                    in_data.bytes_per_elem,
-                    write_back_mu,
-                    (offset + data_to_append.shape[0]) as usize,
-                ),
-            )
-        }
-        _ => (
-            1,
-            Tile::new_blank_padded(
-                vec![shape_0, shape_1],
-                in_data.bytes_per_elem,
-                write_back_mu,
-                (offset + data_to_append.shape[0]) as usize,
-            ),
         ),
     }
 }
@@ -954,10 +755,7 @@ pub fn multihot_to_u64(
     // indices it would encode. Propagate a blank tile whose column count is the upper
     // bound (one per candidate) for buffer sizing.
     if in_data.is_blank() {
-        return (
-            1,
-            Tile::new_blank(vec![1, in_data.len()], 8, write_back_mu),
-        );
+        return (1, Tile::new_blank(vec![1, in_data.len()], 8, write_back_mu));
     }
     let sel_vec = in_data.to_sel_vec();
     let n = sel_vec.len();
@@ -1029,6 +827,25 @@ pub fn index_to_multihot<T: DAMType + num_traits::AsPrimitive<usize>>(
     }
 }
 
+pub fn mask_to_multihot<T: DAMType + Default + PartialEq>(
+    in_data: &Tile<T>,
+    num_classes: usize,
+    _comp_bw: u64,
+    write_back_mu: bool,
+) -> (u64, MultiHotN) {
+    assert_eq!(in_data.shape, vec![1, num_classes]);
+    match &in_data.underlying {
+        Some(arr) => (
+            1,
+            MultiHotN::new(
+                arr.iter().map(|value| *value != T::default()).collect(),
+                write_back_mu,
+            ),
+        ),
+        None => (1, MultiHotN::new_blank(num_classes, write_back_mu)),
+    }
+}
+
 pub fn to_const_int<T: DAMType>(_: &T, constant: u64, write_back_mu: bool) -> (u64, Tile<u64>) {
     (
         1,
@@ -1059,25 +876,22 @@ pub fn sigmoid<T: Debug + num_traits::Float + Copy>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 7) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| T::one() / (T::one() + (-x).exp())).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 7) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -1095,12 +909,11 @@ pub fn clamp<T: Debug + Copy + PartialOrd + Default>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| {
                     let mut v = x;
                     if let Some(lo) = min {
@@ -1118,16 +931,14 @@ pub fn clamp<T: Debug + Copy + PartialOrd + Default>(
                 .to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -1143,22 +954,16 @@ pub fn ge_scalar<T: Debug + Copy + PartialOrd>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         // bool tiles use 1 byte per element
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(
-                arr.mapv(|x| x >= scalar).to_shared(),
-                1,
-                write_back_mu,
-                offset,
-            ),
+            Tile::new(arr.mapv(|x| x >= scalar).to_shared(), 1, write_back_mu),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![shape_0, shape_1], 1, write_back_mu, offset),
+            Tile::new_blank(vec![shape_0, shape_1], 1, write_back_mu),
         ),
     }
 }
@@ -1172,25 +977,22 @@ pub fn bitwise_not(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| !x).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -1208,25 +1010,22 @@ pub fn floor_divide_scalar<T: Debug + Copy + num_traits::PrimInt>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| x / divisor).to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1 * 2) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -1240,20 +1039,17 @@ pub fn remainder_u64(
     write_back_mu: bool,
 ) -> (u64, Tile<u64>) {
     assert_ne!(divisor, 0, "RemainderImmediate divisor must be nonzero");
-    let cycles = div_ceil(in_data.shape.iter().product::<usize>() as u64, flop_per_cycle);
+    let cycles = div_ceil(
+        in_data.shape.iter().product::<usize>() as u64,
+        flop_per_cycle,
+    );
     let output = match &in_data.underlying {
-        Some(arr) => Tile::new_padded(
+        Some(arr) => Tile::new(
             arr.mapv(|x| x % divisor).to_shared(),
             in_data.bytes_per_elem,
             write_back_mu,
-            in_data.offset,
         ),
-        None => Tile::new_blank_padded(
-            in_data.shape.clone(),
-            in_data.bytes_per_elem,
-            write_back_mu,
-            in_data.offset,
-        ),
+        None => Tile::new_blank(in_data.shape.clone(), in_data.bytes_per_elem, write_back_mu),
     };
     (cycles, output)
 }
@@ -1270,12 +1066,11 @@ pub fn remainder_scalar(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.mapv(|x| {
                     let rem = x.checked_rem(divisor).unwrap_or(0);
                     if rem != 0 && (rem < 0) != (divisor < 0) {
@@ -1287,16 +1082,14 @@ pub fn remainder_scalar(
                 .to_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_0, shape_1],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -1333,19 +1126,9 @@ pub fn mask<I: Copy + TryInto<usize>>(
                     val
                 }
             });
-            Tile::new_padded(
-                output.to_shared(),
-                data.bytes_per_elem,
-                write_back_mu,
-                data.offset,
-            )
+            Tile::new(output.to_shared(), data.bytes_per_elem, write_back_mu)
         }
-        _ => Tile::new_blank_padded(
-            data.shape.clone(),
-            data.bytes_per_elem,
-            write_back_mu,
-            data.offset,
-        ),
+        _ => Tile::new_blank(data.shape.clone(), data.bytes_per_elem, write_back_mu),
     };
     (cycles, output)
 }
@@ -1354,7 +1137,6 @@ pub fn i64_u64(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) ->
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => {
@@ -1363,12 +1145,12 @@ pub fn i64_u64(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) ->
             }
             (
                 div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-                Tile::new_padded(arr.mapv(|x| x as u64).to_shared(), 8, write_back_mu, offset),
+                Tile::new(arr.mapv(|x| x as u64).to_shared(), 8, write_back_mu),
             )
         }
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![shape_0, shape_1], 8, write_back_mu, offset),
+            Tile::new_blank(vec![shape_0, shape_1], 8, write_back_mu),
         ),
     }
 }
@@ -1412,22 +1194,12 @@ pub fn gather<T: Clone, I: Copy + Debug + std::fmt::Display + TryInto<usize>>(
             let output = Array2::from_shape_vec((1, rows), values).unwrap();
             (
                 cycles,
-                Tile::new_padded(
-                    output.to_shared(),
-                    source.bytes_per_elem,
-                    write_back_mu,
-                    index.offset,
-                ),
+                Tile::new(output.to_shared(), source.bytes_per_elem, write_back_mu),
             )
         }
         _ => (
             cycles,
-            Tile::new_blank_padded(
-                vec![1, rows],
-                source.bytes_per_elem,
-                write_back_mu,
-                index.offset,
-            ),
+            Tile::new_blank(vec![1, rows], source.bytes_per_elem, write_back_mu),
         ),
     }
 }
@@ -1443,16 +1215,10 @@ pub fn empty_like<T: Debug + Clone + num_traits::Zero>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     (
         div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-        Tile::new_zero_padded(
-            [shape_0, shape_1],
-            in_data.bytes_per_elem,
-            write_back_mu,
-            offset,
-        ),
+        Tile::new_zero([shape_0, shape_1], in_data.bytes_per_elem, write_back_mu),
     )
 }
 
@@ -1465,16 +1231,10 @@ pub fn zeros_like<T: Debug + Clone + num_traits::Zero>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     (
         div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-        Tile::new_zero_padded(
-            [shape_0, shape_1],
-            in_data.bytes_per_elem,
-            write_back_mu,
-            offset,
-        ),
+        Tile::new_zero([shape_0, shape_1], in_data.bytes_per_elem, write_back_mu),
     )
 }
 
@@ -1489,16 +1249,15 @@ pub fn f32_bf16<T: Debug + Clone>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(arr.clone(), 2, write_back_mu, offset),
+            Tile::new(arr.clone(), 2, write_back_mu),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![shape_0, shape_1], 2, write_back_mu, offset),
+            Tile::new_blank(vec![shape_0, shape_1], 2, write_back_mu),
         ),
     }
 }
@@ -1513,16 +1272,15 @@ pub fn bf16_f32<T: Debug + Clone>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(arr.clone(), 4, write_back_mu, offset),
+            Tile::new(arr.clone(), 4, write_back_mu),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![shape_0, shape_1], 4, write_back_mu, offset),
+            Tile::new_blank(vec![shape_0, shape_1], 4, write_back_mu),
         ),
     }
 }
@@ -1537,16 +1295,15 @@ pub fn f32_bool(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(arr.mapv(|x| x != 0.0).to_shared(), 1, write_back_mu, offset),
+            Tile::new(arr.mapv(|x| x != 0.0).to_shared(), 1, write_back_mu),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![shape_0, shape_1], 1, write_back_mu, offset),
+            Tile::new_blank(vec![shape_0, shape_1], 1, write_back_mu),
         ),
     }
 }
@@ -1557,16 +1314,15 @@ pub fn i64_f32(in_data: &Tile<i64>, flop_per_cycle: u64, write_back_mu: bool) ->
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(arr.mapv(|x| x as f32).to_shared(), 4, write_back_mu, offset),
+            Tile::new(arr.mapv(|x| x as f32).to_shared(), 4, write_back_mu),
         ),
         None => (
             div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(vec![shape_0, shape_1], 4, write_back_mu, offset),
+            Tile::new_blank(vec![shape_0, shape_1], 4, write_back_mu),
         ),
     }
 }
@@ -1585,26 +1341,23 @@ pub fn transpose<T: Debug + Clone>(
     assert_eq!(in_data.shape.len(), 2);
     let shape_0 = in_data.shape[0];
     let shape_1 = in_data.shape[1];
-    let offset = in_data.offset;
 
     match &in_data.underlying {
         Some(arr) => (
             1, // div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_padded(
+            Tile::new(
                 arr.t().to_owned().into_shared(),
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
         // Timing-only (blank) tile: no data, just swap the shape.
         None => (
             1, // div_ceil((shape_0 * shape_1) as u64, flop_per_cycle),
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![shape_1, shape_0],
                 in_data.bytes_per_elem,
                 write_back_mu,
-                offset,
             ),
         ),
     }
@@ -1619,7 +1372,7 @@ mod tests {
     fn test_row_wise_sum() {
         let arr = ndarray::Array2::from_shape_fn((3, 4), |(i, j)| i as f32 + j as f32);
         println!("input arr: {:?}", arr);
-        let in_data = Tile::new_padded(arr.to_shared(), 4, false, 3);
+        let in_data = Tile::new(arr.to_shared(), 4, false);
         let (flop_count, out_data) = row_wise_sum(&in_data, 6, false);
 
         println!("output arr: {:?}", out_data.underlying.unwrap());
@@ -1630,8 +1383,8 @@ mod tests {
     fn test_sub() {
         let arr1 = ndarray::Array2::from_shape_vec((2, 2), vec![5.0f32, 1.0, -3.0, 0.0]).unwrap();
         let arr2 = ndarray::Array2::from_shape_vec((2, 2), vec![2.0f32, 4.0, -8.0, 0.5]).unwrap();
-        let in1 = Tile::new_padded(arr1.to_shared(), 4, false, 2);
-        let in2 = Tile::new_padded(arr2.to_shared(), 4, false, 2);
+        let in1 = Tile::new(arr1.to_shared(), 4, false);
+        let in2 = Tile::new(arr2.to_shared(), 4, false);
         let (flop_count, out_data) = sub(&in1, &in2, 2, false);
 
         let out = out_data.underlying.unwrap();
@@ -1647,8 +1400,8 @@ mod tests {
         let arr1 =
             ndarray::Array2::from_shape_vec((2, 3), vec![1.0f32, 5.0, 2.0, 9.0, 0.0, 4.0]).unwrap();
         let arr2 = ndarray::Array2::from_shape_vec((2, 1), vec![5.0f32, 9.0]).unwrap();
-        let in1 = Tile::new_padded(arr1.to_shared(), 4, false, 2);
-        let in2 = Tile::new_padded(arr2.to_shared(), 4, false, 2);
+        let in1 = Tile::new(arr1.to_shared(), 4, false);
+        let in2 = Tile::new(arr2.to_shared(), 4, false);
         let (_, out_data) = sub(&in1, &in2, 8, false);
         let out = out_data.underlying.unwrap();
         assert_eq!(out.shape(), &[2, 3]);
@@ -1658,8 +1411,8 @@ mod tests {
         );
 
         // Timing-only path: one blank input means no data, but shape/cycles hold.
-        let blank: Tile<f32> = Tile::new_blank_padded(vec![2, 3], 2, false, 1);
-        let in2 = Tile::new_padded(arr2.to_shared(), 2, false, 1);
+        let blank: Tile<f32> = Tile::new_blank(vec![2, 3], 2, false);
+        let in2 = Tile::new(arr2.to_shared(), 2, false);
         let (flop_count, out_data) = sub(&blank, &in2, 8, true);
         assert!(out_data.underlying.is_none());
         assert_eq!(out_data.shape, vec![2, 3]);
@@ -1670,7 +1423,7 @@ mod tests {
     fn test_row_wise_max() {
         // Row i holds [i, i+1, i+2, i+3], so the max of row i is i + 3.
         let arr = ndarray::Array2::from_shape_fn((3, 4), |(i, j)| i as f32 + j as f32);
-        let in_data = Tile::new_padded(arr.to_shared(), 4, false, 3);
+        let in_data = Tile::new(arr.to_shared(), 4, false);
         let (flop_count, out_data) = row_wise_max(&in_data, 6, false);
 
         let out = out_data.underlying.unwrap();
@@ -1678,7 +1431,7 @@ mod tests {
         assert_eq!(out.as_slice().unwrap(), &[3.0f32, 4.0, 5.0]);
         // div_ceil(3 * 4, 6) == 2, same roofline as row_wise_sum
         assert_eq!(flop_count, 2);
-        assert_eq!(out_data.offset, 3);
+
         assert_eq!(out_data.bytes_per_elem, 4);
     }
 
@@ -1688,7 +1441,7 @@ mod tests {
         let arr =
             ndarray::Array2::from_shape_vec((2, 3), vec![-5.0f32, -1.0, -3.0, -9.0, -7.0, -8.0])
                 .unwrap();
-        let in_data = Tile::new_padded(arr.to_shared(), 2, true, 0);
+        let in_data = Tile::new(arr.to_shared(), 2, true);
         let (_, out_data) = row_wise_max(&in_data, 4, true);
         assert_eq!(
             out_data.underlying.unwrap().as_slice().unwrap(),
@@ -1696,34 +1449,12 @@ mod tests {
         );
 
         // Timing-only ("blank") tile: no data, but shape/cycles still collapse to [R, 1].
-        let blank: Tile<f32> = Tile::new_blank_padded(vec![2, 3], 2, false, 1);
+        let blank: Tile<f32> = Tile::new_blank(vec![2, 3], 2, false);
         let (flop_count, out_data) = row_wise_max(&blank, 4, true);
         assert!(out_data.underlying.is_none());
         assert_eq!(out_data.shape, vec![2, 1]);
-        assert_eq!(out_data.offset, 1);
+
         assert_eq!(flop_count, div_ceil(2 * 3, 4));
-    }
-
-    #[test]
-    fn test_row_wise_append() {
-        let arr =
-            ndarray::Array2::from_shape_fn(
-                (6, 4),
-                |(i, j)| if i < 3 { i as f32 + j as f32 } else { 0.0 },
-            );
-        println!("input arr: {:?}", arr);
-        let in_data = Tile::new_padded(arr.to_shared(), 4, false, 3);
-        let arr_to_append = ndarray::Array2::from_shape_fn((1, 4), |(i, j)| 3 as f32 + j as f32);
-        let data_to_append = Tile::new_padded(arr_to_append.to_shared(), 4, false, 1);
-        println!(
-            "data_to_append: {:?}",
-            data_to_append.underlying.as_ref().unwrap()
-        );
-
-        let (flop_count, out_data) = row_wise_append(&in_data, &data_to_append, false);
-        println!("output arr: {:?}", out_data.underlying.as_ref().unwrap());
-        assert_eq!(out_data.offset, 4);
-        assert_eq!(flop_count, 1);
     }
 
     #[test]
@@ -1883,6 +1614,24 @@ mod tests {
         let (_, tile) = multihot_to_u64(&original, 1, false);
         let (_, reconstructed) = u64_to_multihot(&tile, 5, 1, false);
         assert_eq!(*original, *reconstructed);
+    }
+
+    #[test]
+    fn test_mask_to_multihot_nonzero_positions() {
+        let arr = Array2::from_shape_vec((1, 4), vec![0i64, -1, 0, 2]).unwrap();
+        let tile = Tile::new(arr.to_shared(), 8, false);
+        let (cycles, mh) = mask_to_multihot(&tile, 4, 1, true);
+        assert_eq!(cycles, 1);
+        assert_eq!(mh.to_sel_vec(), vec![1, 3]);
+        assert!(mh.read_from_mu());
+    }
+
+    #[test]
+    fn test_mask_to_multihot_blank() {
+        let tile: Tile<i64> = Tile::new_blank(vec![1, 4], 8, false);
+        let (_, mh) = mask_to_multihot(&tile, 4, 1, false);
+        assert_eq!(mh.len(), 4);
+        assert!(mh.is_blank());
     }
 
     #[test]
@@ -2107,7 +1856,7 @@ mod tests {
         for row in [true, false] {
             let extent = if row { 3 } else { 4 };
             for valid in [0, 2, extent] {
-                let data = Tile::new_padded(arr.clone().to_shared(), 2, false, 1);
+                let data = Tile::new(arr.clone().to_shared(), 2, false);
                 let count = Tile::new(
                     Array2::from_elem((1, 1), valid as u64).to_shared(),
                     8,
@@ -2117,7 +1866,7 @@ mod tests {
                 assert_eq!(cycles, 3);
                 assert_eq!(out.shape, vec![3, 4]);
                 assert_eq!(out.bytes_per_elem, 2);
-                assert_eq!(out.offset, 1);
+
                 assert!(out.read_from_mu);
                 let out = out.underlying.unwrap();
                 for ((i, j), value) in out.indexed_iter() {
@@ -2151,7 +1900,7 @@ mod tests {
             let (cycles, out) = mask(&data, &count, false, 0.0, 4, true);
             assert_eq!(cycles, 2);
             assert_eq!(out.shape, data.shape);
-            assert_eq!(out.offset, data.offset);
+
             assert!(out.read_from_mu);
             assert!(out.underlying.is_none());
         }
@@ -2296,8 +2045,7 @@ mod tests {
     #[test]
     fn test_transpose() {
         // [[1,2,3],[4,5,6]] (2x3) -> [[1,4],[2,5],[3,6]] (3x2)
-        let arr =
-            Array2::from_shape_vec((2, 3), vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let arr = Array2::from_shape_vec((2, 3), vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
         let in_data = Tile::new(arr.to_shared(), 4, false);
         let (cycles, out) = transpose(&in_data, 1, false);
 
@@ -2309,8 +2057,8 @@ mod tests {
         assert_eq!(o[[1, 1]], 5.0);
         assert_eq!(o[[2, 0]], 3.0);
         assert_eq!(o[[2, 1]], 6.0);
-        // 6 elems * 1 FLOP / 1 FLOP-per-cycle
-        assert_eq!(cycles, 6);
+        // Transpose uses the simulator's one-cycle data-movement model.
+        assert_eq!(cycles, 1);
         // dtype byte width is preserved
         assert_eq!(out.bytes_per_elem, 4);
     }
@@ -2318,12 +2066,12 @@ mod tests {
     #[test]
     fn test_transpose_blank_swaps_shape() {
         // Timing-only tile: no data, shape [2,5] -> [5,2].
-        let in_data: Tile<f32> = Tile::new_blank_padded(vec![2, 5], 2, false, 0);
+        let in_data: Tile<f32> = Tile::new_blank(vec![2, 5], 2, false);
         let (cycles, out) = transpose(&in_data, 1, false);
         assert_eq!(out.shape, vec![5, 2]);
         assert!(out.underlying.is_none());
         // bf16-width (2 bytes) is preserved through the transpose
         assert_eq!(out.bytes_per_elem, 2);
-        assert_eq!(cycles, 10);
+        assert_eq!(cycles, 1);
     }
 }
