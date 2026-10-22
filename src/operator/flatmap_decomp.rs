@@ -1,15 +1,15 @@
-use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use super::counter::count_range_elems;
 use crate::primitives::elem::{Elem, StopType};
 use crate::primitives::tile::Tile;
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use dam::context_tools::*;
 use dam::types::DAMType;
 
 #[context_macro]
 pub struct FlatmapFilterRowStreamify<T: Clone> {
-    in_stream: ProfiledReceiver<Elem<Tile<T>>>,      // tile shape: [R,C]
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>, // tile shape: [R,C]
     mask_stream: ProfiledReceiver<Elem<Tile<bool>>>, // tile shape: [R,1]
-    out_stream: ProfiledSender<Elem<Tile<T>>>,       // tile shape: [1,C]
+    out_stream: ProfiledSender<Elem<Tile<T>>>,  // tile shape: [1,C]
     id: u32,
 }
 
@@ -67,11 +67,10 @@ where
                 for (row, mask_i) in vec_iter.zip(mask_iter) {
                     // Only process rows where the mask is true
                     if mask_i[0] {
-                        let out_data = Tile::<T>::new_padded(
+                        let out_data = Tile::<T>::new(
                             row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
                             data.bytes_per_elem,
                             data.read_from_mu,
-                            1,
                         );
                         curr_cnt += 1;
 
@@ -224,11 +223,10 @@ where
                 let vec_iter = arr.rows().into_iter(); // [C] x R
 
                 for (idx, row) in vec_iter.enumerate() {
-                    let out_data = Tile::<T>::new_padded(
+                    let out_data = Tile::<T>::new(
                         row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
                         data.bytes_per_elem,
                         data.read_from_mu,
-                        1,
                     );
 
                     let elem = if stop_level.is_some() && (idx + 1 == num_rows) {
@@ -451,11 +449,10 @@ mod tests {
             mask_snd,
             0,
             4,
-            Some(Tile::new_blank_padded(
+            Some(Tile::new_blank(
                 tile_shape.clone(),
                 BYTES_PER_ELEM,
                 READ_FROM_MU,
-                0,
             )),
             2,
             false,
@@ -510,11 +507,10 @@ mod tests {
                 9
             ]);
             output_tile_vec.extend(vec![
-                Tile::<VT>::new_blank_padded(
+                Tile::<VT>::new_blank(
                     tile_shape.clone(),
                     BYTES_PER_ELEM,
-                    READ_FROM_MU,
-                    0
+                    READ_FROM_MU
                 );
                 3
             ]);
@@ -752,24 +748,21 @@ mod tests {
         ctx.add_child(ApproxCheckerContext::new(
             move || {
                 vec![
-                    Elem::Val(Tile::<VT>::new_padded(
+                    Elem::Val(Tile::<VT>::new(
                         ndarray::arr2(&[[1u32, 2, 3, 4]]).into_shared(),
                         BYTES_PER_ELEM,
                         READ_FROM_MU,
-                        1,
                     )),
-                    Elem::Val(Tile::<VT>::new_padded(
+                    Elem::Val(Tile::<VT>::new(
                         ndarray::arr2(&[[5u32, 6, 7, 8]]).into_shared(),
                         BYTES_PER_ELEM,
                         READ_FROM_MU,
-                        1,
                     )),
                     Elem::ValStop(
-                        Tile::<VT>::new_padded(
+                        Tile::<VT>::new(
                             ndarray::arr2(&[[9u32, 10, 11, 12]]).into_shared(),
                             BYTES_PER_ELEM,
                             READ_FROM_MU,
-                            1,
                         ),
                         0,
                     ),
@@ -862,30 +855,26 @@ mod tests {
         ctx.add_child(ApproxCheckerContext::new(
             move || {
                 vec![
-                    Elem::Val(Tile::<VT>::new_padded(
+                    Elem::Val(Tile::<VT>::new(
                         ndarray::arr2(&[[1u32, 2, 3]]).into_shared(),
                         BYTES_PER_ELEM,
                         READ_FROM_MU,
-                        1,
                     )),
-                    Elem::Val(Tile::<VT>::new_padded(
+                    Elem::Val(Tile::<VT>::new(
                         ndarray::arr2(&[[4u32, 5, 6]]).into_shared(),
                         BYTES_PER_ELEM,
                         READ_FROM_MU,
-                        1,
                     )),
-                    Elem::Val(Tile::<VT>::new_padded(
+                    Elem::Val(Tile::<VT>::new(
                         ndarray::arr2(&[[7u32, 8, 9]]).into_shared(),
                         BYTES_PER_ELEM,
                         READ_FROM_MU,
-                        1,
                     )),
                     Elem::ValStop(
-                        Tile::<VT>::new_padded(
+                        Tile::<VT>::new(
                             ndarray::arr2(&[[10u32, 11, 12]]).into_shared(),
                             BYTES_PER_ELEM,
                             READ_FROM_MU,
-                            1,
                         ),
                         0,
                     ),

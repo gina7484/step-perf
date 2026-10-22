@@ -60,11 +60,10 @@ mod tests {
             reshape_snd,
             0, // split_dim
             CHUNK_SIZE,
-            Some(Tile::<f32>::new_zero_padded(
+            Some(Tile::<f32>::new_zero(
                 [TILE_ROW, TILE_COL],
                 BYTES_PER_ELEM,
                 false,
-                0,
             )),
             0,    // input_stream_rank
             true, // add_outer_dim
@@ -90,15 +89,14 @@ mod tests {
             15,
         ));
 
-        // The retiled tile stays blank, is CHUNK_SIZE rows tall, and its offset
-        // counts only the NUM_TILES real rows -- the pad tiles carry offset 0.
+        // The retiled tile stays blank and is CHUNK_SIZE rows tall.
+        // Padding validity belongs in a separate mask stream.
         ctx.add_child(CheckerContext::new(
             || {
-                vec![Elem::Val(Tile::<f32>::new_blank_padded(
+                vec![Elem::Val(Tile::<f32>::new_blank(
                     vec![CHUNK_SIZE, TILE_COL],
                     BYTES_PER_ELEM,
                     false,
-                    NUM_TILES,
                 ))]
                 .into_iter()
             },

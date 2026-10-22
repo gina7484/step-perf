@@ -33,8 +33,6 @@ struct GroupState {
     m2: Vec<f32>,
     /// Elements folded into *each* row so far (identical across rows).
     n: u64,
-    /// Non-padded row count, carried over from the most recent input tile.
-    offset: usize,
     /// Cleared by the first blank (timing-only) tile in the group.
     has_data: bool,
     started: bool,
@@ -46,7 +44,6 @@ impl GroupState {
             mean: Vec::new(),
             m2: Vec::new(),
             n: 0,
-            offset: 0,
             has_data: true,
             started: false,
         }
@@ -60,7 +57,6 @@ impl GroupState {
         self.mean.clear();
         self.m2.clear();
         self.n = 0;
-        self.offset = 0;
         self.has_data = true;
         self.started = false;
     }
@@ -143,7 +139,6 @@ where
             self.state.m2 = vec![0.0; rows];
             self.state.started = true;
         }
-        self.state.offset = data.offset;
 
         match &data.underlying {
             Some(arr) => {
@@ -202,20 +197,18 @@ where
                     RowStat::Var => self.state.m2[i] / (n as f32),
                 })
                 .collect();
-            Tile::new_padded(
+            Tile::new(
                 Array2::from_shape_vec((rows, 1), vals)
                     .expect("row statistic vector matches [rows, 1]")
                     .to_shared(),
                 self.bytes_per_elem,
                 self.config.write_back_mu,
-                self.state.offset,
             )
         } else {
-            Tile::new_blank_padded(
+            Tile::new_blank(
                 vec![rows, 1],
                 self.bytes_per_elem,
                 self.config.write_back_mu,
-                self.state.offset,
             )
         };
 
@@ -400,10 +393,7 @@ mod tests {
     // stream rank, so row 0 averages [1,2,3] and row 1 averages [7,8,9].
     #[test]
     fn mean_static_single_tile_collapses_columns() {
-        let input = vec![Elem::ValStop(
-            tile(2, 3, vec![1., 2., 3., 7., 8., 9.]),
-            1,
-        )];
+        let input = vec![Elem::ValStop(tile(2, 3, vec![1., 2., 3., 7., 8., 9.]), 1)];
         let expected = vec![Elem::Val(tile(2, 1, vec![2., 8.]))];
         run_group(input, expected, RowStat::Mean, Some(3), 1);
     }
@@ -490,59 +480,5 @@ mod tests {
         )];
         let expected = vec![Elem::Val(Tile::<f32>::new_blank(vec![4, 1], BYTES, false))];
         run_group(input, expected, RowStat::Mean, Some(16), 1);
-    }
-
-    // Padding lives in rows, and a row-wise reduction preserves rows, so the
-    // input tile's offset must reach the output unchanged.
-    #[test]
-    fn offset_is_preserved() {
-        let padded = Tile::new_padded(
-            Array2::from_shape_vec((4, 2), vec![1.0f32; 8])
-                .unwrap()
-                .to_shared(),
-            BYTES,
-            false,
-            2, // only the first 2 rows are real
-        );
-        let mut ctx = ProgramBuilder::default();
-        let (in_snd, in_rcv) = ctx.unbounded();
-        let (out_snd, out_rcv) = ctx.unbounded();
-        let input = vec![Elem::ValStop(padded, 1)];
-
-        ctx.add_child(GeneratorContext::new(|| input.into_iter(), in_snd));
-        ctx.add_child(AccumRowStat::<SimpleEvent>::new(
-            in_rcv,
-            out_snd,
-            1,
-            BYTES,
-            AccumRowStatConfig {
-                compute_bw: COMPUTE_BW,
-                write_back_mu: false,
-                stat: RowStat::Mean,
-                count: Some(2),
-            },
-            0,
-        ));
-        ctx.add_child(ApproxCheckerContext::new(
-            || {
-                vec![Elem::Val(Tile::new_padded(
-                    Array2::from_shape_vec((4, 1), vec![1.0f32; 4])
-                        .unwrap()
-                        .to_shared(),
-                    BYTES,
-                    false,
-                    2,
-                ))]
-                .into_iter()
-            },
-            out_rcv,
-            |a: &Elem<Tile<f32>>, b: &Elem<Tile<f32>>| match (a, b) {
-                (Elem::Val(x), Elem::Val(y)) => x.offset == y.offset && x.shape == y.shape,
-                _ => false,
-            },
-        ));
-        ctx.initialize(Default::default())
-            .unwrap()
-            .run(Default::default());
     }
 }

@@ -37,9 +37,7 @@ shape `(max(r1,r2), max(c1,c2))`; for unary/constant ops it is the input shape.
 | `pow` | `R*C*4` | 4 FLOPs/elem |
 | `rsqrt` | `R*C*4` | 4 FLOPs/elem |
 | `row_wise_sum` | `R*C` (input shape) | 1 FLOP per **input** element (reduction over columns) |
-| `set_offset` | **1 cycle** | metadata op — no `flop_per_cycle` |
 | `mask_row` | **1 cycle** | scatter/one-hot, no compute modeled |
-| `row_wise_append` | **1 cycle** | data movement |
 | `cache_write_addr_gen` | **1 cycle** | address arithmetic |
 | `is_equal_scalar` | **1 cycle** | scalar comparison |
 | `broadcast_rows` | **1 cycle** | data movement (`_flop_per_cycle` unused) |

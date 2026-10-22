@@ -1,8 +1,8 @@
-use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::{
     elem::{Elem, StopType},
     tile::Tile,
 };
+use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use dam::context_tools::*;
 use ndarray::Array2;
 
@@ -826,11 +826,10 @@ mod tests {
             out_snd,
             0,
             4,
-            Some(Tile::new_blank_padded(
+            Some(Tile::new_blank(
                 tile_shape.clone(),
                 BYTES_PER_ELEM,
                 READ_FROM_MU,
-                0,
             )),
             2,
             false,
@@ -848,11 +847,10 @@ mod tests {
                 9
             ]);
             output_tile_vec.extend(vec![
-                Tile::<VT>::new_blank_padded(
+                Tile::<VT>::new_blank(
                     tile_shape.clone(),
                     BYTES_PER_ELEM,
-                    READ_FROM_MU,
-                    0
+                    READ_FROM_MU
                 );
                 3
             ]);
@@ -909,11 +907,10 @@ mod tests {
             out_snd,
             0,
             4,
-            Some(Tile::new_blank_padded(
+            Some(Tile::new_blank(
                 tile_shape.clone(),
                 BYTES_PER_ELEM,
                 READ_FROM_MU,
-                0,
             )),
             0,
             false,
@@ -929,14 +926,13 @@ mod tests {
             Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
             1,
         );
-        let val_tile_pad = Elem::Val(Tile::<VT>::new_blank_padded(
+        let val_tile_pad = Elem::Val(Tile::<VT>::new_blank(
             tile_shape.clone(),
             BYTES_PER_ELEM,
             READ_FROM_MU,
-            0,
         ));
         let val_stop_tile_pad = Elem::ValStop(
-            Tile::<VT>::new_blank_padded(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU, 0),
+            Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
             1,
         );
         let output_tile_vec = vec![
@@ -994,11 +990,10 @@ mod tests {
             out_snd,
             0,
             3,
-            Some(Tile::new_blank_padded(
+            Some(Tile::new_blank(
                 tile_shape.clone(),
                 BYTES_PER_ELEM,
                 READ_FROM_MU,
-                0,
             )),
             0,
             true,
@@ -1070,11 +1065,10 @@ mod tests {
             out_snd,
             0,
             4,
-            Some(Tile::new_blank_padded(
+            Some(Tile::new_blank(
                 tile_shape.clone(),
                 BYTES_PER_ELEM,
                 READ_FROM_MU,
-                0,
             )),
             0,
             true,
@@ -1090,14 +1084,13 @@ mod tests {
             Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
             1,
         );
-        let val_tile_pad = Elem::Val(Tile::<VT>::new_blank_padded(
+        let val_tile_pad = Elem::Val(Tile::<VT>::new_blank(
             tile_shape.clone(),
             BYTES_PER_ELEM,
             READ_FROM_MU,
-            0,
         ));
         let val_stop_tile_pad_last = Elem::ValStop(
-            Tile::<VT>::new_blank_padded(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU, 0),
+            Tile::<VT>::new_blank(tile_shape.clone(), BYTES_PER_ELEM, READ_FROM_MU),
             2,
         );
         let output_tile_vec = vec![
