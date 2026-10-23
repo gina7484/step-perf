@@ -2,9 +2,9 @@ pub mod configs;
 pub mod proto_headers;
 
 #[cfg(test)]
-mod traffic_tests;
-#[cfg(test)]
 mod scan_tests;
+#[cfg(test)]
+mod traffic_tests;
 
 use crate::functions;
 use crate::memory::dyn_linear_offchip_load::DynLinearOffChipLoad;
@@ -17,9 +17,7 @@ use crate::operator::accum_buff::AccumBuff;
 use crate::operator::counter::Counter;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
-use crate::operator::flatmap_decomp::{
-    FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRowStreamify,
-};
+use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify};
 use crate::operator::parallelize::Parallelize;
 use crate::primitives::select::MultiHotN;
 use std::collections::HashMap;
@@ -30,9 +28,7 @@ use crate::operator::accum_row_stat::{AccumRowStat, AccumRowStatConfig, RowStat}
 use crate::operator::broadcast::BroadcastContext;
 use crate::operator::bufferize::Bufferize;
 use crate::operator::dynstreamify::DynStreamify;
-use crate::operator::flatmap::{
-    CacheReadAddrGen, DynAddrGen, ExpertAddrGen, FilterLastTile, RetileStreamify,
-};
+use crate::operator::flatmap::{CacheReadAddrGen, DynAddrGen, ExpertAddrGen, FilterLastTile};
 use crate::operator::flatten::Flatten;
 use crate::operator::map::{
     BinaryMapMultiHot, UnaryMap, UnaryMapConfig, UnaryMapMultiHot, UnaryMapToMultiHot,
@@ -509,11 +505,17 @@ fn build_from_proto<'a>(
                     let map_fn: Arc<
                         dyn Fn(&Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
                     > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Transpose(_) => {
+                            Arc::new(functions::map_fn::transpose)
+                        }
                         elemto_elem_func::ElemElemFn::FloorDivideConstant(fd) => {
-                            let divisor = u64::try_from(fd.constant.expect("integer divisor")).expect("positive divisor");
+                            let divisor = u64::try_from(fd.constant.expect("integer divisor"))
+                                .expect("positive divisor");
                             assert!(divisor > 0);
                             Arc::new(move |tile, bw, write_back| {
-                                functions::map_fn::floor_divide_scalar(tile, divisor, bw, write_back)
+                                functions::map_fn::floor_divide_scalar(
+                                    tile, divisor, bw, write_back,
+                                )
                             })
                         }
                         elemto_elem_func::ElemElemFn::RemainderConstant(rem) => {
@@ -668,6 +670,17 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::MaskToMultihot(mask_to_multihot) => {
+                            let num_classes = mask_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mask_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }
@@ -708,6 +721,17 @@ fn build_from_proto<'a>(
                             let num_classes = index_to_multihot.num_classes as usize;
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::index_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::MaskToMultihot(mask_to_multihot) => {
+                            let num_classes = mask_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mask_to_multihot(
                                     tile,
                                     num_classes,
                                     comp_bw,
@@ -762,6 +786,17 @@ fn build_from_proto<'a>(
                                 )
                             })
                         }
+                        elemto_elem_func::ElemElemFn::MaskToMultihot(mask_to_multihot) => {
+                            let num_classes = mask_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mask_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
                         _ => {
                             panic!("Unsupported unary map function type")
                         }
@@ -803,6 +838,17 @@ fn build_from_proto<'a>(
                             let num_classes = index_to_multihot.num_classes as usize;
                             Arc::new(move |tile, comp_bw, write_back_mu| {
                                 functions::map_fn::index_to_multihot(
+                                    tile,
+                                    num_classes,
+                                    comp_bw,
+                                    write_back_mu,
+                                )
+                            })
+                        }
+                        elemto_elem_func::ElemElemFn::MaskToMultihot(mask_to_multihot) => {
+                            let num_classes = mask_to_multihot.num_classes as usize;
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::mask_to_multihot(
                                     tile,
                                     num_classes,
                                     comp_bw,
@@ -929,6 +975,9 @@ fn build_from_proto<'a>(
                     let map_fn: Arc<
                         dyn Fn(&Tile<i64>, u64, bool) -> (u64, Tile<i64>) + Send + Sync,
                     > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::Transpose(_) => {
+                            Arc::new(functions::map_fn::transpose)
+                        }
                         elemto_elem_func::ElemElemFn::Clamp(clamp) => {
                             let min = clamp
                                 .min
@@ -1288,11 +1337,7 @@ fn build_from_proto<'a>(
                                 functions::map_fn::mul(tile1, tile2, comp_bw, write_back_mu)
                             })
                         }
-                        elemto_elem_func::ElemElemFn::RowWiseAppend(row_wise_append) => {
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::row_wise_append(tile1, tile2, write_back_mu)
-                            })
-                        }
+
                         elemto_elem_func::ElemElemFn::Div(_) => {
                             Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
                                 functions::map_fn::div(tile1, tile2, comp_bw, write_back_mu)
@@ -1464,7 +1509,12 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Mask(mask) => {
                             Arc::new(move |data, count, comp_bw, write_back_mu| {
                                 functions::map_fn::mask(
-                                    data, count, mask.row, mask.val, comp_bw, write_back_mu,
+                                    data,
+                                    count,
+                                    mask.row,
+                                    mask.val,
+                                    comp_bw,
+                                    write_back_mu,
                                 )
                             })
                         }
@@ -1641,15 +1691,16 @@ fn build_from_proto<'a>(
                         elemto_elem_func::ElemElemFn::Mask(mask) => {
                             Arc::new(move |data, count, comp_bw, write_back_mu| {
                                 functions::map_fn::mask(
-                                    data, count, mask.row, mask.val, comp_bw, write_back_mu,
+                                    data,
+                                    count,
+                                    mask.row,
+                                    mask.val,
+                                    comp_bw,
+                                    write_back_mu,
                                 )
                             })
                         }
-                        elemto_elem_func::ElemElemFn::SetOffset(set_offset) => {
-                            Arc::new(move |tile1, tile2, comp_bw, write_back_mu| {
-                                functions::map_fn::set_offset(tile1, tile2, write_back_mu)
-                            })
-                        }
+
                         e => {
                             panic!("Unsupported binary map function type {:?}", e)
                         }
@@ -2349,7 +2400,11 @@ fn build_from_proto<'a>(
                             builder,
                             RepeatStatic::<_>::new(
                                 rcv,
-                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                repeat_static
+                                    .repeat_factor
+                                    .iter()
+                                    .map(|&factor| factor as usize)
+                                    .collect(),
                                 snd,
                             )
                         );
@@ -2375,7 +2430,11 @@ fn build_from_proto<'a>(
                             builder,
                             RepeatStatic::<_>::new(
                                 rcv,
-                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                repeat_static
+                                    .repeat_factor
+                                    .iter()
+                                    .map(|&factor| factor as usize)
+                                    .collect(),
                                 snd,
                             )
                         );
@@ -2403,7 +2462,11 @@ fn build_from_proto<'a>(
                             builder,
                             RepeatStatic::<_>::new(
                                 rcv,
-                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                repeat_static
+                                    .repeat_factor
+                                    .iter()
+                                    .map(|&factor| factor as usize)
+                                    .collect(),
                                 snd,
                             )
                         );
@@ -2431,7 +2494,11 @@ fn build_from_proto<'a>(
                             builder,
                             RepeatStatic::<_>::new(
                                 rcv,
-                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                repeat_static
+                                    .repeat_factor
+                                    .iter()
+                                    .map(|&factor| factor as usize)
+                                    .collect(),
                                 snd,
                             )
                         );
@@ -2457,7 +2524,11 @@ fn build_from_proto<'a>(
                             builder,
                             RepeatStatic::<_>::new(
                                 rcv,
-                                repeat_static.repeat_factor.iter().map(|&factor| factor as usize).collect(),
+                                repeat_static
+                                    .repeat_factor
+                                    .iter()
+                                    .map(|&factor| factor as usize)
+                                    .collect(),
                                 snd,
                             )
                         );
@@ -2947,143 +3018,69 @@ fn build_from_proto<'a>(
                 }
             }
             OpType::FlatReassemble(reassemble) => {
+                macro_rules! make_flat_reassemble {
+                    ($channel:ident) => {{
+                        let rcv_list = reassemble
+                            .input_id_list
+                            .iter()
+                            .zip(reassemble.input_stream_idx_list.iter())
+                            .map(|(&id, &port)| {
+                                channel_map_collection.$channel.get_receiver(
+                                    id,
+                                    if port < 0 { None } else { Some(port as u32) },
+                                    builder,
+                                    get_chan_depth(&sim_config.config_dict, id, channel_depth),
+                                )
+                            })
+                            .collect();
+                        let snd = channel_map_collection.$channel.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        assert!(matches!(
+                            reassemble.control_dtype.as_ref().unwrap().r#type,
+                            Some(Type::MultiHot(_))
+                        ));
+                        let control = channel_map_collection.multihot.get_receiver(
+                            reassemble.control_id,
+                            reassemble.control_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                reassemble.control_id,
+                                channel_depth,
+                            ),
+                        );
+                        add_child!(
+                            builder,
+                            FlatReassemble::<SimpleEvent, _, _>::new(
+                                rcv_list,
+                                control,
+                                snd,
+                                reassemble.reassemble_rank,
+                                FlatReassembleConfig {
+                                    switch_cycles: to_u64_vec(reassemble.switch_cycles),
+                                    write_back_mu: reassemble.write_back_mu,
+                                },
+                                operation.id,
+                                reassemble.sel_npy_path.clone(),
+                            )
+                        );
+                    }};
+                }
                 match reassemble
                     .input_dtype
-                    .clone()
+                    .as_ref()
                     .unwrap()
                     .r#type
-                    .clone()
+                    .as_ref()
                     .unwrap()
                 {
-                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
-                    Type::F32(_) | Type::Bf16(_) => {
-                        let mut rcv_list = vec![];
-                        for (rcv_id, stream_idx) in reassemble
-                            .input_id_list
-                            .into_iter()
-                            .zip(reassemble.input_stream_idx_list.into_iter())
-                        {
-                            let rcv = channel_map_collection.tile_f32.get_receiver(
-                                rcv_id,
-                                if stream_idx < 0 {
-                                    None
-                                } else {
-                                    Some(stream_idx as u32)
-                                },
-                                builder,
-                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
-                            );
-                            rcv_list.push(rcv);
-                        }
-
-                        let snd = channel_map_collection.tile_f32.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        match reassemble
-                            .control_dtype
-                            .clone()
-                            .unwrap()
-                            .r#type
-                            .clone()
-                            .unwrap()
-                        {
-                            Type::MultiHot(multi_hot) => {
-                                let control_rcv = channel_map_collection.multihot.get_receiver(
-                                    reassemble.control_id,
-                                    reassemble.control_stream_idx,
-                                    builder,
-                                    get_chan_depth(
-                                        &sim_config.config_dict,
-                                        reassemble.control_id,
-                                        channel_depth,
-                                    ),
-                                );
-                                add_child!(
-                                    builder,
-                                    FlatReassemble::<SimpleEvent, _, _>::new(
-                                        rcv_list,
-                                        control_rcv,
-                                        snd,
-                                        reassemble.reassemble_rank,
-                                        FlatReassembleConfig {
-                                            switch_cycles: to_u64_vec(reassemble.switch_cycles),
-                                            write_back_mu: reassemble.write_back_mu,
-                                        },
-                                        operation.id,
-                                        reassemble.sel_npy_path.clone(),
-                                    )
-                                )
-                            }
-                            dtype => panic!("Unsupported data type {:?}", dtype),
-                        }
-                    }
-                    Type::MultiHot(_) => {
-                        let mut rcv_list = vec![];
-                        for (rcv_id, stream_idx) in reassemble
-                            .input_id_list
-                            .into_iter()
-                            .zip(reassemble.input_stream_idx_list.into_iter())
-                        {
-                            let rcv = channel_map_collection.multihot.get_receiver(
-                                rcv_id,
-                                if stream_idx < 0 {
-                                    None
-                                } else {
-                                    Some(stream_idx as u32)
-                                },
-                                builder,
-                                get_chan_depth(&sim_config.config_dict, rcv_id, channel_depth),
-                            );
-                            rcv_list.push(rcv);
-                        }
-
-                        let snd = channel_map_collection.multihot.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        match reassemble
-                            .control_dtype
-                            .clone()
-                            .unwrap()
-                            .r#type
-                            .clone()
-                            .unwrap()
-                        {
-                            Type::MultiHot(multi_hot) => {
-                                let control_rcv = channel_map_collection.multihot.get_receiver(
-                                    reassemble.control_id,
-                                    reassemble.control_stream_idx,
-                                    builder,
-                                    get_chan_depth(
-                                        &sim_config.config_dict,
-                                        reassemble.control_id,
-                                        channel_depth,
-                                    ),
-                                );
-                                add_child!(
-                                    builder,
-                                    FlatReassemble::<SimpleEvent, _, _>::new(
-                                        rcv_list,
-                                        control_rcv,
-                                        snd,
-                                        reassemble.reassemble_rank,
-                                        FlatReassembleConfig {
-                                            switch_cycles: to_u64_vec(reassemble.switch_cycles),
-                                            write_back_mu: reassemble.write_back_mu,
-                                        },
-                                        operation.id,
-                                        reassemble.sel_npy_path.clone(),
-                                    )
-                                )
-                            }
-                            dtype => panic!("Unsupported data type {:?}", dtype),
-                        }
-                    }
+                    Type::F32(_) | Type::Bf16(_) => make_flat_reassemble!(tile_f32),
+                    Type::U64(_) => make_flat_reassemble!(tile_u64),
+                    Type::MultiHot(_) => make_flat_reassemble!(multihot),
                     dtype => panic!("Unsupported data type {:?}", dtype),
                 }
             }
@@ -4327,40 +4324,36 @@ fn build_from_proto<'a>(
                         let tile_row = accum.tile_row as usize;
                         let tile_col = accum.tile_col as usize;
 
-                        let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> = match accum
-                            .init_func
-                            .unwrap()
-                            .init_fn
-                            .unwrap()
-                        {
-                            init_func::InitFn::Zero(_zero) => Arc::new(move || {
-                                Tile::new_zero(
-                                    [tile_row, tile_col],
-                                    dtype_bytes,
-                                    accum.write_back_mu,
-                                )
-                            }),
-                            init_func::InitFn::NegInf(_) => Arc::new(move || {
-                                Tile::new_neg_inf(
-                                    [tile_row, tile_col],
-                                    dtype_bytes,
-                                    accum.write_back_mu,
-                                )
-                            }),
-                            init_func::InitFn::Empty(_empty) => Arc::new(move || {
-                                Tile::new_empty(
-                                    [tile_row, tile_col],
-                                    dtype_bytes,
-                                    accum.write_back_mu,
-                                )
-                            }),
-                            init_func::InitFn::DynEmpty(_) => Arc::new(move || {
-                                // DynEmpty means the row or the column size is known at run-time.
-                                // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
-                                Tile::new_empty([0, 0], dtype_bytes, accum.write_back_mu)
-                            }),
-                            _ => todo!(),
-                        };
+                        let init_accum: Arc<dyn Fn() -> Tile<f32> + Send + Sync> =
+                            match accum.init_func.unwrap().init_fn.unwrap() {
+                                init_func::InitFn::Zero(_zero) => Arc::new(move || {
+                                    Tile::new_zero(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        accum.write_back_mu,
+                                    )
+                                }),
+                                init_func::InitFn::NegInf(_) => Arc::new(move || {
+                                    Tile::new_neg_inf(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        accum.write_back_mu,
+                                    )
+                                }),
+                                init_func::InitFn::Empty(_empty) => Arc::new(move || {
+                                    Tile::new_empty(
+                                        [tile_row, tile_col],
+                                        dtype_bytes,
+                                        accum.write_back_mu,
+                                    )
+                                }),
+                                init_func::InitFn::DynEmpty(_) => Arc::new(move || {
+                                    // DynEmpty means the row or the column size is known at run-time.
+                                    // Therefore, we will use the size of the first tile and keep the initial accumulator as [0,0]
+                                    Tile::new_empty([0, 0], dtype_bytes, accum.write_back_mu)
+                                }),
+                                _ => todo!(),
+                            };
 
                         add_child!(
                             builder,
@@ -4379,23 +4372,67 @@ fn build_from_proto<'a>(
                         );
                     }
                 }
+                (Type::I64(_), Type::I64(_)) => {
+                    let rcv = channel_map_collection.tile_i64.get_receiver(
+                        accum.input_id,
+                        accum.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_i64.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let func =
+                        scan_fold::<i64>(accum.func.unwrap().accum_fn.unwrap(), operation.id);
+                    let tile_row = accum.tile_row as usize;
+                    let tile_col = accum.tile_col as usize;
+                    let init_accum: Arc<dyn Fn() -> Tile<i64> + Send + Sync> =
+                        match accum.init_func.unwrap().init_fn.unwrap() {
+                            init_func::InitFn::Zero(_) => Arc::new(move || {
+                                Tile::new_zero([tile_row, tile_col], 8, accum.write_back_mu)
+                            }),
+                            init_func::InitFn::Empty(_) => Arc::new(move || {
+                                Tile::new_empty([tile_row, tile_col], 8, accum.write_back_mu)
+                            }),
+                            init_func::InitFn::DynEmpty(_) => {
+                                Arc::new(move || Tile::new_empty([0, 0], 8, accum.write_back_mu))
+                            }
+                            other => panic!("Unsupported i64 accumulation initializer {:?}", other),
+                        };
+                    add_child!(
+                        builder,
+                        Accum::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            func,
+                            init_accum,
+                            accum.rank,
+                            AccumConfig {
+                                compute_bw: accum.compute_bw as u64,
+                                write_back_mu: accum.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
                 (Type::U64(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.tile_u64.get_receiver(
-                        accum.input_id, accum.stream_idx, builder,
+                        accum.input_id,
+                        accum.stream_idx,
+                        builder,
                         get_chan_depth(&sim_config.config_dict, accum.input_id, channel_depth),
                     );
                     let snd = channel_map_collection.tile_u64.get_sender(
-                        operation.id, None, builder,
+                        operation.id,
+                        None,
+                        builder,
                         get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                     );
-                    let func: Arc<
-                        dyn Fn(&Tile<u64>, &Tile<u64>, u64, bool) -> (u64, Tile<u64>) + Send + Sync,
-                    > = match accum.func.unwrap().accum_fn.unwrap() {
-                        accum_func::AccumFn::Add(_) => Arc::new(move |tile, state, bw, write_back| {
-                            functions::accum_fn::add(tile, state, bw, write_back, operation.id)
-                        }),
-                        other => panic!("Unsupported u64 accumulation function {:?}", other),
-                    };
+                    let func =
+                        scan_fold::<u64>(accum.func.unwrap().accum_fn.unwrap(), operation.id);
                     let tile_row = accum.tile_row as usize;
                     let tile_col = accum.tile_col as usize;
                     let init_accum: Arc<dyn Fn() -> Tile<u64> + Send + Sync> =
@@ -4403,16 +4440,29 @@ fn build_from_proto<'a>(
                             init_func::InitFn::Zero(_) => Arc::new(move || {
                                 Tile::new_zero([tile_row, tile_col], 8, accum.write_back_mu)
                             }),
+                            init_func::InitFn::Empty(_) => Arc::new(move || {
+                                Tile::new_empty([tile_row, tile_col], 8, accum.write_back_mu)
+                            }),
+                            init_func::InitFn::DynEmpty(_) => {
+                                Arc::new(move || Tile::new_empty([0, 0], 8, accum.write_back_mu))
+                            }
                             other => panic!("Unsupported u64 accumulation initializer {:?}", other),
                         };
-                    add_child!(builder, Accum::<SimpleEvent, _, _>::new(
-                        rcv, snd, func, init_accum, accum.rank,
-                        AccumConfig {
-                            compute_bw: accum.compute_bw as u64,
-                            write_back_mu: accum.write_back_mu,
-                        },
-                        operation.id,
-                    ));
+                    add_child!(
+                        builder,
+                        Accum::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            func,
+                            init_accum,
+                            accum.rank,
+                            AccumConfig {
+                                compute_bw: accum.compute_bw as u64,
+                                write_back_mu: accum.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
                 }
                 (Type::F32(_), Type::U64(_)) => {
                     let rcv = channel_map_collection.tile_f32.get_receiver(
@@ -4703,91 +4753,10 @@ fn build_from_proto<'a>(
                 }
                 _ => todo!(),
             },
-            OpType::RetileStreamify(retile_streamify) => {
-                match retile_streamify
-                    .dtype
-                    .clone()
-                    .unwrap()
-                    .r#type
-                    .clone()
-                    .unwrap()
-                {
-                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
-                    Type::F32(_) | Type::Bf16(_) => {
-                        let rcv = channel_map_collection.tile_f32.get_receiver(
-                            retile_streamify.input_id,
-                            retile_streamify.stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                retile_streamify.input_id,
-                                channel_depth,
-                            ),
-                        );
-                        let snd = channel_map_collection.tile_f32.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        add_child!(
-                            builder,
-                            RetileStreamify::<_>::new(
-                                rcv,
-                                snd,
-                                retile_streamify.split_row,
-                                retile_streamify.filter_mask,
-                                retile_streamify.chunk as usize, // chunk size (default: 1 for backward compatibility)
-                                operation.id,
-                            )
-                        );
-                    }
-                    Type::I64(_) => {
-                        let rcv = channel_map_collection.tile_i64.get_receiver(
-                            retile_streamify.input_id,
-                            retile_streamify.stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                retile_streamify.input_id,
-                                channel_depth,
-                            ),
-                        );
-                        let snd = channel_map_collection.tile_i64.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        add_child!(
-                            builder,
-                            RetileStreamify::<_>::new(
-                                rcv,
-                                snd,
-                                retile_streamify.split_row,
-                                retile_streamify.filter_mask,
-                                retile_streamify.chunk as usize,
-                                operation.id,
-                            )
-                        );
-                    }
-                    dtype => panic!(
-                        "Unsupported data type for RetileStreamify operation {:?}",
-                        dtype
-                    ),
-                }
-            }
             OpType::FlatmapFilterRowStreamify(flatmap_filter_row_streamify) => {
-                match flatmap_filter_row_streamify
-                    .dtype
-                    .clone()
-                    .unwrap()
-                    .r#type
-                    .clone()
-                    .unwrap()
-                {
-                    Type::F32(_) => {
-                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                macro_rules! build_typed_op {
+                    ($channel:ident) => {{
+                        let rcv = channel_map_collection.$channel.get_receiver(
                             flatmap_filter_row_streamify.input_id,
                             flatmap_filter_row_streamify.stream_idx,
                             builder,
@@ -4797,35 +4766,38 @@ fn build_from_proto<'a>(
                                 channel_depth,
                             ),
                         );
-                        let snd = channel_map_collection.tile_f32.get_sender(
+                        let snd = channel_map_collection.$channel.get_sender(
                             operation.id,
                             None,
                             builder,
                             get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
                         );
-                        if let Some(mask_id) = flatmap_filter_row_streamify.mask_id {
-                            let mask_rcv = channel_map_collection.tile_bool.get_receiver(
+                        let mask_rcv = flatmap_filter_row_streamify.mask_id.map(|mask_id| {
+                            channel_map_collection.tile_bool.get_receiver(
                                 mask_id,
                                 flatmap_filter_row_streamify.mask_stream_idx,
                                 builder,
                                 get_chan_depth(&sim_config.config_dict, mask_id, channel_depth),
-                            );
-                            add_child!(
-                                builder,
-                                FlatmapFilterRowStreamify::<_>::new(
-                                    rcv,
-                                    mask_rcv,
-                                    snd,
-                                    operation.id,
-                                )
-                            );
-                        } else {
-                            add_child!(
-                                builder,
-                                FlatmapRowStreamify::<_>::new(rcv, snd, operation.id,)
-                            );
-                        }
-                    }
+                            )
+                        });
+                        add_child!(
+                            builder,
+                            FlatmapFilterRowStreamify::<_>::new(rcv, mask_rcv, snd, operation.id)
+                        );
+                    }};
+                }
+
+                match flatmap_filter_row_streamify
+                    .dtype
+                    .clone()
+                    .unwrap()
+                    .r#type
+                    .clone()
+                    .unwrap()
+                {
+                    Type::F32(_) | Type::Bf16(_) => build_typed_op!(tile_f32),
+                    Type::I64(_) => build_typed_op!(tile_i64),
+                    Type::U64(_) => build_typed_op!(tile_u64),
                     dtype => panic!(
                         "Unsupported data type for FlatmapFilterRowStreamify operation {:?}",
                         dtype
@@ -4968,10 +4940,7 @@ fn build_from_proto<'a>(
                     Type::MultiHot(_) => make_dyn_addr_gen!(multihot),
                     Type::U64(_) => make_dyn_addr_gen!(tile_u64),
                     Type::I64(_) => make_dyn_addr_gen!(tile_i64),
-                    dtype => panic!(
-                        "Unsupported data type for DynAddrGen operation {:?}",
-                        dtype
-                    ),
+                    dtype => panic!("Unsupported data type for DynAddrGen operation {:?}", dtype),
                 }
             }
             OpType::CacheReadAddrGen(cache_read_addr_gen) => {
@@ -5032,10 +5001,9 @@ fn build_from_proto<'a>(
                 add_child!(builder, FilterLastTile::new(seq_len_rcv, snd, operation.id));
             }
             OpType::Reshape(reshape) => {
-                match reshape.dtype.clone().unwrap().r#type.clone().unwrap() {
-                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
-                    Type::F32(_) | Type::Bf16(_) => {
-                        let rcv = channel_map_collection.tile_f32.get_receiver(
+                macro_rules! build_typed_op {
+                    ($channel:ident) => {{
+                        let rcv = channel_map_collection.$channel.get_receiver(
                             reshape.input_id,
                             reshape.stream_idx,
                             builder,
@@ -5045,7 +5013,7 @@ fn build_from_proto<'a>(
                                 channel_depth,
                             ),
                         );
-                        let snd = channel_map_collection.tile_f32.get_sender(
+                        let snd = channel_map_collection.$channel.get_sender(
                             operation.id,
                             None,
                             builder,
@@ -5058,11 +5026,10 @@ fn build_from_proto<'a>(
                                 let tile_col = reshape.tile_col.unwrap() as usize;
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => Tile::new_zero_padded(
+                                    init_func::InitFn::Zero(_zero) => Tile::new_zero(
                                         [tile_row, tile_col],
                                         dtype_bytes,
                                         reshape.write_back_mu,
-                                        0,
                                     ),
                                     _ => todo!(),
                                 };
@@ -5096,7 +5063,14 @@ fn build_from_proto<'a>(
                                 );
                             }
                         }
-                    }
+                    }};
+                }
+
+                match reshape.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => build_typed_op!(tile_f32),
+                    Type::I64(_) => build_typed_op!(tile_i64),
+                    Type::U64(_) => build_typed_op!(tile_u64),
                     dtype => panic!("Unsupported data type for Reshape operation {:?}", dtype),
                 }
             }
@@ -5120,18 +5094,19 @@ fn build_from_proto<'a>(
                                 let tile_col = reshape.tile_col.unwrap() as usize;
 
                                 let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => Tile::new_zero_padded(
+                                    init_func::InitFn::Zero(_zero) => Tile::new_zero(
                                         [tile_row, tile_col],
                                         dtype_bytes,
                                         reshape.write_back_mu,
-                                        0,
                                     ),
                                     init_func::InitFn::NegInf(_) => Tile::new_neg_inf(
                                         [tile_row, tile_col],
                                         dtype_bytes,
                                         reshape.write_back_mu,
                                     ),
-                                    other => panic!("Unsupported float padding function {:?}", other),
+                                    other => {
+                                        panic!("Unsupported float padding function {:?}", other)
+                                    }
                                 };
                                 Some(pad_val)
                             }
@@ -5202,106 +5177,106 @@ fn build_from_proto<'a>(
                             }
                         }
                     }
-                    Type::U64(_) => {
-                        let rcv = channel_map_collection.tile_u64.get_receiver(
-                            reshape.input_id,
-                            reshape.stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                reshape.input_id,
-                                channel_depth,
-                            ),
-                        );
-                        let padding_value = match reshape.pad_func {
-                            Some(pad_func) => {
-                                let tile_row = reshape.tile_row.unwrap() as usize;
-                                let tile_col = reshape.tile_col.unwrap() as usize;
+                    Type::U64(_) | Type::I64(_) => {
+                        macro_rules! build_integer_reshape {
+                            ($channel:ident) => {{
+                                let rcv = channel_map_collection.$channel.get_receiver(
+                                    reshape.input_id,
+                                    reshape.stream_idx,
+                                    builder,
+                                    get_chan_depth(
+                                        &sim_config.config_dict,
+                                        reshape.input_id,
+                                        channel_depth,
+                                    ),
+                                );
+                                let padding_value = match reshape.pad_func {
+                                    Some(pad_func) => {
+                                        let tile_row = reshape.tile_row.unwrap() as usize;
+                                        let tile_col = reshape.tile_col.unwrap() as usize;
 
-                                let pad_val = match pad_func.init_fn.unwrap() {
-                                    init_func::InitFn::Zero(_zero) => {
-                                        Tile::new_zero_padded(
-                                            [tile_row, tile_col],
-                                            dtype_bytes,
-                                            reshape.write_back_mu,
-                                            0,
-                                        )
-                                        // Tile::new_blank_padded(
-                                        //     vec![tile_row, tile_col],
-                                        //     dtype_bytes,
-                                        //     reshape.write_back_mu,
-                                        //     0,
-                                        // )
+                                        let pad_val = match pad_func.init_fn.unwrap() {
+                                            init_func::InitFn::Zero(_zero) => Tile::new_zero(
+                                                [tile_row, tile_col],
+                                                dtype_bytes,
+                                                reshape.write_back_mu,
+                                            ),
+                                            _ => todo!(),
+                                        };
+                                        Some(pad_val)
                                     }
-                                    _ => todo!(),
+                                    None => None,
                                 };
-                                Some(pad_val)
-                            }
-                            None => None,
-                        };
-                        match reshape.have_pad_stream {
-                            true => {
-                                let mask_snd = channel_map_collection.tile_bool.get_sender(
-                                    operation.id,
-                                    Some(1),
-                                    builder,
-                                    get_chan_depth(
-                                        &sim_config.config_dict,
-                                        operation.id,
-                                        channel_depth,
-                                    ),
-                                );
-                                let snd = channel_map_collection.tile_u64.get_sender(
-                                    operation.id,
-                                    Some(0),
-                                    builder,
-                                    get_chan_depth(
-                                        &sim_config.config_dict,
-                                        operation.id,
-                                        channel_depth,
-                                    ),
-                                );
+                                match reshape.have_pad_stream {
+                                    true => {
+                                        let mask_snd = channel_map_collection.tile_bool.get_sender(
+                                            operation.id,
+                                            Some(1),
+                                            builder,
+                                            get_chan_depth(
+                                                &sim_config.config_dict,
+                                                operation.id,
+                                                channel_depth,
+                                            ),
+                                        );
+                                        let snd = channel_map_collection.$channel.get_sender(
+                                            operation.id,
+                                            Some(0),
+                                            builder,
+                                            get_chan_depth(
+                                                &sim_config.config_dict,
+                                                operation.id,
+                                                channel_depth,
+                                            ),
+                                        );
 
-                                add_child!(
-                                    builder,
-                                    ReshapePadStream::new(
-                                        rcv,
-                                        snd,
-                                        mask_snd,
-                                        reshape.split_dim as usize,
-                                        reshape.chunk_size as usize,
-                                        padding_value,
-                                        reshape.input_stream_rank,
-                                        false,
-                                        operation.id,
-                                    )
-                                );
-                            }
-                            false => {
-                                let snd = channel_map_collection.tile_u64.get_sender(
-                                    operation.id,
-                                    None,
-                                    builder,
-                                    get_chan_depth(
-                                        &sim_config.config_dict,
-                                        operation.id,
-                                        channel_depth,
-                                    ),
-                                );
-                                add_child!(
-                                    builder,
-                                    ReshapeNoPadStream::new(
-                                        rcv,
-                                        snd,
-                                        reshape.split_dim as usize,
-                                        reshape.chunk_size as usize,
-                                        padding_value,
-                                        reshape.input_stream_rank,
-                                        false,
-                                        operation.id,
-                                    )
-                                );
-                            }
+                                        add_child!(
+                                            builder,
+                                            ReshapePadStream::new(
+                                                rcv,
+                                                snd,
+                                                mask_snd,
+                                                reshape.split_dim as usize,
+                                                reshape.chunk_size as usize,
+                                                padding_value,
+                                                reshape.input_stream_rank,
+                                                false,
+                                                operation.id,
+                                            )
+                                        );
+                                    }
+                                    false => {
+                                        let snd = channel_map_collection.$channel.get_sender(
+                                            operation.id,
+                                            None,
+                                            builder,
+                                            get_chan_depth(
+                                                &sim_config.config_dict,
+                                                operation.id,
+                                                channel_depth,
+                                            ),
+                                        );
+                                        add_child!(
+                                            builder,
+                                            ReshapeNoPadStream::new(
+                                                rcv,
+                                                snd,
+                                                reshape.split_dim as usize,
+                                                reshape.chunk_size as usize,
+                                                padding_value,
+                                                reshape.input_stream_rank,
+                                                false,
+                                                operation.id,
+                                            )
+                                        );
+                                    }
+                                }
+                            }};
+                        }
+                        match reshape.dtype.as_ref().unwrap().r#type.as_ref().unwrap() {
+                            Type::U64(_) => build_integer_reshape!(tile_u64),
+                            Type::I64(_) => build_integer_reshape!(tile_i64),
+                            _ => unreachable!(),
                         }
                     }
                     Type::MultiHot(multihot) => {

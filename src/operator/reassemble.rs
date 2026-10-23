@@ -295,7 +295,7 @@ where
                                             self.reassemble_rank + addtional_rank + 1,
                                         )
                                     } else {
-                                        Elem::ValStop(updated_x.clone(), self.reassemble_rank)
+                                        Elem::ValStop(updated_x.clone(), (*level).min(self.reassemble_rank))
                                     }
                                 };
                                 self.out_stream
@@ -421,6 +421,45 @@ mod tests {
             }
             _ => false,
         }
+    }
+
+    #[test]
+    fn flat_reassemble_preserves_inner_stops() {
+        let mut ctx = ProgramBuilder::default();
+        let (input_snd, input_rcv) = ctx.bounded(2);
+        let (select_snd, select_rcv) = ctx.bounded(2);
+        let (output_snd, output_rcv) = ctx.bounded(2);
+        let tile = Tile::new(Array2::from_elem((1, 1), 7i32).to_shared(), 4, false);
+        let input = vec![
+            Elem::ValStop(tile.clone(), 1),
+            Elem::ValStop(tile.clone(), 2),
+        ];
+        let expected = vec![Elem::ValStop(tile.clone(), 1), Elem::ValStop(tile, 3)];
+        ctx.add_child(GeneratorContext::new(|| input.into_iter(), input_snd));
+        ctx.add_child(GeneratorContext::new(
+            || vec![Elem::Val(MultiHotN::new(vec![true], false))].into_iter(),
+            select_snd,
+        ));
+        ctx.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
+            vec![input_rcv],
+            select_rcv,
+            output_snd,
+            2,
+            FlatReassembleConfig {
+                switch_cycles: vec![1],
+                write_back_mu: false,
+            },
+            0,
+            String::new(),
+        ));
+        ctx.add_child(ApproxCheckerContext::new(
+            || expected.into_iter(),
+            output_rcv,
+            tolerance_fn,
+        ));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
     }
 
     // Use the same index and output streams as input from `fn flat_partition_2d_multi_hot_rank_1()`
