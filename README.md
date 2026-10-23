@@ -89,7 +89,9 @@ If the data arriaved on cycle `x` and is reapted `y` times, the data is enqueued
 
 #### Bufferize
 
-#### RetileStreamify
+#### FlatmapFilterRowStreamify
+Emits one row per output tile. An optional boolean mask selects rows; without a mask, every row is emitted.
+For column splitting, transpose before streamification and transpose each output back. Group outputs with Reshape and Accum when wider tiles are needed.
 
 
 ### Off-chip memory access

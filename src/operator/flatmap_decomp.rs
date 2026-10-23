@@ -8,7 +8,7 @@ use dam::types::DAMType;
 #[context_macro]
 pub struct FlatmapFilterRowStreamify<T: Clone> {
     in_stream: ProfiledReceiver<Elem<Tile<T>>>, // tile shape: [R,C]
-    mask_stream: ProfiledReceiver<Elem<Tile<bool>>>, // tile shape: [R,1]
+    mask_stream: Option<ProfiledReceiver<Elem<Tile<bool>>>>, // tile shape: [R,1]
     out_stream: ProfiledSender<Elem<Tile<T>>>,  // tile shape: [1,C]
     id: u32,
 }
@@ -19,113 +19,70 @@ where
 {
     pub fn new(
         in_stream: Receiver<Elem<Tile<T>>>,
-        mask_stream: Receiver<Elem<Tile<bool>>>,
+        mask_stream: Option<Receiver<Elem<Tile<bool>>>>,
         out_stream: Sender<Elem<Tile<T>>>,
         id: u32,
     ) -> Self {
         let ctx = Self {
             in_stream: in_stream.into(),
-            mask_stream: mask_stream.into(),
+            mask_stream: mask_stream.map(Into::into),
             out_stream: out_stream.into(),
             id,
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
-        ctx.mask_stream.attach_receiver(&ctx);
+        if let Some(mask_stream) = &ctx.mask_stream {
+            mask_stream.attach_receiver(&ctx);
+        }
         ctx.out_stream.attach_sender(&ctx);
-
         ctx
     }
+
     fn filter_streamify(
         &mut self,
         data: &Tile<T>,
-        mask: &Tile<bool>,
+        mask: Option<&Tile<bool>>,
         stop_level: Option<StopType>,
     ) {
-        let mask_iter: ndarray::iter::LanesIter<'_, bool, ndarray::Dim<[usize; 1]>> =
-            mask.underlying.as_ref().unwrap().rows().into_iter(); // [1] (bool) x R
-        let mut count = 0;
-        for mask_i in mask_iter {
-            if mask_i[0] {
-                count += 1;
+        let rows = data.shape[0];
+        let mask_arr = mask.map(|mask| {
+            assert_eq!(mask.shape, vec![rows, 1], "Row mask must have shape [R,1]");
+            mask.underlying
+                .as_ref()
+                .expect("Row filtering requires concrete mask values")
+        });
+        let count = mask_arr.map_or(rows, |arr| arr.iter().filter(|&&value| value).count());
+        let mut emitted = 0;
+        for row in 0..rows {
+            if mask_arr.is_some_and(|arr| !arr[[row, 0]]) {
+                continue;
             }
-        }
-
-        match &data.underlying {
-            Some(arr) => {
-                // split_row: [R,C] => [C] x R
-                // Later if we want to do column-wise, we can do that here ([R,C] => [R] x C)
-                // let vec_iter = if self.split_row {
-                //     arr.rows().into_iter()
-                // } else {
-                //     arr.columns().into_iter()
-                // };
-                let vec_iter = arr.rows().into_iter(); // [C] x R
-                let mask_iter = mask.underlying.as_ref().unwrap().rows().into_iter(); // [1] (bool) x R
-
-                let mut curr_cnt = 0;
-                for (row, mask_i) in vec_iter.zip(mask_iter) {
-                    // Only process rows where the mask is true
-                    if mask_i[0] {
-                        let out_data = Tile::<T>::new(
-                            row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
-                            data.bytes_per_elem,
-                            data.read_from_mu,
-                        );
-                        curr_cnt += 1;
-
-                        // check whether this is the last value and set the stop level if needed
-                        let elem = if stop_level.is_some() && (curr_cnt == count) {
-                            Elem::ValStop(out_data, stop_level.unwrap())
-                        } else {
-                            Elem::Val(out_data)
-                        };
-
-                        self.out_stream
-                            .enqueue(
-                                &self.time,
-                                ChannelElement {
-                                    time: self.time.tick(),
-                                    data: elem,
-                                },
-                            )
-                            .unwrap();
-                    }
-                }
-            }
-            None => {
-                // let vec_size = if self.split_row {
-                //     data.shape[1]
-                // } else {
-                //     data.shape[0]
-                // };
-                let vec_size = data.shape[1];
-
-                for idx in 0..count {
-                    let out_data = Tile::<T>::new_blank(
-                        vec![1, vec_size],
-                        data.bytes_per_elem,
-                        data.read_from_mu,
-                    );
-
-                    // check whether this is the last value and set the stop level if needed
-                    let elem = if stop_level.is_some() && (idx + 1 == count) {
-                        Elem::ValStop(out_data, stop_level.unwrap())
-                    } else {
-                        Elem::Val(out_data)
-                    };
-
-                    self.out_stream
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: self.time.tick(),
-                                data: elem,
-                            },
-                        )
-                        .unwrap();
-                }
-            }
+            let out_data = match &data.underlying {
+                Some(arr) => Tile::new(
+                    arr.slice(ndarray::s![row..row + 1, ..]).to_shared(),
+                    data.bytes_per_elem,
+                    data.read_from_mu,
+                ),
+                None => Tile::new_blank(
+                    vec![1, data.shape[1]],
+                    data.bytes_per_elem,
+                    data.read_from_mu,
+                ),
+            };
+            emitted += 1;
+            let elem = match stop_level {
+                Some(stop) if emitted == count => Elem::ValStop(out_data, stop),
+                _ => Elem::Val(out_data),
+            };
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: elem,
+                    },
+                )
+                .unwrap();
         }
     }
 }
@@ -135,166 +92,23 @@ where
     Tile<T>: DAMType,
 {
     fn run(&mut self) {
-        loop {
-            match self.in_stream.dequeue(&self.time) {
-                Ok(ChannelElement {
-                    time: _,
-                    data: data_enum,
-                }) => match data_enum {
-                    Elem::Val(data) => match self.mask_stream.dequeue(&self.time) {
-                        Ok(ChannelElement {
-                            time: _,
-                            data: mask_enum,
-                        }) => match mask_enum {
-                            Elem::Val(mask) => self.filter_streamify(&data, &mask, None),
-                            Elem::ValStop(_, s) => {
-                                panic!(
-                                    "Stop token position mismatch: data(val), mask(valstop({}))",
-                                    s
-                                );
-                            }
-                        },
-                        Err(_) => {
-                            panic!("Mask stream terminated before data stream");
-                        }
-                    },
-                    Elem::ValStop(data, s) => match self.mask_stream.dequeue(&self.time) {
-                        Ok(ChannelElement {
-                            time: _,
-                            data: mask_enum,
-                        }) => match mask_enum {
-                            Elem::Val(_) => {
-                                panic!(
-                                    "Stop token position mismatch: data(valstop({})), mask(val)",
-                                    s
-                                );
-                            }
-                            Elem::ValStop(mask, mask_s) => {
-                                assert_eq!(mask_s, s);
-                                self.filter_streamify(&data, &mask, Some(s))
-                            }
-                        },
-                        Err(_) => {
-                            panic!("Mask stream terminated before data stream");
-                        }
-                    },
-                },
-                Err(_) => {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-#[context_macro]
-pub struct FlatmapRowStreamify<T: Clone> {
-    in_stream: ProfiledReceiver<Elem<Tile<T>>>, // tile shape: [R,C]
-    out_stream: ProfiledSender<Elem<Tile<T>>>,  // tile shape: [1,C]
-    id: u32,
-}
-
-impl<T: Clone> FlatmapRowStreamify<T>
-where
-    Tile<T>: DAMType,
-{
-    pub fn new(
-        in_stream: Receiver<Elem<Tile<T>>>,
-        out_stream: Sender<Elem<Tile<T>>>,
-        id: u32,
-    ) -> Self {
-        let ctx = Self {
-            in_stream: in_stream.into(),
-            out_stream: out_stream.into(),
-            id,
-            context_info: Default::default(),
-        };
-        ctx.in_stream.attach_receiver(&ctx);
-        ctx.out_stream.attach_sender(&ctx);
-
-        ctx
-    }
-
-    fn streamify(&mut self, data: &Tile<T>, stop_level: Option<StopType>) {
-        let num_rows = data.shape[0];
-
-        match &data.underlying {
-            Some(arr) => {
-                let vec_iter = arr.rows().into_iter(); // [C] x R
-
-                for (idx, row) in vec_iter.enumerate() {
-                    let out_data = Tile::<T>::new(
-                        row.to_shared().insert_axis(ndarray::Axis(0)), // [N] => [1,N]
-                        data.bytes_per_elem,
-                        data.read_from_mu,
-                    );
-
-                    let elem = if stop_level.is_some() && (idx + 1 == num_rows) {
-                        Elem::ValStop(out_data, stop_level.unwrap())
-                    } else {
-                        Elem::Val(out_data)
-                    };
-
-                    self.out_stream
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: self.time.tick(),
-                                data: elem,
-                            },
-                        )
-                        .unwrap();
-                }
-            }
-            None => {
-                let vec_size = data.shape[1];
-
-                for idx in 0..num_rows {
-                    let out_data = Tile::<T>::new_blank(
-                        vec![1, vec_size],
-                        data.bytes_per_elem,
-                        data.read_from_mu,
-                    );
-
-                    let elem = if stop_level.is_some() && (idx + 1 == num_rows) {
-                        Elem::ValStop(out_data, stop_level.unwrap())
-                    } else {
-                        Elem::Val(out_data)
-                    };
-
-                    self.out_stream
-                        .enqueue(
-                            &self.time,
-                            ChannelElement {
-                                time: self.time.tick(),
-                                data: elem,
-                            },
-                        )
-                        .unwrap();
-                }
-            }
-        }
-    }
-}
-
-impl<T: Clone> Context for FlatmapRowStreamify<T>
-where
-    Tile<T>: DAMType,
-{
-    fn run(&mut self) {
-        loop {
-            match self.in_stream.dequeue(&self.time) {
-                Ok(ChannelElement {
-                    time: _,
-                    data: data_enum,
-                }) => match data_enum {
-                    Elem::Val(data) => self.streamify(&data, None),
-                    Elem::ValStop(data, s) => self.streamify(&data, Some(s)),
-                },
-                Err(_) => {
-                    return;
-                }
-            }
+        while let Ok(element) = self.in_stream.dequeue(&self.time) {
+            let (data, stop) = match element.data {
+                Elem::Val(data) => (data, None),
+                Elem::ValStop(data, stop) => (data, Some(stop)),
+            };
+            let mask = self.mask_stream.as_ref().map(|mask_stream| {
+                let element = mask_stream
+                    .dequeue(&self.time)
+                    .expect("Mask stream terminated before data stream");
+                let (mask, mask_stop) = match element.data {
+                    Elem::Val(mask) => (mask, None),
+                    Elem::ValStop(mask, stop) => (mask, Some(stop)),
+                };
+                assert_eq!(mask_stop, stop, "Stop token position mismatch");
+                mask
+            });
+            self.filter_streamify(&data, mask.as_ref(), stop);
         }
     }
 }
@@ -385,9 +199,9 @@ mod tests {
         simulation::ProgramBuilder,
         utility_contexts::{ApproxCheckerContext, GeneratorContext},
     };
-    use ndarray::ArcArray;
+    use ndarray::{ArcArray, Array2};
 
-    use super::{FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRowStreamify};
+    use super::{FlatmapCounter, FlatmapFilterRowStreamify};
     use crate::primitives::{buffer::Buffer, elem::Elem, tile::Tile};
     use crate::{functions::accum_fn::retile_row, operator::accum::AccumConfig};
     use crate::{
@@ -491,7 +305,7 @@ mod tests {
 
         ctx.add_child(FlatmapFilterRowStreamify::new(
             accum_data_rcv,
-            accum_mask_rcv,
+            Some(accum_mask_rcv),
             final_snd,
             0,
         ));
@@ -723,7 +537,7 @@ mod tests {
 
     #[test]
     fn flatmap_row_streamify_with_data_test() {
-        // Test that FlatmapRowStreamify outputs all rows from a [3,4] tile
+        // Test that Unmasked flatmap outputs all rows from a [3,4] tile
         // as three [1,4] tiles
         type VT = u32;
         const BYTES_PER_ELEM: usize = 4;
@@ -742,7 +556,7 @@ mod tests {
             in_snd,
         ));
 
-        ctx.add_child(FlatmapRowStreamify::new(in_rcv, out_snd, 0));
+        ctx.add_child(FlatmapFilterRowStreamify::new(in_rcv, None, out_snd, 0));
 
         // Expected: three [1,4] tiles; last one carries the stop level
         ctx.add_child(ApproxCheckerContext::new(
@@ -780,7 +594,7 @@ mod tests {
 
     #[test]
     fn flatmap_row_streamify_blank_test() {
-        // Test that FlatmapRowStreamify handles blank tiles (no underlying data)
+        // Test that Unmasked flatmap handles blank tiles (no underlying data)
         type VT = u32;
         const BYTES_PER_ELEM: usize = 4;
         const READ_FROM_MU: bool = false;
@@ -797,7 +611,7 @@ mod tests {
             in_snd,
         ));
 
-        ctx.add_child(FlatmapRowStreamify::new(in_rcv, out_snd, 0));
+        ctx.add_child(FlatmapFilterRowStreamify::new(in_rcv, None, out_snd, 0));
 
         // Expected: two blank [1,5] tiles; last carries stop level
         ctx.add_child(ApproxCheckerContext::new(
@@ -847,7 +661,7 @@ mod tests {
             in_snd,
         ));
 
-        ctx.add_child(FlatmapRowStreamify::new(in_rcv, out_snd, 0));
+        ctx.add_child(FlatmapFilterRowStreamify::new(in_rcv, None, out_snd, 0));
 
         // Expected: 4 row tiles total
         // From tile1 (Val, no stop): [1,2,3] Val, [4,5,6] Val
@@ -885,6 +699,169 @@ mod tests {
             |x, y| x == y,
         ));
 
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+    #[test]
+    fn filtered_rows_keep_values_and_stop_after_last_selected_row() {
+        for blank in [false, true] {
+            let mut ctx = ProgramBuilder::default();
+            let (data_snd, data_rcv) = ctx.unbounded();
+            let (mask_snd, mask_rcv) = ctx.unbounded();
+            let (out_snd, out_rcv) = ctx.unbounded();
+            let data = if blank {
+                Tile::new_blank(vec![5, 2], 4, true)
+            } else {
+                Tile::new(
+                    ndarray::arr2(&[[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]]).into_shared(),
+                    4,
+                    true,
+                )
+            };
+            let mask = Tile::new(
+                ndarray::arr2(&[[false], [true], [false], [true], [false]]).into_shared(),
+                1,
+                false,
+            );
+            ctx.add_child(GeneratorContext::new(
+                move || vec![Elem::ValStop(data, 2)].into_iter(),
+                data_snd,
+            ));
+            ctx.add_child(GeneratorContext::new(
+                move || vec![Elem::ValStop(mask, 2)].into_iter(),
+                mask_snd,
+            ));
+            ctx.add_child(FlatmapFilterRowStreamify::new(
+                data_rcv,
+                Some(mask_rcv),
+                out_snd,
+                0,
+            ));
+            let selected = [[2, 3], [6, 7]].map(|row| {
+                if blank {
+                    Tile::new_blank(vec![1, 2], 4, true)
+                } else {
+                    Tile::new(ndarray::arr2(&[row]).into_shared(), 4, true)
+                }
+            });
+            let [first, last] = selected;
+            ctx.add_child(ApproxCheckerContext::new(
+                move || vec![Elem::Val(first), Elem::ValStop(last, 2)].into_iter(),
+                out_rcv,
+                |actual, expected| actual == expected,
+            ));
+            ctx.initialize(Default::default())
+                .unwrap()
+                .run(Default::default());
+        }
+    }
+
+    #[test]
+    fn filter_rows_with_explicit_mask() {
+        // [1,3] => [1,7]
+        // [3,4] tile => [1,4] tile (last tile is padded with 2 vectors)
+        fn create_ground_truth(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
+            let mut in_stream_data: Vec<Elem<Tile<i32>>> = Vec::new();
+            for (i, arr) in arrays.iter().enumerate() {
+                let tile = Tile::new(arr.clone().into(), 4, read_from_mu);
+
+                // Add ValStop at indices 2, 5, 8 (end of each row in 3x3 grid)
+                if i == 6 {
+                    in_stream_data.push(Elem::ValStop(tile, 1));
+                } else {
+                    in_stream_data.push(Elem::Val(tile));
+                }
+            }
+            in_stream_data
+        }
+
+        fn create_input_data(arrays: &[Array2<i32>], read_from_mu: bool) -> Vec<Elem<Tile<i32>>> {
+            let mut ground_truth_data: Vec<Elem<Tile<i32>>> = Vec::new();
+            for i in 0..3 {
+                let concatenated_array = ndarray::concatenate(
+                    ndarray::Axis(0),
+                    &[
+                        arrays[i * 3].view(),
+                        arrays[i * 3 + 1].view(),
+                        arrays[i * 3 + 2].view(),
+                    ],
+                )
+                .unwrap_or_else(|_| {
+                    panic!("Failed to concatenate input data and accumulator data")
+                });
+
+                let elem = if i == 2 {
+                    Elem::ValStop(
+                        Tile::new(concatenated_array.to_shared(), 4, read_from_mu),
+                        1,
+                    )
+                } else {
+                    Elem::Val(Tile::new(concatenated_array.to_shared(), 4, read_from_mu))
+                };
+
+                ground_truth_data.push(elem);
+            }
+            ground_truth_data
+        }
+
+        // Step 1: Create 9 different ndarray::ArcArray2<T> with shape 2x2
+        let arrays_input: Vec<Array2<i32>> = (0..9)
+            .map(|i| Array2::from_shape_vec((1, 4), vec![i as i32; 4]).unwrap())
+            .collect();
+        let arrays_output: Vec<Array2<i32>> = (0..7)
+            .map(|i| Array2::from_shape_vec((1, 4), vec![i as i32; 4]).unwrap())
+            .collect();
+        let read_from_mu = true;
+        // Step 2: Create a 3x3 rank-2 data stream from these arrays
+        let in_stream_data = create_input_data(&arrays_input, read_from_mu);
+
+        // Step 3: Create a ground truth for the output stream
+        let ground_truth_data = create_ground_truth(&arrays_output, read_from_mu);
+
+        // Step 4: Create the STeP program
+        let mut ctx = ProgramBuilder::default();
+        let (in_data_snd, in_data_rcv) = ctx.unbounded();
+        let (out_data_snd, out_data_rcv) = ctx.unbounded();
+        ctx.add_child(GeneratorContext::new(
+            || in_stream_data.into_iter(),
+            in_data_snd,
+        ));
+        let (mask_snd, mask_rcv) = ctx.unbounded();
+        let masks = [
+            vec![true, true, true],
+            vec![true, true, true],
+            vec![true, false, false],
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, values)| {
+            let tile = Tile::new(
+                Array2::from_shape_vec((3, 1), values).unwrap().to_shared(),
+                1,
+                false,
+            );
+            if i == 2 {
+                Elem::ValStop(tile, 1)
+            } else {
+                Elem::Val(tile)
+            }
+        })
+        .collect::<Vec<_>>();
+        ctx.add_child(GeneratorContext::new(|| masks.into_iter(), mask_snd));
+        ctx.add_child(
+            crate::operator::flatmap_decomp::FlatmapFilterRowStreamify::new(
+                in_data_rcv,
+                Some(mask_rcv),
+                out_data_snd,
+                0,
+            ),
+        );
+        ctx.add_child(ApproxCheckerContext::new(
+            || ground_truth_data.into_iter(),
+            out_data_rcv,
+            |actual, expected| actual == expected,
+        ));
         ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default());
