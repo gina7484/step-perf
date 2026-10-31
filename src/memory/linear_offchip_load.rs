@@ -9,6 +9,7 @@ use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 use crate::primitives::elem::Elem;
 use crate::ramulator::hbm_context::ParAddrs;
 
+use super::random_tile_address::random_tile_byte_addresses;
 use crate::memory::HbmAddrEnum;
 use crate::primitives::tile::Tile;
 use crate::utils::events::LoggableEventSimple;
@@ -25,6 +26,7 @@ pub struct LinearOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub n_byte: usize, // size of the datatype
     // HBM Configurations & Addresses
     pub base_addr_byte: u64, // The base address for the given tensor
+    pub start_tile: u64,     // Allocation-relative origin of this lane
     pub addr_offset: u64,    // The data received per request
     pub par_dispatch: usize,
     // When false, the HBM round-trip is skipped entirely: tiles go straight to
@@ -115,6 +117,7 @@ where
             tile_col,
             n_byte,
             base_addr_byte,
+            start_tile: 0,
             addr_offset,
             par_dispatch,
             simulate_ramulator,
@@ -132,6 +135,11 @@ where
         ctx.on_chip_snd.attach_sender(&ctx);
 
         ctx
+    }
+
+    pub fn with_start_tile(mut self, start_tile: u64) -> Self {
+        self.start_tile = start_tile;
+        self
     }
 
     fn generate_addr(&self) -> impl Iterator<Item = HbmAddrEnum<T>> {
@@ -191,33 +199,26 @@ where
             }
 
             // Calculate the index in the original flat tensor using strides
-            let mut tile_idx = 0;
+            let mut tile_idx = usize::try_from(self.start_tile).expect("start_tile exceeds usize");
             for (dim, &idx_in_dim) in multi_index.iter().enumerate() {
-                tile_idx += idx_in_dim * self.stride[dim];
+                tile_idx = tile_idx
+                    .checked_add(
+                        idx_in_dim
+                            .checked_mul(self.stride[dim])
+                            .expect("tile stride overflow"),
+                    )
+                    .expect("tile index overflow");
             }
-
-            // Ensure we don't go out of bounds of the original tensor
-            let original_size: usize = self.tensor_shape_tiled.iter().product();
-            if original_size > 0 {
-                tile_idx = tile_idx % original_size;
-            } else {
-                tile_idx = 0; // Handle empty tensor case
-            }
-            // println!("tile_idx: {}", tile_idx);
-
-            // Generate addresses to fetch the given tile
-            let tile_offset = self.tile_row * self.tile_col * self.n_byte;
-            let base_addr_i = self.base_addr_byte + (tile_idx * tile_offset) as u64;
-            let row_offset = self.tensor_shape_tiled.last().unwrap() * self.tile_col * self.n_byte;
-
-            // Generate all addresses for this tile
-            let mut tile_addrs = vec![];
-            for r in 0..self.tile_row {
-                for c in (0..(self.tile_col * self.n_byte)).step_by(self.addr_offset as usize) {
-                    let addr: u64 = base_addr_i + (r * row_offset + c) as u64;
-                    tile_addrs.push(addr);
-                }
-            }
+            let tile_addrs = random_tile_byte_addresses(
+                &self.tensor_shape_tiled,
+                tile_idx as u64,
+                self.tile_row,
+                self.tile_col,
+                self.n_byte,
+                self.base_addr_byte,
+                self.addr_offset,
+            )
+            .unwrap_or_else(|error| panic!("[LinearOffChipLoad {}] {error}", self.id));
 
             // Determine the highest-dimensional stop token needed
             let mut highest_stop_token: Option<u32> = None;
@@ -508,6 +509,98 @@ mod test {
     #[test]
     fn stop_token_without_outer_singular_dim() {
         run_stop_token_case(false, 1);
+    }
+
+    #[test]
+    fn lane_offset_selects_data_and_multirow_addresses() {
+        for transposed in [false, true] {
+            let mut builder = ProgramBuilder::default();
+            let (addr_snd, _) = builder.unbounded();
+            let (_, resp_rcv) = builder.unbounded();
+            let (snd, _) = builder.unbounded();
+            let mut load = LinearOffChipLoad::<SimpleEvent, f32>::new(
+                vec![2, 3],
+                vec![3, 1],
+                vec![2, 1],
+                "missing_lane_test.npy".into(),
+                2,
+                4,
+                4,
+                (1_u64 << 32) + 100,
+                4,
+                1,
+                false,
+                addr_snd,
+                resp_rcv,
+                snd,
+                transposed,
+                false,
+                0,
+            )
+            .with_start_tile(1);
+            load.underlying = Some(
+                ndarray::ArrayD::from_shape_vec(
+                    ndarray::IxDyn(&[4, 12]),
+                    (0..48).map(|x| x as f32).collect(),
+                )
+                .unwrap()
+                .into_shared(),
+            );
+            let requests: Vec<_> = load.generate_addr().collect();
+            assert_eq!(requests.len(), 2);
+            for (row_group, request) in requests.iter().enumerate() {
+                let (addresses, tile) = match request {
+                    HbmAddrEnum::ADDR(addresses, tile) => (addresses, tile),
+                    HbmAddrEnum::ADDRSTOP(addresses, tile, _) => (addresses, tile),
+                    _ => panic!("expected a tile request"),
+                };
+                let first = row_group * 24 + 4;
+                let expected_addresses: Vec<u64> = (0..2)
+                    .flat_map(|r| {
+                        (0..4).map(move |c| (1_u64 << 32) + 100 + ((first + r * 12 + c) * 4) as u64)
+                    })
+                    .collect();
+                assert_eq!(*addresses, expected_addresses);
+                let payload = tile.underlying.as_ref().unwrap();
+                assert_eq!(payload.shape(), if transposed { &[4, 2] } else { &[2, 4] });
+                for r in 0..2 {
+                    for c in 0..4 {
+                        let index = if transposed { [c, r] } else { [r, c] };
+                        assert_eq!(payload[index], (first + r * 12 + c) as f32);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "outside allocation tile count")]
+    fn lane_offset_does_not_wrap_out_of_bounds() {
+        let mut builder = ProgramBuilder::default();
+        let (addr_snd, _) = builder.unbounded();
+        let (_, resp_rcv) = builder.unbounded();
+        let (snd, _) = builder.unbounded();
+        let load = LinearOffChipLoad::<SimpleEvent, f32>::new(
+            vec![1, 1],
+            vec![1],
+            vec![1],
+            "missing_bounds_test.npy".into(),
+            1,
+            1,
+            4,
+            0,
+            4,
+            1,
+            false,
+            addr_snd,
+            resp_rcv,
+            snd,
+            false,
+            false,
+            0,
+        )
+        .with_start_tile(1);
+        load.generate_addr().for_each(drop);
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::memory::linear_offchip_load_ref::LinearOffChipLoadRef;
 use crate::memory::metadata_gen::MetadataGen;
 use crate::memory::random_offchip_load::RandomOffChipLoad;
 use crate::memory::random_offchip_store::RandomOffChipStore;
+use crate::memory::strided_offchip_load::StridedOffChipLoad;
 use crate::operator::accum_buff::AccumBuff;
 use crate::operator::counter::Counter;
 use crate::operator::eager_merge::EagerMerge;
@@ -1861,7 +1862,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.tile_row as usize,
                                 linear_off_chip_load.tile_col as usize,
                                 dtype_bytes,
-                                0,
+                                linear_off_chip_load.base_addr_byte,
                                 hbm_config.addr_offset,
                                 linear_off_chip_load.par_dispatch as usize,
                                 linear_off_chip_load.simulate_ramulator,
@@ -1871,7 +1872,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.transposed,
                                 linear_off_chip_load.add_outer_singular_dim,
                                 operation.id,
-                            )
+                            ).with_start_tile(linear_off_chip_load.start_tile)
                         );
 
                         mem_context.add_reader(ReadBundle {
@@ -1899,7 +1900,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.tile_row as usize,
                                 linear_off_chip_load.tile_col as usize,
                                 std::mem::size_of::<u64>(),
-                                0,
+                                linear_off_chip_load.base_addr_byte,
                                 hbm_config.addr_offset,
                                 linear_off_chip_load.par_dispatch as usize,
                                 linear_off_chip_load.simulate_ramulator,
@@ -1909,7 +1910,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.transposed,
                                 linear_off_chip_load.add_outer_singular_dim,
                                 operation.id,
-                            )
+                            ).with_start_tile(linear_off_chip_load.start_tile)
                         );
 
                         mem_context.add_reader(ReadBundle {
@@ -1937,7 +1938,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.tile_row as usize,
                                 linear_off_chip_load.tile_col as usize,
                                 std::mem::size_of::<i64>(),
-                                0,
+                                linear_off_chip_load.base_addr_byte,
                                 hbm_config.addr_offset,
                                 linear_off_chip_load.par_dispatch as usize,
                                 linear_off_chip_load.simulate_ramulator,
@@ -1947,7 +1948,7 @@ fn build_from_proto<'a>(
                                 linear_off_chip_load.transposed,
                                 linear_off_chip_load.add_outer_singular_dim,
                                 operation.id,
-                            )
+                            ).with_start_tile(linear_off_chip_load.start_tile)
                         );
 
                         mem_context.add_reader(ReadBundle {
@@ -2178,6 +2179,62 @@ fn build_from_proto<'a>(
                         });
                     }
                     _ => todo!(),
+                }
+            }
+            OpType::StridedOffChipLoad(load) => {
+                let tile_shape: [usize; 2] = to_usize_vec(load.tile_shape)
+                    .try_into()
+                    .expect("StridedOffChipLoad requires two tile dimensions");
+                let tile_stride: [u64; 2] = load
+                    .tile_stride
+                    .try_into()
+                    .expect("StridedOffChipLoad requires two tile strides");
+                let raddr = channel_map_collection.tile_u64.get_receiver(
+                    load.raddr_id,
+                    load.raddr_stream_idx,
+                    builder,
+                    get_chan_depth(&sim_config.config_dict, load.raddr_id, channel_depth),
+                );
+                let (addr_snd, addr_rcv) = builder.unbounded();
+                let (resp_snd, resp_rcv) = builder.unbounded();
+                mem_context.add_reader(ReadBundle {
+                    addr: addr_rcv,
+                    resp: resp_snd,
+                });
+
+                macro_rules! build_strided_load {
+                    ($channel:ident) => {{
+                        let snd = channel_map_collection.$channel.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            StridedOffChipLoad::<SimpleEvent, _>::new(
+                                load.allocation_elements,
+                                tile_shape,
+                                tile_stride,
+                                dtype_bytes,
+                                load.base_addr_byte,
+                                hbm_config.addr_offset,
+                                load.par_dispatch as usize,
+                                addr_snd,
+                                resp_rcv,
+                                raddr,
+                                snd,
+                                operation.id,
+                            )
+                        );
+                    }};
+                }
+                match load.dtype.unwrap().r#type.unwrap() {
+                    Type::F32(_) | Type::Bf16(_) => build_strided_load!(tile_f32),
+                    Type::U64(_) => build_strided_load!(tile_u64),
+                    Type::I64(_) => build_strided_load!(tile_i64),
+                    Type::Bool(_) => build_strided_load!(tile_bool),
+                    dtype => panic!("Unsupported StridedOffChipLoad dtype: {:?}", dtype),
                 }
             }
             OpType::RandomOffChipLoad(random_off_chip_load) => {
