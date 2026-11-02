@@ -3573,6 +3573,15 @@ fn build_from_proto<'a>(
                         );
                         add_child!(builder, ConsumerContext::new(rcv));
                     }
+                    Type::I64(_) => {
+                        let rcv = channel_map_collection.tile_i64.get_receiver(
+                            consumer_context.input_id,
+                            consumer_context.stream_idx,
+                            builder,
+                            None,
+                        );
+                        add_child!(builder, ConsumerContext::new(rcv));
+                    }
                     Type::U64(_) => {
                         let rcv = channel_map_collection.tile_u64.get_receiver(
                             consumer_context.input_id,
