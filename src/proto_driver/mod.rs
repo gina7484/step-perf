@@ -18,7 +18,7 @@ use crate::operator::accum_buff::AccumBuff;
 use crate::operator::counter::Counter;
 use crate::operator::eager_merge::EagerMerge;
 use crate::operator::expand::ExpandRef;
-use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify};
+use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRetileStreamify};
 use crate::operator::parallelize::Parallelize;
 use crate::primitives::select::MultiHotN;
 use std::collections::HashMap;
@@ -4819,6 +4819,31 @@ fn build_from_proto<'a>(
                 }
                 _ => todo!(),
             },
+            OpType::FlatmapRetileStreamify(streamify) => {
+                macro_rules! build_typed_op {
+                    ($channel:ident) => {{
+                        let rcv = channel_map_collection.$channel.get_receiver(
+                            streamify.input_id, streamify.stream_idx, builder,
+                            get_chan_depth(&sim_config.config_dict, streamify.input_id, channel_depth),
+                        );
+                        let snd = channel_map_collection.$channel.get_sender(
+                            operation.id, None, builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(builder, FlatmapRetileStreamify::new(
+                            rcv, snd, streamify.direction as usize,
+                            streamify.chunk_size as usize, operation.id,
+                        ));
+                    }};
+                }
+                match streamify.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::F32(_) | Type::Bf16(_) => build_typed_op!(tile_f32),
+                    Type::I64(_) => build_typed_op!(tile_i64),
+                    Type::U64(_) => build_typed_op!(tile_u64),
+                    Type::Bool(_) => build_typed_op!(tile_bool),
+                    dtype => panic!("Unsupported data type for FlatmapRetileStreamify {:?}", dtype),
+                }
+            }
             OpType::FlatmapFilterRowStreamify(flatmap_filter_row_streamify) => {
                 macro_rules! build_typed_op {
                     ($channel:ident) => {{

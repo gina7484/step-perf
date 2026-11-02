@@ -6,6 +6,101 @@ use dam::context_tools::*;
 use dam::types::DAMType;
 
 #[context_macro]
+pub struct FlatmapRetileStreamify<T: Clone> {
+    in_stream: ProfiledReceiver<Elem<Tile<T>>>,
+    out_stream: ProfiledSender<Elem<Tile<T>>>,
+    axis: usize,
+    chunk_size: usize,
+    id: u32,
+}
+
+impl<T: Clone> FlatmapRetileStreamify<T>
+where
+    Tile<T>: DAMType,
+{
+    pub fn new(
+        in_stream: Receiver<Elem<Tile<T>>>,
+        out_stream: Sender<Elem<Tile<T>>>,
+        axis: usize,
+        chunk_size: usize,
+        id: u32,
+    ) -> Self {
+        assert!(axis < 2, "Retile direction must be row or column");
+        assert!(chunk_size > 0, "Retile chunk size must be positive");
+        let ctx = Self {
+            in_stream: in_stream.into(),
+            out_stream: out_stream.into(),
+            axis,
+            chunk_size,
+            id,
+            context_info: Default::default(),
+        };
+        ctx.in_stream.attach_receiver(&ctx);
+        ctx.out_stream.attach_sender(&ctx);
+        ctx
+    }
+
+    fn streamify(&mut self, data: &Tile<T>, stop: Option<StopType>) {
+        assert_eq!(data.shape.len(), 2);
+        let extent = data.shape[self.axis];
+        assert!(
+            extent > 0,
+            "FlatmapRetileStreamify_{}: split tile dimension must be positive",
+            self.id
+        );
+        assert_eq!(
+            extent % self.chunk_size,
+            0,
+            "FlatmapRetileStreamify_{}: chunk size must divide the tile dimension",
+            self.id
+        );
+        for start in (0..extent).step_by(self.chunk_size) {
+            let end = start + self.chunk_size;
+            let chunk = match &data.underlying {
+                Some(arr) => Tile::new(
+                    arr.slice_axis(ndarray::Axis(self.axis), ndarray::Slice::from(start..end))
+                        .to_shared(),
+                    data.bytes_per_elem,
+                    data.read_from_mu,
+                ),
+                None => {
+                    let mut shape = data.shape.clone();
+                    shape[self.axis] = self.chunk_size;
+                    Tile::new_blank(shape, data.bytes_per_elem, data.read_from_mu)
+                }
+            };
+            let elem = match stop {
+                Some(level) if end == extent => Elem::ValStop(chunk, level),
+                _ => Elem::Val(chunk),
+            };
+            self.out_stream
+                .enqueue(
+                    &self.time,
+                    ChannelElement {
+                        time: self.time.tick(),
+                        data: elem,
+                    },
+                )
+                .unwrap();
+        }
+    }
+}
+
+impl<T: Clone> Context for FlatmapRetileStreamify<T>
+where
+    Tile<T>: DAMType,
+{
+    fn run(&mut self) {
+        while let Ok(element) = self.in_stream.dequeue(&self.time) {
+            match element.data {
+                Elem::Val(data) => self.streamify(&data, None),
+                Elem::ValStop(data, stop) => self.streamify(&data, Some(stop)),
+            }
+        }
+    }
+}
+
+#[context_macro]
 pub struct FlatmapFilterRowStreamify<T: Clone> {
     in_stream: ProfiledReceiver<Elem<Tile<T>>>, // tile shape: [R,C]
     mask_stream: Option<ProfiledReceiver<Elem<Tile<bool>>>>, // tile shape: [R,1]
@@ -201,13 +296,150 @@ mod tests {
     };
     use ndarray::{ArcArray, Array2};
 
-    use super::{FlatmapCounter, FlatmapFilterRowStreamify};
+    use super::{FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRetileStreamify};
     use crate::primitives::{buffer::Buffer, elem::Elem, tile::Tile};
     use crate::{functions::accum_fn::retile_row, operator::accum::AccumConfig};
+
     use crate::{
         operator::{accum::Accum, reshape::ReshapePadStream},
         utils::events::SimpleEvent,
     };
+
+    fn check_retile_chunks(axis: usize, blank: bool) {
+        let mut ctx = ProgramBuilder::default();
+        let (in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, out_rcv) = ctx.unbounded();
+        let data = Tile::new(
+            ndarray::arr2(&[
+                [0u32, 1, 2, 3],
+                [4, 5, 6, 7],
+                [8, 9, 10, 11],
+                [12, 13, 14, 15],
+            ])
+            .into_shared(),
+            4,
+            true,
+        );
+        let data = if blank { data.drop_underlying() } else { data };
+        let expected = if axis == 0 {
+            vec![
+                ndarray::arr2(&[[0u32, 1, 2, 3], [4, 5, 6, 7]]),
+                ndarray::arr2(&[[8, 9, 10, 11], [12, 13, 14, 15]]),
+            ]
+        } else {
+            vec![
+                ndarray::arr2(&[[0u32, 1], [4, 5], [8, 9], [12, 13]]),
+                ndarray::arr2(&[[2, 3], [6, 7], [10, 11], [14, 15]]),
+            ]
+        };
+        let chunks: Vec<_> = expected
+            .into_iter()
+            .map(|arr| {
+                let tile = Tile::new(arr.into_shared(), 4, true);
+                if blank {
+                    tile.drop_underlying()
+                } else {
+                    tile
+                }
+            })
+            .collect();
+        ctx.add_child(GeneratorContext::new(
+            move || {
+                vec![
+                    Elem::Val(data.clone()),
+                    Elem::ValStop(data.clone(), 1),
+                    Elem::ValStop(data.clone(), 3),
+                ]
+                .into_iter()
+            },
+            in_snd,
+        ));
+        ctx.add_child(FlatmapRetileStreamify::new(in_rcv, out_snd, axis, 2, 0));
+        ctx.add_child(ApproxCheckerContext::new(
+            move || {
+                vec![
+                    Elem::Val(chunks[0].clone()),
+                    Elem::Val(chunks[1].clone()),
+                    Elem::Val(chunks[0].clone()),
+                    Elem::ValStop(chunks[1].clone(), 1),
+                    Elem::Val(chunks[0].clone()),
+                    Elem::ValStop(chunks[1].clone(), 3),
+                ]
+                .into_iter()
+            },
+            out_rcv,
+            |x, y| x == y,
+        ));
+        ctx.initialize(Default::default())
+            .unwrap()
+            .run(Default::default());
+    }
+
+    #[test]
+    fn flatmap_retile_preserves_data_and_stops() {
+        check_retile_chunks(0, false);
+        check_retile_chunks(1, false);
+    }
+
+    #[test]
+    fn flatmap_retile_preserves_blank_shapes_and_stops() {
+        check_retile_chunks(0, true);
+        check_retile_chunks(1, true);
+    }
+
+    #[test]
+    fn flatmap_retile_accepts_runtime_row_sizes_and_empty_streams() {
+        for empty in [false, true] {
+            let mut ctx = ProgramBuilder::default();
+            let (in_snd, in_rcv) = ctx.unbounded();
+            let (out_snd, out_rcv) = ctx.unbounded();
+            ctx.add_child(GeneratorContext::new(
+                move || {
+                    if empty {
+                        vec![]
+                    } else {
+                        vec![
+                            Elem::ValStop(Tile::<u32>::new_blank(vec![3, 4], 4, false), 1),
+                            Elem::ValStop(Tile::<u32>::new_blank(vec![1, 4], 4, false), 2),
+                        ]
+                    }
+                    .into_iter()
+                },
+                in_snd,
+            ));
+            ctx.add_child(FlatmapRetileStreamify::new(in_rcv, out_snd, 1, 2, 0));
+            ctx.add_child(ApproxCheckerContext::new(
+                move || {
+                    if empty {
+                        vec![]
+                    } else {
+                        vec![
+                            Elem::Val(Tile::<u32>::new_blank(vec![3, 2], 4, false)),
+                            Elem::ValStop(Tile::<u32>::new_blank(vec![3, 2], 4, false), 1),
+                            Elem::Val(Tile::<u32>::new_blank(vec![1, 2], 4, false)),
+                            Elem::ValStop(Tile::<u32>::new_blank(vec![1, 2], 4, false), 2),
+                        ]
+                    }
+                    .into_iter()
+                },
+                out_rcv,
+                |x, y| x == y,
+            ));
+            ctx.initialize(Default::default())
+                .unwrap()
+                .run(Default::default());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk size must divide the tile dimension")]
+    fn flatmap_retile_rejects_partial_runtime_chunks() {
+        let mut ctx = ProgramBuilder::default();
+        let (_in_snd, in_rcv) = ctx.unbounded();
+        let (out_snd, _out_rcv) = ctx.unbounded();
+        let mut op = FlatmapRetileStreamify::new(in_rcv, out_snd, 1, 2, 0);
+        op.streamify(&Tile::<u32>::new_blank(vec![3, 5], 4, false), Some(1));
+    }
 
     #[test]
     fn roundtrip_test() {
