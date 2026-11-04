@@ -214,9 +214,9 @@ where
         // Get the arrive time of each element in the peek_results
         let data_arrive_times = self.get_arrive_times(&peek_results);
 
-        // Create idx vector based on the data_arrive_times
+        // Gather selected branches in ascending ID order, regardless of arrival time.
         let mut sorted_indices: Vec<usize> = (0..num_selected_streams).collect();
-        sorted_indices.sort_by_key(|&i| data_arrive_times[i]);
+        sorted_indices.sort_by_key(|&i| select_vec[i]);
 
         for &i in sorted_indices.iter() {
             let is_last_selected = sorted_indices.last() == Some(&i);
@@ -409,8 +409,9 @@ mod tests {
         primitives::{elem::Elem, tile::Tile},
         utils::events::SimpleEvent,
     };
+    use dam::context_tools::ChannelElement;
     use dam::simulation::ProgramBuilder;
-    use dam::utility_contexts::{ApproxCheckerContext, GeneratorContext, PrinterContext};
+    use dam::utility_contexts::{ApproxCheckerContext, FunctionContext, GeneratorContext, PrinterContext};
     use ndarray::Array2;
 
     fn tolerance_fn(a: &Elem<Tile<i32>>, b: &Elem<Tile<i32>>) -> bool {
@@ -421,6 +422,55 @@ mod tests {
             }
             _ => false,
         }
+    }
+
+    #[test]
+    fn flat_reassemble_gathers_ascending_ids_despite_arrival_order() {
+        let tile = |value| Tile::new(Array2::from_elem((1, 1), value).to_shared(), 4, false);
+        let mut ctx = ProgramBuilder::default();
+        let (select_snd, select_rcv) = ctx.unbounded();
+        let (output_snd, output_rcv) = ctx.unbounded();
+        let mut inputs = vec![];
+        for (expert, delay) in [(0, 30u64), (1, 0), (2, 1)] {
+            let (sender, receiver) = ctx.unbounded();
+            inputs.push(receiver);
+            let values = vec![
+                Elem::Val(tile(expert * 10)),
+                Elem::ValStop(tile(expert * 10 + 1), 1),
+                Elem::Val(tile(expert * 10 + 100)),
+                Elem::ValStop(tile(expert * 10 + 101), 2),
+            ];
+            let mut source = FunctionContext::new();
+            sender.attach_sender(&source);
+            source.set_run(move |time| {
+                time.incr_cycles(delay);
+                for value in values {
+                    sender.enqueue(time, ChannelElement::new(time.tick(), value)).unwrap();
+                    time.incr_cycles(1);
+                }
+            });
+            ctx.add_child(source);
+        }
+        let selection = MultiHotN::new(vec![true, false, true], false);
+        ctx.add_child(GeneratorContext::new(
+            move || vec![Elem::Val(selection.clone()), Elem::ValStop(selection, 1)].into_iter(),
+            select_snd,
+        ));
+        ctx.add_child(FlatReassemble::<SimpleEvent, _, _>::new(
+            inputs, select_rcv, output_snd, 1,
+            FlatReassembleConfig { switch_cycles: vec![1; 3], write_back_mu: false },
+            0, String::new(),
+        ));
+        let expected = vec![
+            Elem::Val(tile(0)), Elem::ValStop(tile(1), 1),
+            Elem::Val(tile(20)), Elem::ValStop(tile(21), 2),
+            Elem::Val(tile(100)), Elem::ValStop(tile(101), 1),
+            Elem::Val(tile(120)), Elem::ValStop(tile(121), 3),
+        ];
+        ctx.add_child(ApproxCheckerContext::new(
+            move || expected.into_iter(), output_rcv, tolerance_fn,
+        ));
+        assert!(ctx.initialize(Default::default()).unwrap().run(Default::default()).passed());
     }
 
     #[test]
@@ -715,7 +765,7 @@ mod tests {
     ///   Val(v), ValStop(v, 1), Val(v), ValStop(v, 2)
     ///
     /// Select stream:
-    ///   Val(multihot[0,1]), Val(multihot[1,2]), ValStop(multihot[2,0], 1)
+    ///   Val(multihot[0,1]), Val(multihot[1,2]), ValStop(multihot[0,2], 1)
     fn build_rotating_inputs(
         read_from_mu: bool,
     ) -> (Vec<Vec<Elem<Tile<i32>>>>, Vec<Elem<MultiHotN>>) {
@@ -740,7 +790,7 @@ mod tests {
         let select_stream = vec![
             Elem::Val(MultiHotN::new(vec![true, true, false], read_from_mu)), // [0, 1]
             Elem::Val(MultiHotN::new(vec![false, true, true], read_from_mu)), // [1, 2]
-            Elem::ValStop(MultiHotN::new(vec![true, false, true], read_from_mu), 1), // [2, 0] (s1)
+            Elem::ValStop(MultiHotN::new(vec![true, false, true], read_from_mu), 1), // [0, 2] (s1)
         ];
 
         (input_streams, select_stream)

@@ -231,22 +231,26 @@ where
                         if start_time.is_none() {
                             start_time = Some(self.time.tick().time());
                         }
-                        // Validate stop level based on context
-                        if let Some(expected) = expected_stop_level.clone() {
-                            if expected != stop_lev {
-                                panic!("The expected stop level does not match the stop level in the select stream! FlatPartition_{}",self.id);
+                        // Inner stops belong to this segment. Only its final stop
+                        // must match the boundary carried by the selector.
+                        if stop_lev >= self.partition_rank {
+                            if let Some(expected) = expected_stop_level {
+                                if expected != stop_lev {
+                                    panic!("The expected stop level does not match the stop level in the select stream! FlatPartition_{}",self.id);
+                                }
+                            } else if stop_lev > self.partition_rank {
+                                println!(
+                                    "id {}: stop_lev in input {}, expected {:?}, partition_rank {}",
+                                    self.id, stop_lev, expected_stop_level, self.partition_rank
+                                );
+                                panic!("The stop level in the select stream is greater than the partition rank!  FlatPartition_{}",self.id);
                             }
-                        } else if stop_lev > self.partition_rank {
-                            println!(
-                                "id {}: stop_lev in input {}, expected {:?}, partition_rank {}",
-                                self.id, stop_lev, expected_stop_level, self.partition_rank
-                            );
-                            panic!("The stop level in the select stream is greater than the partition rank!  FlatPartition_{}",self.id);
                         }
-                        // Determine output stop level
-                        let output_stop_level = expected_stop_level
-                            .map(|_| self.partition_rank)
-                            .unwrap_or(stop_lev);
+                        let output_stop_level = if expected_stop_level == Some(stop_lev) {
+                            self.partition_rank
+                        } else {
+                            stop_lev
+                        };
 
                         self.handle_load_cycles(&x);
                         self.in_stream.dequeue(&self.time).unwrap();
@@ -369,6 +373,46 @@ mod tests {
             _ => false,
         }
     }
+
+    #[test]
+    fn flat_partition_preserves_inner_stops_with_final_selector() {
+        let tile = |value| Tile::new(Array2::from_elem((1, 1), value).to_shared(), 4, false);
+        let mut ctx = ProgramBuilder::default();
+        let (input_snd, input_rcv) = ctx.unbounded();
+        let (select_snd, select_rcv) = ctx.unbounded();
+        let (first_snd, first_rcv) = ctx.unbounded();
+        let (second_snd, second_rcv) = ctx.unbounded();
+        let values = vec![
+            Elem::Val(tile(10)), Elem::ValStop(tile(11), 1),
+            Elem::Val(tile(12)), Elem::ValStop(tile(13), 3),
+            Elem::Val(tile(20)), Elem::ValStop(tile(21), 1),
+            Elem::Val(tile(22)), Elem::ValStop(tile(23), 4),
+        ];
+        ctx.add_child(GeneratorContext::new(move || values.into_iter(), input_snd));
+        ctx.add_child(GeneratorContext::new(
+            || vec![
+                Elem::Val(MultiHotN::new(vec![false, true], false)),
+                Elem::ValStop(MultiHotN::new(vec![true, false], false), 1),
+            ].into_iter(),
+            select_snd,
+        ));
+        ctx.add_child(FlatPartition::<SimpleEvent, _, _>::new(
+            input_rcv, select_rcv, vec![first_snd, second_snd], 3,
+            FlatPartitionConfig { switch_cycles: vec![1; 2], write_back_mu: false },
+            0, String::new(),
+        ));
+        for (receiver, base) in [(first_rcv, 20), (second_rcv, 10)] {
+            let expected = vec![
+                Elem::Val(tile(base)), Elem::ValStop(tile(base + 1), 1),
+                Elem::Val(tile(base + 2)), Elem::ValStop(tile(base + 3), 3),
+            ];
+            ctx.add_child(ApproxCheckerContext::new(
+                move || expected.into_iter(), receiver, tolerance_fn,
+            ));
+        }
+        assert!(ctx.initialize(Default::default()).unwrap().run(Default::default()).passed());
+    }
+
     #[test]
     fn flat_partition_2d_multi_hot_rank_1() {
         fn create_ground_truth(

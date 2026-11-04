@@ -127,22 +127,31 @@ where
 
 impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
     fn run(&mut self) {
+        let mut saw_reference = false;
         while let Ok(ChannelElement { data, .. }) = self.in_stream.dequeue(&self.time) {
             let (value, input_stop) = match data {
                 Elem::Val(value) => (value, 0),
                 Elem::ValStop(value, stop) => (value, stop),
             };
             loop {
-                let ref_data = self
-                    .ref_stream
-                    .dequeue(&self.time)
-                    .unwrap_or_else(|_| {
+                let ref_data = match self.ref_stream.dequeue(&self.time) {
+                    Ok(element) => {
+                        saw_reference = true;
+                        element.data
+                    }
+                    Err(_) if !saw_reference => {
+                        // An entirely empty reference means zero repetitions.
+                        // Drain the input so its producer can finish sending.
+                        while self.in_stream.dequeue(&self.time).is_ok() {}
+                        return;
+                    }
+                    Err(_) => {
                         panic!(
                             "RepeatRef {}: reference stream ended before input stream",
                             self.id
                         )
-                    })
-                    .data;
+                    }
+                };
                 let ref_stop = match ref_data {
                     Elem::Val(_) => 0,
                     Elem::ValStop(_, stop) => stop,
@@ -450,6 +459,22 @@ mod tests {
         trigger_rank: StopType,
         expected: Vec<Elem<u64>>,
     ) {
+        assert!(run_ref(
+            input,
+            reference,
+            expanded_rank_cnt,
+            trigger_rank,
+            expected,
+        ));
+    }
+
+    fn run_ref(
+        input: Vec<Elem<u64>>,
+        reference: Vec<Elem<u64>>,
+        expanded_rank_cnt: StopType,
+        trigger_rank: StopType,
+        expected: Vec<Elem<u64>>,
+    ) -> bool {
         let mut ctx = ProgramBuilder::default();
         let (in_snd, in_rcv) = ctx.bounded(1);
         let (ref_snd, ref_rcv) = ctx.bounded(1);
@@ -468,11 +493,10 @@ mod tests {
             17,
         ));
         ctx.add_child(ExactOutput::new(out_rcv, expected));
-        assert!(ctx
-            .initialize(Default::default())
+        ctx.initialize(Default::default())
             .unwrap()
             .run(Default::default())
-            .passed());
+            .passed()
     }
 
     #[test]
@@ -553,6 +577,68 @@ mod tests {
     fn repeat_empty_streams() {
         check_static(vec![], vec![2, 3], vec![]);
         check_ref(vec![], vec![], 2, 0, vec![]);
+    }
+
+    #[test]
+    fn repeat_ref_empty_reference_drains_input() {
+        // More values than the depth-one channel can buffer. Returning without
+        // draining would leave the input generator unable to finish sending.
+        let input = vec![
+            Elem::Val(1),
+            Elem::Val(2),
+            Elem::Val(3),
+            Elem::Val(4),
+            Elem::ValStop(5, 1),
+        ];
+        for trigger_rank in [0, 2] {
+            check_ref(input.clone(), vec![], 1, trigger_rank, vec![]);
+        }
+        // The unused-expert address stream repeats a single scalar zero.
+        check_ref(vec![Elem::Val(0)], vec![], 1, 0, vec![]);
+    }
+
+    #[test]
+    fn repeat_ref_rejects_truncated_reference() {
+        assert!(!run_ref(
+            vec![Elem::ValStop(7, 1)],
+            vec![Elem::Val(0)],
+            1,
+            0,
+            vec![Elem::Val(7)],
+        ));
+    }
+
+    #[test]
+    fn repeat_ref_rejects_reference_ending_before_next_input() {
+        assert!(!run_ref(
+            vec![Elem::Val(7), Elem::ValStop(8, 1)],
+            vec![Elem::ValStop(0, 1)],
+            1,
+            0,
+            vec![Elem::ValStop(7, 1)],
+        ));
+    }
+
+    #[test]
+    fn repeat_ref_rejects_reference_without_trigger() {
+        assert!(!run_ref(
+            vec![Elem::ValStop(7, 1)],
+            vec![Elem::Val(0)],
+            1,
+            1,
+            vec![],
+        ));
+    }
+
+    #[test]
+    fn repeat_ref_rejects_mismatched_stops() {
+        assert!(!run_ref(
+            vec![Elem::ValStop(7, 1)],
+            vec![Elem::ValStop(0, 1)],
+            1,
+            0,
+            vec![],
+        ));
     }
 
     #[test]

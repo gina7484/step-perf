@@ -529,6 +529,13 @@ fn run_scripted_load(
 }
 
 #[test]
+fn empty_address_stream_issues_no_requests_or_tiles() {
+    let trace = run_scripted_load(vec![], vec![]);
+    assert!(trace.requests.is_empty());
+    assert!(trace.outputs.is_empty());
+}
+
+#[test]
 fn preserves_tile_order_with_out_of_order_responses() {
     let trace = run_scripted_load(
         vec![(1, 0, None), (1, 2, Some(1)), (1, 4, Some(2))],
