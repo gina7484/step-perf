@@ -2607,7 +2607,8 @@ fn build_from_proto<'a>(
                         .clone()
                         .unwrap(),
                 ) {
-                    (Type::F32(_), Type::F32(_)) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    (Type::F32(_), Type::F32(_)) | (Type::Bf16(_), Type::Bf16(_)) => {
                         let in_rcv = channel_map_collection.tile_f32.get_receiver(
                             repeat_ref.input_id,
                             repeat_ref.input_stream_idx,
@@ -2685,7 +2686,7 @@ fn build_from_proto<'a>(
                             )
                         );
                     }
-                    (Type::U64(_), Type::F32(_)) => {
+                    (Type::U64(_), Type::F32(_) | Type::Bf16(_)) => {
                         let in_rcv = channel_map_collection.tile_u64.get_receiver(
                             repeat_ref.input_id,
                             repeat_ref.input_stream_idx,
