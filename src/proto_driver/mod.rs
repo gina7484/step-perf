@@ -2529,7 +2529,7 @@ fn build_from_proto<'a>(
                         );
                     }
                     Type::Buffer(proto_headers::graph_proto::Buffer {
-                        r#type: Some(buffer::Type::F32(_)),
+                        r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
                     }) => {
                         let rcv = channel_map_collection.buff_tile_f32.get_receiver(
                             repeat_static.input_id,
