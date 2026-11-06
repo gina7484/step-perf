@@ -2858,6 +2858,16 @@ fn build_from_proto<'a>(
             }
             OpType::Broadcast(broadcast) => {
                 match broadcast.dtype.clone().unwrap().r#type.clone().unwrap() {
+                    Type::Bool(_) => {
+                        make_broadcast!(
+                            channel_map_collection,
+                            operation,
+                            broadcast,
+                            tile_bool,
+                            builder,
+                            channel_depth
+                        );
+                    }
                     // bf16 is modelled as Tile<f32> on the tile_f32 channel.
                     Type::F32(_) | Type::Bf16(_) => {
                         make_broadcast!(
