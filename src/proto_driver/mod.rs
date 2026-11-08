@@ -1103,6 +1103,48 @@ fn build_from_proto<'a>(
                         )
                     );
                 }
+                // Scalar counts used as row validity: u64 input -> bool output.
+                (Type::U64(_), Type::Bool(_)) => {
+                    let rcv = channel_map_collection.tile_u64.get_receiver(
+                        unarymap.input_id,
+                        unarymap.stream_idx,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, unarymap.input_id, channel_depth),
+                    );
+                    let snd = channel_map_collection.tile_bool.get_sender(
+                        operation.id,
+                        None,
+                        builder,
+                        get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                    );
+                    let map_fn: Arc<
+                        dyn Fn(&Tile<u64>, u64, bool) -> (u64, Tile<bool>) + Send + Sync,
+                    > = match unarymap.func.unwrap().elem_elem_fn.unwrap() {
+                        elemto_elem_func::ElemElemFn::GeScalar(ge) => {
+                            let scalar = u64::try_from(
+                                ge.constant.expect("u64 ge.Scalar requires an integer operand"),
+                            )
+                            .expect("u64 ge.Scalar requires a nonnegative operand");
+                            Arc::new(move |tile, comp_bw, write_back_mu| {
+                                functions::map_fn::ge_scalar(tile, scalar, comp_bw, write_back_mu)
+                            })
+                        }
+                        e => panic!("Unsupported unary map function type {:?}", e),
+                    };
+                    add_child!(
+                        builder,
+                        UnaryMap::<SimpleEvent, _, _>::new(
+                            rcv,
+                            snd,
+                            map_fn,
+                            UnaryMapConfig {
+                                compute_bw: unarymap.compute_bw as u64,
+                                write_back_mu: unarymap.write_back_mu,
+                            },
+                            operation.id,
+                        )
+                    );
+                }
                 // Boolean unary ops: bitwise_not.
                 (Type::Bool(_), Type::Bool(_)) => {
                     let rcv = channel_map_collection.tile_bool.get_receiver(
@@ -2659,6 +2701,45 @@ fn build_from_proto<'a>(
                             ),
                         );
                         let ref_rcv = channel_map_collection.tile_u64.get_receiver(
+                            repeat_ref.ref_id,
+                            repeat_ref.ref_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_ref.ref_id,
+                                channel_depth,
+                            ),
+                        );
+                        let snd = channel_map_collection.tile_u64.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            RepeatRef::<_, _>::new(
+                                in_rcv,
+                                ref_rcv,
+                                snd,
+                                repeat_ref.expanded_rank_cnt,
+                                repeat_ref.rank,
+                                operation.id,
+                            )
+                        );
+                    }
+                    (Type::U64(_), Type::Bool(_)) => {
+                        let in_rcv = channel_map_collection.tile_u64.get_receiver(
+                            repeat_ref.input_id,
+                            repeat_ref.input_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                repeat_ref.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let ref_rcv = channel_map_collection.tile_bool.get_receiver(
                             repeat_ref.ref_id,
                             repeat_ref.ref_stream_idx,
                             builder,
