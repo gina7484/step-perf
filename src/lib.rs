@@ -24,8 +24,10 @@ use crate::ramulator::hbm_context::HBMConfig;
 
 #[pyfunction]
 #[pyo3(signature = (proto, logging, hbm_config, sim_config, db_name=None, dump_prefix=None, profile_spec=None, profile_output=None))]
-/// Return passed, cycles, duration_ms, duration_s, and a traffic dictionary.
-/// Traffic contains total_bytes, read_bytes, and write_bytes measured by HBM.
+/// Return passed, cycles, duration_ms, duration_s, a traffic dictionary, and
+/// on-chip bytes by op id. Traffic contains total_bytes, read_bytes, and
+/// write_bytes measured by HBM. On-chip bytes list only ops that held data;
+/// docs/resource_counting.md says what each op counts.
 fn run_graph(
     py: Python,
     proto: String,
@@ -39,7 +41,7 @@ fn run_graph(
     dump_prefix: Option<String>,
     profile_spec: Option<String>,
     profile_output: Option<String>,
-) -> PyResult<(bool, u64, u128, u64, HashMap<String, u64>)> {
+) -> PyResult<(bool, u64, u128, u64, HashMap<String, u64>, HashMap<u32, u64>)> {
     if profile_spec.is_some() != profile_output.is_some() {
         return Err(PyValueError::new_err(
             "profile_spec and profile_output must be provided together",
@@ -57,7 +59,7 @@ fn run_graph(
 
     println!("Successfully read proto file");
 
-    let (passed, cycles, duration, traffic_stats) = parse_proto(
+    let (passed, cycles, duration, traffic_stats, onchip) = parse_proto(
         step_graph,
         logging,
         hbm_config,
@@ -91,6 +93,7 @@ fn run_graph(
         duration_milliseconds,
         duration_seconds,
         traffic,
+        onchip.bytes_by_op(),
     ))
 }
 

@@ -3,6 +3,7 @@ pub mod cast;
 pub mod events;
 pub mod file_printer;
 pub mod graph_dump;
+pub mod onchip;
 pub mod select_npy;
 
 pub mod request_profile;

@@ -5,6 +5,7 @@ use crate::memory::PMU_BW;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
+use crate::utils::onchip::{self, OnChipCounter};
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
 
@@ -22,6 +23,7 @@ pub struct Accum<E, T: DAMType, OT: DAMType> {
     rank: StopType,
     config: AccumConfig,
     id: u32,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>,
 }
 
@@ -51,6 +53,7 @@ where
             rank,
             config,
             id,
+            onchip: onchip::counter(),
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -147,6 +150,7 @@ where
                             self.process_accum(x, &mut accumulator);
                         } else if level == self.rank {
                             let out_tile = self.process_accum_init(x, &mut accumulator);
+                            self.onchip.observe(out_tile.size_in_bytes());
                             self.out_stream
                                 .enqueue(
                                     &self.time,
@@ -158,6 +162,7 @@ where
                                 .unwrap();
                         } else {
                             let out_tile = self.process_accum_init(x, &mut accumulator);
+                            self.onchip.observe(out_tile.size_in_bytes());
                             self.out_stream
                                 .enqueue(
                                     &self.time,

@@ -6,6 +6,7 @@ use crate::primitives::elem::{Bufferizable, Elem};
 use crate::primitives::select::MultiHotN;
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
+use crate::utils::onchip::{self, OnChipCounter};
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
 
@@ -28,6 +29,7 @@ pub struct BinaryMap<E, A: DAMType, B: DAMType, O: DAMType> {
     compute_bw: u64,     // FLOPs / cycle
     write_back_mu: bool, // Whether the output is written to a memory unit
     id: u32,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>,
 }
 
@@ -59,6 +61,7 @@ where
             compute_bw,
             write_back_mu,
             id,
+            onchip: onchip::counter(),
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -132,6 +135,8 @@ where
             if tile2.read_from_mu {
                 load_cycle += div_ceil(tile2.size_in_bytes() as u64, PMU_BW);
             }
+            self.onchip
+                .observe(tile1.size_in_bytes() + tile2.size_in_bytes());
             let (comp_cycles, out_tile) =
                 (self.func)(&tile1, &tile2, self.compute_bw, self.write_back_mu);
             let store_cycles = if self.write_back_mu {

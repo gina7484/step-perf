@@ -1,4 +1,5 @@
 use crate::primitives::elem::{Elem, StopType};
+use crate::utils::onchip::{self, OnChipBytes, OnChipCounter};
 use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use dam::context_tools::*;
 
@@ -8,6 +9,7 @@ pub struct RepeatStatic<T: Clone> {
     // Products of appended dimensions, from innermost to outermost.
     stop_periods: Vec<usize>,
     out_stream: ProfiledSender<Elem<T>>,
+    onchip: OnChipCounter,
 }
 
 impl<T: DAMType> RepeatStatic<T>
@@ -35,6 +37,7 @@ where
             in_stream: in_stream.into(),
             stop_periods,
             out_stream: out_stream.into(),
+            onchip: onchip::counter(),
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
@@ -43,7 +46,7 @@ where
     }
 }
 
-impl<T: DAMType> Context for RepeatStatic<T> {
+impl<T: DAMType + OnChipBytes> Context for RepeatStatic<T> {
     fn run(&mut self) {
         // An empty factor list forwards each input unchanged.
         let repeat_count = self.stop_periods.last().copied().unwrap_or(1);
@@ -52,6 +55,7 @@ impl<T: DAMType> Context for RepeatStatic<T> {
                 Elem::Val(value) => (value, 0),
                 Elem::ValStop(value, stop) => (value, stop),
             };
+            self.onchip.observe(value.onchip_bytes());
             for index in 1..=repeat_count {
                 // Close every trailing dimension whose last value was emitted.
                 let mut stop = self
@@ -91,6 +95,7 @@ pub struct RepeatRef<T: Clone, R: Clone> {
     expanded_rank_cnt: StopType,
     rank: StopType,
     id: u32,
+    onchip: OnChipCounter,
 }
 
 impl<T: DAMType, R: DAMType> RepeatRef<T, R>
@@ -116,6 +121,7 @@ where
             expanded_rank_cnt,
             rank,
             id,
+            onchip: onchip::counter(),
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
@@ -125,7 +131,7 @@ where
     }
 }
 
-impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
+impl<T: DAMType + OnChipBytes, R: DAMType> Context for RepeatRef<T, R> {
     fn run(&mut self) {
         let mut saw_reference = false;
         while let Ok(ChannelElement { data, .. }) = self.in_stream.dequeue(&self.time) {
@@ -133,6 +139,7 @@ impl<T: DAMType, R: DAMType> Context for RepeatRef<T, R> {
                 Elem::Val(value) => (value, 0),
                 Elem::ValStop(value, stop) => (value, stop),
             };
+            self.onchip.observe(value.onchip_bytes());
             loop {
                 let ref_data = match self.ref_stream.dequeue(&self.time) {
                     Ok(element) => {

@@ -1,3 +1,4 @@
+use crate::utils::onchip::{self, OnChipBytes, OnChipCounter};
 use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use crate::primitives::elem::{Elem, StopType};
 use dam::context_tools::*;
@@ -6,6 +7,7 @@ use dam::context_tools::*;
 pub struct PromoteOuter<T: DAMType> {
     in_stream: ProfiledReceiver<Elem<T>>,
     out_stream: ProfiledSender<Elem<T>>,
+    onchip: OnChipCounter,
 }
 
 impl<T: DAMType> PromoteOuter<T>
@@ -16,6 +18,7 @@ where
         let ctx = Self {
             in_stream: in_stream.into(),
             out_stream: out_stream.into(),
+            onchip: onchip::counter(),
             context_info: Default::default(),
         };
         ctx.in_stream.attach_receiver(&ctx);
@@ -24,60 +27,64 @@ where
     }
 }
 
-impl<T: DAMType> Context for PromoteOuter<T> {
+impl<T: DAMType + OnChipBytes> Context for PromoteOuter<T> {
     fn run(&mut self) {
         loop {
             match self.in_stream.dequeue(&self.time) {
-                Ok(ChannelElement { time: _, data }) => match data {
-                    Elem::Val(x) => match self.in_stream.peek_next(&self.time) {
-                        Ok(ChannelElement { time: _, data: _ }) => {
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::Val(x.clone()),
-                                    },
-                                )
-                                .unwrap();
-                        }
-                        Err(_) => {
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::ValStop(x.clone(), 1),
-                                    },
-                                )
-                                .unwrap();
-                        }
-                    },
-                    Elem::ValStop(x, s) => match self.in_stream.peek_next(&self.time) {
-                        Ok(ChannelElement { time: _, data: _ }) => {
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::ValStop(x.clone(), s),
-                                    },
-                                )
-                                .unwrap();
-                        }
-                        Err(_) => {
-                            self.out_stream
-                                .enqueue(
-                                    &self.time,
-                                    ChannelElement {
-                                        time: self.time.tick(),
-                                        data: Elem::ValStop(x.clone(), s + 1),
-                                    },
-                                )
-                                .unwrap();
-                        }
-                    },
-                },
+                Ok(ChannelElement { time: _, data }) => {
+                    let (Elem::Val(value) | Elem::ValStop(value, _)) = &data;
+                    self.onchip.observe(value.onchip_bytes());
+                    match data {
+                        Elem::Val(x) => match self.in_stream.peek_next(&self.time) {
+                            Ok(ChannelElement { time: _, data: _ }) => {
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::Val(x.clone()),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
+                            Err(_) => {
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(x.clone(), 1),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
+                        },
+                        Elem::ValStop(x, s) => match self.in_stream.peek_next(&self.time) {
+                            Ok(ChannelElement { time: _, data: _ }) => {
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(x.clone(), s),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
+                            Err(_) => {
+                                self.out_stream
+                                    .enqueue(
+                                        &self.time,
+                                        ChannelElement {
+                                            time: self.time.tick(),
+                                            data: Elem::ValStop(x.clone(), s + 1),
+                                        },
+                                    )
+                                    .unwrap();
+                            }
+                        },
+                    }
+                }
                 Err(_) => return,
             }
             self.time.incr_cycles(1);

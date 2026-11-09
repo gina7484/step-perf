@@ -9,6 +9,7 @@ use crate::primitives::buffer::Buffer;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
+use crate::utils::onchip::{self, OnChipCounter};
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
 
@@ -69,6 +70,7 @@ pub struct AccumBuff<E, T: DAMType, OT: DAMType> {
     tile_col: usize,
     config: AccumConfig,
     id: u32,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>,
 }
 
@@ -106,6 +108,7 @@ where
             tile_col,
             config,
             id,
+            onchip: onchip::counter(),
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -248,6 +251,7 @@ where
                             } else if level == self.rank {
                                 let out_buffer =
                                     self.process_accum_flush(x, &mut accumulators, index);
+                                self.onchip.observe(out_buffer.size_in_bytes());
                                 index = 0;
                                 self.out_stream
                                     .enqueue(
@@ -261,6 +265,7 @@ where
                             } else {
                                 let out_buffer =
                                     self.process_accum_flush(x, &mut accumulators, index);
+                                self.onchip.observe(out_buffer.size_in_bytes());
                                 index = 0;
                                 self.out_stream
                                     .enqueue(

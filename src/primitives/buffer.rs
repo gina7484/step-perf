@@ -235,6 +235,15 @@ where
     }
 }
 
+impl<T: Bufferizable> Buffer<T> {
+    /// Bytes of every tile in the buffer. A null buffer holds none.
+    pub fn size_in_bytes(&self) -> usize {
+        self.underlying
+            .as_ref()
+            .map_or(0, |tiles| tiles.iter().map(Bufferizable::size_in_bytes).sum())
+    }
+}
+
 impl<T> std::ops::Deref for Buffer<T> {
     type Target = ndarray::ArcArray<T, IxDyn>;
 

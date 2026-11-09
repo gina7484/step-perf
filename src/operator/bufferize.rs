@@ -1,5 +1,6 @@
 use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 use std::marker::PhantomData;
+use crate::utils::onchip::{self, OnChipCounter};
 
 use dam::{context_tools::*, logging::LogEvent};
 
@@ -18,6 +19,7 @@ pub struct Bufferize<E, T: Clone> {
     out_stream: ProfiledSender<Elem<Buffer<T>>>,
     rank: StopType,
     id: u32,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>,
 }
 
@@ -40,6 +42,7 @@ where
             out_stream: out_stream.into(),
             rank,
             id,
+            onchip: onchip::counter(),
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -67,6 +70,7 @@ where
                 self.id,
             ) {
                 Ok(buffer) => {
+                    self.onchip.observe(buffer.size_in_bytes());
                     self.out_stream
                         .enqueue(
                             &self.time,
@@ -78,6 +82,7 @@ where
                         .unwrap();
                 }
                 Err(BufferizeError::StopToken(buffer, stop_level)) => {
+                    self.onchip.observe(buffer.size_in_bytes());
                     // Handle the following stop tokens
                     self.out_stream
                         .enqueue(

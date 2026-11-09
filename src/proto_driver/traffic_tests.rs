@@ -57,7 +57,7 @@ fn graph_traffic_counts_full_requests_and_hbm_bypass() {
             config_dict: HashMap::new(),
         };
         let mut builder = ProgramBuilder::default();
-        let stats = build_from_proto(
+        let (stats, _) = build_from_proto(
             graph.clone(),
             &mut ChannelMapCollection::default(),
             &mut builder,
@@ -78,12 +78,14 @@ fn graph_traffic_counts_full_requests_and_hbm_bypass() {
         assert_eq!(stats.write_bytes(), write_bytes);
         assert_eq!(stats.total_bytes(), read_bytes + write_bytes);
 
-        let (passed, cycles, _, returned_stats) =
+        let (passed, cycles, _, returned_stats, onchip) =
             parse_proto(graph, false, hbm_config, sim_config, None, None);
         assert!(passed);
         assert!(cycles > 0);
         assert_eq!(returned_stats.read_bytes(), read_bytes);
         assert_eq!(returned_stats.write_bytes(), write_bytes);
         assert_eq!(returned_stats.total_bytes(), read_bytes + write_bytes);
+        // The load holds two 2x9 f32 tiles; the store holds nothing.
+        assert_eq!(onchip.bytes_by_op(), HashMap::from([(0, 2 * 2 * 9 * 4)]));
     }
 }

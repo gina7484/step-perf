@@ -2,6 +2,8 @@ pub mod configs;
 pub mod proto_headers;
 
 #[cfg(test)]
+mod onchip_tests;
+#[cfg(test)]
 mod scan_tests;
 #[cfg(test)]
 mod traffic_tests;
@@ -53,6 +55,7 @@ use std::sync::Arc;
 use std::usize;
 
 use crate::build_sim::channel::ChannelMapCollection;
+use crate::utils::onchip::OnChipTable;
 use crate::memory::linear_offchip_load::LinearOffChipLoad;
 use crate::memory::offchip_store::OffChipStore;
 use crate::operator::{
@@ -283,7 +286,7 @@ fn build_from_proto<'a>(
     hbm_config: &HBMConfig,
     sim_config: &SimConfig,
     dump_prefix: Option<String>,
-) -> Arc<HBMTrafficStats> {
+) -> (Arc<HBMTrafficStats>, OnChipTable) {
     let channel_depth = sim_config.channel_depth;
     let mut mem_context = HBMContext::new(builder, hbm_config.clone());
     let traffic_stats = mem_context.traffic_stats();
@@ -299,9 +302,11 @@ fn build_from_proto<'a>(
         crate::utils::graph_dump::begin();
     }
 
+    crate::utils::onchip::begin();
     for operation in step_graph.operators {
         crate::utils::graph_dump::set_current_op(operation.id);
         crate::utils::request_profile::set_current_op(operation.id);
+        crate::utils::onchip::set_current_op(&operation);
         // if operation.id == 23 || operation.id == 24 || operation.id == 25 {
         //     println!("processing {:?}\n", operation);
         // }
@@ -5724,6 +5729,7 @@ fn build_from_proto<'a>(
     // The HBM context is added after the loop, so clear the op id to avoid
     // mislabeling it with the last operation's id.
     crate::utils::graph_dump::clear_current_op();
+    let onchip = crate::utils::onchip::end();
     add_child!(builder, mem_context);
 
     if let Some(prefix) = dump_prefix {
@@ -5741,7 +5747,7 @@ fn build_from_proto<'a>(
         crate::utils::graph_dump::end();
     }
 
-    traffic_stats
+    (traffic_stats, onchip)
 }
 
 pub fn parse_proto<'a>(
@@ -5751,10 +5757,10 @@ pub fn parse_proto<'a>(
     sim_config: SimConfig,
     db_name: Option<String>,
     dump_prefix: Option<String>,
-) -> (bool, u64, std::time::Duration, Arc<HBMTrafficStats>) {
+) -> (bool, u64, std::time::Duration, Arc<HBMTrafficStats>, OnChipTable) {
     let mut builder = ProgramBuilder::default();
     let mut channel_map_collection = ChannelMapCollection::default();
-    let traffic_stats = build_from_proto(
+    let (traffic_stats, onchip) = build_from_proto(
         step_graph,
         &mut channel_map_collection,
         &mut builder,
@@ -5800,5 +5806,5 @@ pub fn parse_proto<'a>(
         traffic_stats.read_bytes(),
         traffic_stats.write_bytes(),
     );
-    (passed, cycles, duration, traffic_stats)
+    (passed, cycles, duration, traffic_stats, onchip)
 }

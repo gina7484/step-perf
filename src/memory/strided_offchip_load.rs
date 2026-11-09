@@ -9,10 +9,11 @@ use dam::channel::PeekResult;
 use dam::context_tools::*;
 use dam::logging::LogEvent;
 
-use crate::primitives::elem::{Elem, StopType};
+use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::tile::Tile;
 use crate::ramulator::hbm_context::ParAddrs;
 use crate::utils::events::LoggableEventSimple;
+use crate::utils::onchip::{self, OnChipCounter};
 use crate::utils::request_profile::{ProfiledReceiver, ProfiledSender};
 
 const TILE_BUFFERS: usize = 2;
@@ -56,6 +57,7 @@ pub struct StridedOffChipLoad<E: LoggableEventSimple, T: DAMType> {
     pub id: u32,
     #[cfg(test)]
     request_trace: Option<Arc<Mutex<Vec<(u64, Vec<u64>)>>>>,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>,
 }
 
@@ -104,6 +106,7 @@ where
             id,
             #[cfg(test)]
             request_trace: None,
+            onchip: onchip::counter(),
             _phantom: PhantomData,
             context_info: Default::default(),
         };
@@ -260,6 +263,8 @@ where
 
     fn emit_blank_tile(&self, stop: Option<StopType>) {
         let tile = Tile::new_blank(self.tile_shape.to_vec(), self.n_byte, true);
+        // Double buffering keeps two tiles on chip.
+        self.onchip.observe(2 * tile.size_in_bytes());
         let data = match stop {
             Some(level) => Elem::ValStop(tile, level),
             None => Elem::Val(tile),

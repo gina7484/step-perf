@@ -5,6 +5,7 @@ use crate::memory::PMU_BW;
 use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::primitives::tile::Tile;
 use crate::utils::calculation::div_ceil;
+use crate::utils::onchip::{self, OnChipCounter};
 use crate::utils::events::LoggableEventSimple;
 use dam::{context_tools::*, logging::LogEvent};
 
@@ -49,6 +50,7 @@ pub struct Scan<E, T: DAMType, OT: DAMType> {
     rank: StopType,
     config: ScanConfig,
     id: u32,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>,
 }
 
@@ -89,6 +91,7 @@ where
             rank,
             config,
             id,
+            onchip: onchip::counter(),
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -232,6 +235,7 @@ where
             // input's stop level through unchanged.
             let group_end = level.is_some_and(|level| level >= self.rank);
             let out_tile = self.process(data1, data2, &mut accumulator, group_end);
+            self.onchip.observe(out_tile.size_in_bytes());
 
             let data = match level {
                 None => Elem::Val(out_tile),

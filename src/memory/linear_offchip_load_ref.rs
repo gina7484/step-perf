@@ -6,8 +6,9 @@ use dam::logging::LogEvent;
 use itertools::Itertools;
 use ndarray::{IntoDimension, IxDyn, IxDynImpl};
 
-use crate::primitives::elem::{Elem, StopType};
+use crate::primitives::elem::{Bufferizable, Elem, StopType};
 use crate::ramulator::hbm_context::ParAddrs;
+use crate::utils::onchip::{self, OnChipCounter};
 
 use crate::memory::HbmAddrEnum;
 use crate::primitives::tile::Tile;
@@ -38,6 +39,7 @@ pub struct LinearOffChipLoadRef<E: LoggableEventSimple, T: DAMType, R: DAMType> 
     pub transposed: bool,
     pub id: u32,
     pub trigger_rank: u32,
+    onchip: OnChipCounter,
     _phantom: PhantomData<E>, // Needed to use the generic parameter E
 }
 
@@ -118,6 +120,7 @@ where
             transposed,
             id,
             trigger_rank,
+            onchip: onchip::counter(),
             context_info: Default::default(),
             _phantom: PhantomData,
         };
@@ -367,6 +370,9 @@ where
             // To properly the backpressure under the double buffering setting,
             // this channel should have a depth of 1
 
+            // Double buffering keeps two tiles on chip.
+            let (Elem::Val(tile) | Elem::ValStop(tile, _)) = &elem_tile;
+            self.onchip.observe(2 * tile.size_in_bytes());
             self.on_chip_snd
                 .enqueue(
                     &self.time,
