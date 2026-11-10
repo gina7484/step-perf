@@ -3286,7 +3286,8 @@ fn build_from_proto<'a>(
                     .clone()
                     .unwrap()
                 {
-                    Type::F32(_) => {
+                    // bf16 is modelled as Tile<f32> on the tile_f32 channel.
+                    Type::F32(_) | Type::Bf16(_) => {
                         let mut rcv_list = vec![];
                         for (rcv_id, stream_idx) in static_reassemble
                             .input_id_list
