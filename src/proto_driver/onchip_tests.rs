@@ -488,6 +488,107 @@ fn repeat_ref_of_a_buffer_counts_nothing() {
     assert_eq!(bytes, HashMap::new());
 }
 
+fn expand_static(dtype: Option<DataType>, count: u32) -> Operation {
+    operation(
+        1,
+        OpType::ExpandStatic(pb::ExpandStatic {
+            input_id: 0,
+            expanded_dims: vec![count],
+            dtype,
+            ..Default::default()
+        }),
+    )
+}
+
+fn expand_ref(dtype: Option<DataType>) -> Operation {
+    operation(
+        1,
+        OpType::ExpandRef(pb::ExpandRef {
+            input_id: 0,
+            ref_id: 2,
+            dtype,
+            ref_dtype: tile_type(1, 1),
+            expand_rank: 1,
+            ..Default::default()
+        }),
+    )
+}
+
+#[test]
+fn expand_static_counts_one_held_tile_including_unit_expansion() {
+    for count in [1, 3] {
+        let bytes = onchip_bytes!(
+            operators: vec![expand_static(tile_type(2, 8), count)],
+            inputs: [(tile_f32, 0, vec![
+                with_stop(tile([2, 8]), Some(1)), with_stop(tile([3, 8]), Some(2)),
+            ])],
+            outputs: [(tile_f32, 1)],
+        );
+        assert_eq!(bytes, HashMap::from([(1, 96)]));
+    }
+}
+
+#[test]
+fn expand_ref_counts_one_held_tile() {
+    let bytes = onchip_bytes!(
+        operators: vec![expand_ref(tile_type(2, 8))],
+        inputs: [
+            (tile_f32, 0, vec![
+                with_stop(tile([2, 8]), Some(1)), with_stop(tile([3, 8]), Some(2)),
+            ]),
+            (tile_f32, 2, references()),
+        ],
+        outputs: [(tile_f32, 1)],
+    );
+    assert_eq!(bytes, HashMap::from([(1, 96)]));
+}
+
+#[test]
+fn expansions_of_buffers_count_nothing() {
+    for op in [
+        expand_static(buffer_type(2, 8), 3),
+        expand_ref(buffer_type(2, 8)),
+    ] {
+        // Both operators receive the same two unit-framed buffers.
+        let buffers = vec![
+            with_stop(buffer_of(2, [2, 8]), Some(1)),
+            with_stop(buffer_of(2, [2, 8]), Some(2)),
+        ];
+        let bytes = if matches!(op.op_type.as_ref(), Some(OpType::ExpandRef(_))) {
+            onchip_bytes!(
+                operators: vec![op],
+                inputs: [(buff_tile_f32, 0, buffers), (tile_f32, 2, references())],
+                outputs: [(buff_tile_f32, 1)],
+            )
+        } else {
+            onchip_bytes!(
+                operators: vec![op], inputs: [(buff_tile_f32, 0, buffers)],
+                outputs: [(buff_tile_f32, 1)],
+            )
+        };
+        assert_eq!(bytes, HashMap::new());
+    }
+}
+
+#[test]
+fn expansions_of_one_by_one_tiles_count_nothing() {
+    let bytes = onchip_bytes!(
+        operators: vec![expand_static(tile_type(1, 1), 3)],
+        inputs: [(tile_f32, 0, tiles([1, 1], &[Some(1), Some(2)]))],
+        outputs: [(tile_f32, 1)],
+    );
+    assert_eq!(bytes, HashMap::new());
+    let bytes = onchip_bytes!(
+        operators: vec![expand_ref(tile_type(1, 1))],
+        inputs: [
+            (tile_f32, 0, tiles([1, 1], &[Some(1), Some(2)])),
+            (tile_f32, 2, references()),
+        ],
+        outputs: [(tile_f32, 1)],
+    );
+    assert_eq!(bytes, HashMap::new());
+}
+
 fn promote_outer(dtype: Option<DataType>) -> Operation {
     operation(
         1,

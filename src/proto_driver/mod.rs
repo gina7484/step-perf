@@ -19,7 +19,7 @@ use crate::memory::strided_offchip_load::StridedOffChipLoad;
 use crate::operator::accum_buff::AccumBuff;
 use crate::operator::counter::Counter;
 use crate::operator::eager_merge::EagerMerge;
-use crate::operator::expand::ExpandRef;
+use crate::operator::expand::{ExpandRef, ExpandStatic};
 use crate::operator::flatmap_decomp::{FlatmapCounter, FlatmapFilterRowStreamify, FlatmapRetileStreamify};
 use crate::operator::parallelize::Parallelize;
 use crate::primitives::select::MultiHotN;
@@ -2391,6 +2391,46 @@ fn build_from_proto<'a>(
                 }
             }
             OpType::ExpandRef(expand_ref) => {
+                macro_rules! make_expand_ref {
+                    ($input:ident, $reference:ident) => {{
+                        let input = channel_map_collection.$input.get_receiver(
+                            expand_ref.input_id,
+                            expand_ref.stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expand_ref.input_id,
+                                channel_depth,
+                            ),
+                        );
+                        let reference = channel_map_collection.$reference.get_receiver(
+                            expand_ref.ref_id,
+                            expand_ref.ref_stream_idx,
+                            builder,
+                            get_chan_depth(
+                                &sim_config.config_dict,
+                                expand_ref.ref_id,
+                                channel_depth,
+                            ),
+                        );
+                        let output = channel_map_collection.$input.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            ExpandRef::new(
+                                input,
+                                reference,
+                                expand_ref.expand_rank,
+                                output,
+                                operation.id,
+                            )
+                        );
+                    }};
+                }
                 match (
                     expand_ref.dtype.clone().unwrap().r#type.clone().unwrap(),
                     expand_ref
@@ -2401,83 +2441,82 @@ fn build_from_proto<'a>(
                         .clone()
                         .unwrap(),
                 ) {
-                    (Type::F32(_), Type::F32(_)) => {
-                        let in_rcv = channel_map_collection.tile_f32.get_receiver(
-                            expand_ref.input_id,
-                            expand_ref.stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                expand_ref.input_id,
-                                channel_depth,
-                            ),
-                        );
-                        let ref_rcv = channel_map_collection.tile_f32.get_receiver(
-                            expand_ref.ref_id,
-                            expand_ref.ref_stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                expand_ref.ref_id,
-                                channel_depth,
-                            ),
-                        );
-                        let snd = channel_map_collection.tile_f32.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        add_child!(
-                            builder,
-                            ExpandRef::<_, _>::new(
-                                in_rcv,
-                                ref_rcv,
-                                expand_ref.expand_rank,
-                                snd,
-                                operation.id,
-                            )
-                        );
+                    (Type::F32(_) | Type::Bf16(_), Type::F32(_) | Type::Bf16(_)) => {
+                        make_expand_ref!(tile_f32, tile_f32)
                     }
-                    (Type::U64(_), Type::U64(_)) => {
-                        let in_rcv = channel_map_collection.tile_u64.get_receiver(
-                            expand_ref.input_id,
-                            expand_ref.stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                expand_ref.input_id,
-                                channel_depth,
-                            ),
-                        );
-                        let ref_rcv = channel_map_collection.tile_u64.get_receiver(
-                            expand_ref.ref_id,
-                            expand_ref.ref_stream_idx,
-                            builder,
-                            get_chan_depth(
-                                &sim_config.config_dict,
-                                expand_ref.ref_id,
-                                channel_depth,
-                            ),
-                        );
-                        let snd = channel_map_collection.tile_u64.get_sender(
-                            operation.id,
-                            None,
-                            builder,
-                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
-                        );
-                        add_child!(
-                            builder,
-                            ExpandRef::<_, _>::new(
-                                in_rcv,
-                                ref_rcv,
-                                expand_ref.expand_rank,
-                                snd,
-                                operation.id,
-                            )
-                        );
+                    (Type::F32(_) | Type::Bf16(_), Type::U64(_)) => {
+                        make_expand_ref!(tile_f32, tile_u64)
                     }
+                    (Type::F32(_) | Type::Bf16(_), Type::Bool(_)) => {
+                        make_expand_ref!(tile_f32, tile_bool)
+                    }
+                    (Type::U64(_), Type::U64(_)) => make_expand_ref!(tile_u64, tile_u64),
+                    (Type::U64(_), Type::Bool(_)) => make_expand_ref!(tile_u64, tile_bool),
+                    (Type::U64(_), Type::F32(_) | Type::Bf16(_)) => {
+                        make_expand_ref!(tile_u64, tile_f32)
+                    }
+                    (Type::I64(_), Type::U64(_)) => make_expand_ref!(tile_i64, tile_u64),
+                    (Type::I64(_), Type::I64(_)) => make_expand_ref!(tile_i64, tile_i64),
+                    (Type::Bool(_), Type::Bool(_)) => make_expand_ref!(tile_bool, tile_bool),
+                    (
+                        Type::Buffer(proto_headers::graph_proto::Buffer {
+                            r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
+                        }),
+                        Type::F32(_) | Type::Bf16(_),
+                    ) => make_expand_ref!(buff_tile_f32, tile_f32),
+                    (
+                        Type::Buffer(proto_headers::graph_proto::Buffer {
+                            r#type: Some(buffer::Type::U64(_)),
+                        }),
+                        Type::U64(_),
+                    ) => make_expand_ref!(buff_tile_u64, tile_u64),
                     e => panic!("Unsupported data type for ExpandRef operation {:?}", e),
+                }
+            }
+            OpType::ExpandStatic(expand) => {
+                macro_rules! make_expand_static {
+                    ($channel:ident) => {{
+                        let input = channel_map_collection.$channel.get_receiver(
+                            expand.input_id,
+                            expand.stream_idx,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, expand.input_id, channel_depth),
+                        );
+                        let output = channel_map_collection.$channel.get_sender(
+                            operation.id,
+                            None,
+                            builder,
+                            get_chan_depth(&sim_config.config_dict, operation.id, channel_depth),
+                        );
+                        add_child!(
+                            builder,
+                            ExpandStatic::new(
+                                input,
+                                expand
+                                    .expanded_dims
+                                    .iter()
+                                    .map(|&dim| dim as usize)
+                                    .collect(),
+                                output,
+                            )
+                        );
+                    }};
+                }
+                match expand.dtype.clone().unwrap().r#type.unwrap() {
+                    Type::F32(_) | Type::Bf16(_) => make_expand_static!(tile_f32),
+                    Type::U64(_) => make_expand_static!(tile_u64),
+                    Type::I64(_) => make_expand_static!(tile_i64),
+                    Type::Bool(_) => make_expand_static!(tile_bool),
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::F32(_) | buffer::Type::Bf16(_)),
+                    }) => make_expand_static!(buff_tile_f32),
+                    Type::Buffer(proto_headers::graph_proto::Buffer {
+                        r#type: Some(buffer::Type::U64(_)),
+                    }) => make_expand_static!(buff_tile_u64),
+                    dtype => panic!(
+                        "Unsupported data type for ExpandStatic operation {:?}",
+                        dtype
+                    ),
                 }
             }
             OpType::RepeatStatic(repeat_static) => {

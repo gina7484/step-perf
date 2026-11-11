@@ -124,6 +124,8 @@ pub fn counts(op: &Operation) -> bool {
         Some(OpType::Scan(scan)) => !is_scalar(scan.dtype_b.as_ref().or(scan.dtype_a.as_ref())),
         Some(OpType::RepeatStatic(repeat)) => holds_value(repeat.dtype.as_ref()),
         Some(OpType::RepeatRef(repeat)) => holds_value(repeat.dtype.as_ref()),
+        Some(OpType::ExpandStatic(expand)) => holds_value(expand.dtype.as_ref()),
+        Some(OpType::ExpandRef(expand)) => holds_value(expand.dtype.as_ref()),
         Some(OpType::PromoteOuter(promote)) => holds_value(promote.dtype.as_ref()),
         _ => false,
     }

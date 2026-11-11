@@ -34,6 +34,7 @@ still counts 2 bytes per element.
 | Accum | output isn't a scalar or a 1x1 tile | each output tile | `src/operator/accum.rs` |
 | Scan | output isn't a scalar or a 1x1 tile | each output tile | `src/operator/scan.rs` |
 | RepeatStatic, RepeatRef | type isn't a Buffer, a scalar, or a 1x1 tile | each value it repeats | `src/operator/repeat.rs` |
+| ExpandStatic, ExpandRef | same as Repeat | one input value, regardless of expansion count | `src/operator/expand.rs` |
 | PromoteOuter | type isn't a Buffer, a scalar, or a 1x1 tile | each value it passes | `src/operator/promote.rs` |
 
 Every other operator counts 0.
