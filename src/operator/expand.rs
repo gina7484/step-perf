@@ -131,6 +131,7 @@ where
 
 impl<T: DAMType + OnChipBytes, R: DAMType> Context for ExpandRef<T, R> {
     fn run(&mut self) {
+        let mut saw_reference = false;
         loop {
             match self.in_stream.peek_next(&self.time) {
                 Ok(ChannelElement { time: _, data }) => match data {
@@ -172,6 +173,7 @@ impl<T: DAMType + OnChipBytes, R: DAMType> Context for ExpandRef<T, R> {
                             match self.ref_stream.dequeue(&self.time) {
                                 Ok(ChannelElement { time: _, data }) => match data {
                                     Elem::Val(r) => {
+                                        saw_reference = true;
                                         self.out_stream
                                             .enqueue(
                                                 &self.time,
@@ -183,6 +185,7 @@ impl<T: DAMType + OnChipBytes, R: DAMType> Context for ExpandRef<T, R> {
                                             .unwrap();
                                     }
                                     Elem::ValStop(r, s) => {
+                                        saw_reference = true;
                                         self.out_stream
                                             .enqueue(
                                                 &self.time,
@@ -198,6 +201,12 @@ impl<T: DAMType + OnChipBytes, R: DAMType> Context for ExpandRef<T, R> {
                                         }
                                     }
                                 },
+                                Err(_) if !saw_reference => {
+                                    // An entirely empty reference means zero expansions.
+                                    // Drain input so its producer can finish sending.
+                                    while self.in_stream.dequeue(&self.time).is_ok() {}
+                                    return;
+                                }
                                 Err(_) => {
                                     panic!(
                                         "ExpandRef {} should not reach here as it should have exited the loop on a stop token",
@@ -293,6 +302,33 @@ mod tests {
                 ]
                 .into_iter()
             },
+            output_receiver,
+            |x, y| x == y,
+        ));
+        assert!(ctx
+            .initialize(Default::default())
+            .unwrap()
+            .run(Default::default())
+            .passed());
+    }
+
+    #[test]
+    fn expand_ref_with_empty_reference_drains_input() {
+        let mut ctx = ProgramBuilder::default();
+        let (input_sender, input) = ctx.bounded(1);
+        let (ref_sender, reference) = ctx.bounded(1);
+        let (output, output_receiver) = ctx.bounded(1);
+        ctx.add_child(GeneratorContext::new(
+            || (0..4).map(|value| Elem::ValStop(value, if value == 3 { 2 } else { 1 })),
+            input_sender,
+        ));
+        ctx.add_child(GeneratorContext::new(
+            || Vec::<Elem<i32>>::new().into_iter(),
+            ref_sender,
+        ));
+        ctx.add_child(ExpandRef::new(input, reference, 1, output, 0));
+        ctx.add_child(ApproxCheckerContext::new(
+            || Vec::<Elem<i32>>::new().into_iter(),
             output_receiver,
             |x, y| x == y,
         ));
